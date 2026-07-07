@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Battle Arena Assistant</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>Battle Arena Assistant</h1>
+  <div class="turn-indicator" id="turnIndicator">
+    <span class="turn-label">Turn</span>
+    <input type="radio" name="turn" value="1" id="turn1" class="calc-trigger" checked />
+    <label for="turn1" class="btn btn-turn">1</label>
+    <input type="radio" name="turn" value="2" id="turn2" class="calc-trigger" />
+    <label for="turn2" class="btn btn-turn">2</label>
+    <input type="radio" name="turn" value="3" id="turn3" class="calc-trigger" />
+    <label for="turn3" class="btn btn-turn">3</label>
+  </div>
+  <button id="fieldToggle" class="btn btn-toggle-field">Toggle Field</button>
+</header>
+
+<main class="layout">
+
+  <!-- ───────────────────────── YOUR MON PANEL ───────────────────────── -->
+  <section class="mon-panel" id="youPanel" aria-label="Your Pokemon">
+    <h2>You</h2>
+
+    <!-- PRIMARY: Saved Sets — mirrors the Battle Palace Assistant convention
+         (echen52/battle-palace-assistant): loading a saved set is the main
+         path, not building from scratch. -->
+    <div class="field-row">
+      <label>Saved Sets</label>
+      <select id="youLoadSet" class="calc-trigger"><option value="">— Select a saved set —</option></select>
+      <button id="youDeleteSet" class="btn">Delete</button>
+    </div>
+
+    <!-- Live match state — stages/HP/status describe what's happening RIGHT
+         NOW, not who the mon is, so these stay outside the collapsed
+         build section and stay visible regardless of how the set was added. -->
+    <div class="field-row">
+      <label>Stage</label>
+      <div class="stage-grid">
+        <span>Atk</span><select class="calc-trigger stage-select" data-stat="atk"></select>
+        <span>Def</span><select class="calc-trigger stage-select" data-stat="def"></select>
+        <span>SpA</span><select class="calc-trigger stage-select" data-stat="spa"></select>
+        <span>SpD</span><select class="calc-trigger stage-select" data-stat="spd"></select>
+        <span>Spe</span><select class="calc-trigger stage-select" data-stat="spe"></select>
+        <span>Acc</span><select class="calc-trigger stage-select" data-stat="accuracy"></select>
+        <span>Eva</span><select class="calc-trigger stage-select" data-stat="evasion"></select>
+      </div>
+    </div>
+
+    <div class="hp-block">
+      <label>Current HP</label>
+      <input type="number" id="youCurrentHp" class="calc-trigger current-hp" value="100" min="0" max="100" />
+      <span>/ 100 (</span>
+      <input type="number" id="youPercentHp" class="calc-trigger percent-hp" value="100" min="0" max="100" />
+      <span>%)</span>
+      <div class="hpbar" id="youHpBar"></div>
+    </div>
+
+    <div class="field-row">
+      <label>Status</label>
+      <select id="youStatus" class="calc-trigger">
+        <option value="">Healthy</option>
+        <option value="paralysis">Paralysis</option>
+        <option value="freeze">Freeze</option>
+        <option value="burn">Burn</option>
+        <option value="poison">Poison</option>
+        <option value="sleep">Sleep</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── CENTER FIELD PANEL ───────────────────────── -->
+  <section class="panel" id="fieldPanel" aria-label="Field conditions">
+    <h2>Field</h2>
+
+    <div class="field-group">
+      <span class="field-group-label">Weather</span>
+      <input type="radio" name="weather" value="" id="weatherNone" class="calc-trigger" checked /><label for="weatherNone" class="btn btn-field">None</label>
+      <input type="radio" name="weather" value="sun" id="weatherSun" class="calc-trigger" /><label for="weatherSun" class="btn btn-field">Sun</label>
+      <input type="radio" name="weather" value="rain" id="weatherRain" class="calc-trigger" /><label for="weatherRain" class="btn btn-field">Rain</label>
+      <input type="radio" name="weather" value="sandstorm" id="weatherSand" class="calc-trigger" /><label for="weatherSand" class="btn btn-field">Sand</label>
+      <input type="radio" name="weather" value="hail" id="weatherHail" class="calc-trigger" /><label for="weatherHail" class="btn btn-field">Hail</label>
+      <label class="inline-label">Turns left (blank = permanent)</label>
+      <input type="number" id="weatherTurns" class="calc-trigger" min="0" max="5" placeholder="—" />
+    </div>
+
+    <div class="field-group two-col">
+      <div>
+        <span class="field-group-label">Your side</span>
+        <input type="checkbox" id="youReflect" class="calc-trigger" /><label for="youReflect" class="btn btn-field">Reflect</label>
+        <input type="number" id="youReflectTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
+        <br/>
+        <input type="checkbox" id="youLightScreen" class="calc-trigger" /><label for="youLightScreen" class="btn btn-field">Light Screen</label>
+        <input type="number" id="youLightScreenTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
+        <br/>
+        <input type="checkbox" id="youSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
+        <label for="youSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
+      </div>
+      <div>
+        <span class="field-group-label">Opponent side</span>
+        <input type="checkbox" id="oppReflect" class="calc-trigger" /><label for="oppReflect" class="btn btn-field">Reflect</label>
+        <input type="number" id="oppReflectTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
+        <br/>
+        <input type="checkbox" id="oppLightScreen" class="calc-trigger" /><label for="oppLightScreen" class="btn btn-field">Light Screen</label>
+        <input type="number" id="oppLightScreenTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
+        <br/>
+        <input type="checkbox" id="oppSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
+        <label for="oppSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
+      </div>
+    </div>
+
+    <div class="results-block">
+      <h3>Recommendation</h3>
+      <div id="bestMoveDisplay" class="best-move">—</div>
+      <table class="options-table" id="optionsTable">
+        <thead><tr><th>Move</th><th>P(win)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Mind / Skill / Body</h3>
+      <table class="msb-table">
+        <thead><tr><th></th><th>Mind</th><th>Skill</th><th>Body</th></tr></thead>
+        <tbody>
+          <tr>
+            <th>You (so far)</th>
+            <td><input type="number" id="mindYou" class="calc-trigger msb-input" value="0" /></td>
+            <td><input type="number" id="skillYou" class="calc-trigger msb-input" value="0" /></td>
+            <td id="bodyYouDisplay">100%</td>
+          </tr>
+          <tr>
+            <th>Opp (so far)</th>
+            <td><input type="number" id="mindOpp" class="calc-trigger msb-input" value="0" /></td>
+            <td><input type="number" id="skillOpp" class="calc-trigger msb-input" value="0" /></td>
+            <td id="bodyOppDisplay">100%</td>
+          </tr>
+          <tr class="projected-row">
+            <th>Projected after this turn</th>
+            <td id="mindProjected">—</td>
+            <td id="skillProjected">—</td>
+            <td id="bodyProjected">—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div id="errorDisplay" class="error-display"></div>
+    </div>
+
+    <!-- Set-input UI, relocated here (bottom center, beneath the Mind/Skill/
+         Body table) — see HANDOFF §15/§17. Still describes "who is You,"
+         same IDs/listeners as before; only the DOM position moved, so
+         app.js's getElementById wiring is unaffected. -->
+    <div class="set-input-block">
+      <h3>Your Set</h3>
+
+      <!-- Adding a new set: Smogon paste is the main way (most sets come from
+           Smogon) — parsed by this project's OWN parseShowdownText, not
+           Palace's parseSmogon (Palace's is a deliberately simplified
+           Speed-EV-only extractor for its probability-table mechanic; Arena
+           needs full EV/IV/ability fidelity for damage calc — see HANDOFF §14).
+           Both parsers accept the same Smogon plain-text export format, so sets
+           stay consistent across both tools even though Arena keeps its own
+           parser. -->
+      <div class="smogon-section">
+        <label class="smogon-label">Paste Smogon Export</label>
+        <textarea id="youImportExportText" class="showdown-text" placeholder="Snorlax @ Leftovers&#10;Ability: Immunity&#10;Level: 50&#10;EVs: 36 HP / 220 Def / 252 Spe&#10;Brave Nature&#10;- Body Slam&#10;- Amnesia&#10;- Curse&#10;- Rest"></textarea>
+        <div class="btn-row">
+          <button id="youImport" class="btn">Parse Set</button>
+          <button id="youExport" class="btn">Export current</button>
+        </div>
+      </div>
+
+      <!-- Build from scratch: collapsed by default, like Palace's collapsed
+           manual-entry section — available but not primary. -->
+      <div class="custom-panel">
+        <div class="custom-panel-header" id="youManualToggle">
+          <span class="custom-panel-title">Build manually</span>
+          <span class="chevron" id="youManualChevron">▼</span>
+        </div>
+        <div class="custom-panel-body" id="youManualBody">
+          <div class="field-row">
+            <label>Species</label>
+            <select id="youSpecies" class="calc-trigger"></select>
+          </div>
+          <div class="field-row">
+            <label>Level</label>
+            <input type="number" id="youLevel" class="calc-trigger" value="50" min="1" max="100" />
+          </div>
+          <div class="field-row">
+            <label>Nature</label>
+            <select id="youNature" class="calc-trigger"></select>
+          </div>
+          <div class="field-row">
+            <label>Ability</label>
+            <select id="youAbility" class="calc-trigger"></select>
+          </div>
+          <div class="field-row">
+            <label>Item</label>
+            <input type="text" id="youItem" class="calc-trigger" placeholder="e.g. Cheri Berry" />
+          </div>
+
+          <table class="ev-table">
+            <thead><tr><th></th><th>HP</th><th>Atk</th><th>Def</th><th>SpA</th><th>SpD</th><th>Spe</th></tr></thead>
+            <tbody>
+              <tr>
+                <th>EVs</th>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="hp" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="atk" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="def" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spa" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spd" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spe" min="0" max="252" step="4" value="0" /></td>
+              </tr>
+              <tr>
+                <th>IVs</th>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="hp" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="atk" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="def" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spa" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spd" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spe" min="0" max="31" value="31" /></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="moves-grid">
+            <select class="calc-trigger move-select" data-slot="0"></select>
+            <select class="calc-trigger move-select" data-slot="1"></select>
+            <select class="calc-trigger move-select" data-slot="2"></select>
+            <select class="calc-trigger move-select" data-slot="3"></select>
+          </div>
+
+          <div class="btn-row">
+            <button id="youSaveSet" class="btn">Save as custom set</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── OPPONENT MON PANEL ───────────────────────── -->
+  <section class="mon-panel" id="oppPanel" aria-label="Opponent Pokemon">
+    <h2>Opponent</h2>
+
+    <div class="field-row">
+      <label>Pick by</label>
+      <label class="radio-inline"><input type="radio" name="oppMode" value="set" id="oppModeSet" class="calc-trigger" checked /> Named set</label>
+      <label class="radio-inline"><input type="radio" name="oppMode" value="species" id="oppModeSpecies" class="calc-trigger" /> Species (build manually)</label>
+    </div>
+
+    <div id="oppSetPicker" class="field-row">
+      <label>Set</label>
+      <select id="oppSetName" class="calc-trigger"></select>
+      <select id="oppAbilityChoice" class="calc-trigger" style="display:none"></select>
+    </div>
+    <div id="oppSetMoves" class="opp-set-moves"></div>
+
+    <div id="oppManualBuild" class="hidden">
+      <div class="field-row">
+        <label>Species</label>
+        <select id="oppSpecies" class="calc-trigger"></select>
+      </div>
+      <div class="field-row">
+        <label>Level</label>
+        <input type="number" id="oppLevel" class="calc-trigger" value="50" min="1" max="100" />
+      </div>
+      <div class="field-row">
+        <label>Nature</label>
+        <select id="oppNature" class="calc-trigger"></select>
+      </div>
+      <div class="field-row">
+        <label>Ability</label>
+        <select id="oppAbility" class="calc-trigger"></select>
+      </div>
+      <div class="field-row">
+        <label>Item</label>
+        <input type="text" id="oppItem" class="calc-trigger" placeholder="e.g. Leftovers" />
+      </div>
+      <table class="ev-table">
+        <thead><tr><th></th><th>HP</th><th>Atk</th><th>Def</th><th>SpA</th><th>SpD</th><th>Spe</th></tr></thead>
+        <tbody>
+          <tr>
+            <th>EVs</th>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="hp" min="0" max="252" step="4" value="0" /></td>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="atk" min="0" max="252" step="4" value="0" /></td>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="def" min="0" max="252" step="4" value="0" /></td>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="spa" min="0" max="252" step="4" value="0" /></td>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="spd" min="0" max="252" step="4" value="0" /></td>
+            <td><input type="number" class="calc-trigger opp-ev-input" data-stat="spe" min="0" max="252" step="4" value="0" /></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="moves-grid">
+        <select class="calc-trigger opp-move-select" data-slot="0"></select>
+        <select class="calc-trigger opp-move-select" data-slot="1"></select>
+        <select class="calc-trigger opp-move-select" data-slot="2"></select>
+        <select class="calc-trigger opp-move-select" data-slot="3"></select>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <label>Stage</label>
+      <div class="stage-grid">
+        <span>Atk</span><select class="calc-trigger opp-stage-select" data-stat="atk"></select>
+        <span>Def</span><select class="calc-trigger opp-stage-select" data-stat="def"></select>
+        <span>SpA</span><select class="calc-trigger opp-stage-select" data-stat="spa"></select>
+        <span>SpD</span><select class="calc-trigger opp-stage-select" data-stat="spd"></select>
+        <span>Spe</span><select class="calc-trigger opp-stage-select" data-stat="spe"></select>
+        <span>Acc</span><select class="calc-trigger opp-stage-select" data-stat="accuracy"></select>
+        <span>Eva</span><select class="calc-trigger opp-stage-select" data-stat="evasion"></select>
+      </div>
+    </div>
+
+    <div class="hp-block">
+      <label>Current HP</label>
+      <input type="number" id="oppCurrentHp" class="calc-trigger current-hp" value="100" min="0" max="100" />
+      <span>/ 100 (</span>
+      <input type="number" id="oppPercentHp" class="calc-trigger percent-hp" value="100" min="0" max="100" />
+      <span>%)</span>
+      <div class="hpbar" id="oppHpBar"></div>
+    </div>
+
+    <div class="field-row">
+      <label>Status</label>
+      <select id="oppStatus" class="calc-trigger">
+        <option value="">Healthy</option>
+        <option value="paralysis">Paralysis</option>
+        <option value="freeze">Freeze</option>
+        <option value="burn">Burn</option>
+        <option value="poison">Poison</option>
+        <option value="sleep">Sleep</option>
+      </select>
+    </div>
+
+    <div class="opp-move-dist" id="oppMoveDistBlock">
+      <div class="opp-move-dist-title">This turn's move-selection probability</div>
+      <div id="oppMoveDistRows"></div>
+    </div>
+
+  </section>
+
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
