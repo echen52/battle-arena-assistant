@@ -1,7 +1,45 @@
-/* Palette confirmed from ../../Node/battle-frontier-app/src/App.js (the
-   /node reference this mirrors): #1a1a2e background, #16213e active panel,
-   #0f3460 inactive panel/button, #00d9ff cyan accent, #eee text, #666 muted.
-   Monospace throughout. */
+/* "Dark Battle Arena" theme (re-themed from the original dark-charcoal/cyan
+   scheme — see HANDOFF.md §13/§20). Dark base kept deliberately (night-
+   friendly, per the original design decision) but warmed from cold navy/
+   charcoal toward wood/tatami/dojo tones, drawn from the actual Gen III
+   Battle Arena interior: wood framing, cream tatami, green trim, soft blue
+   doorways. Roles are kept DISTINCT on purpose, not a rainbow reskin:
+     --accent (wood-gold)   = titles, borders, active/focus/checked/toggle
+                               chrome — same job cyan used to do everywhere.
+     --green  (arena sage)  = ONLY the "recommendation" semantic (best-move
+                               box, the projected-after-this-turn row) — kept
+                               separate from --accent so "this is the AI's
+                               pick" reads as its own signal, not just more
+                               chrome. Deliberately muted/desaturated (not
+                               neon), and deliberately NOT the same green the
+                               HP bar uses for "healthy" (that's hardcoded in
+                               app.js, out of this session's scope — see
+                               HANDOFF.md for the noted seam) so the two
+                               greens don't get visually conflated as the same
+                               signal.
+     --blue   (doorway)     = used SPARINGLY, exactly once: the opponent
+                               move-probability bar fill, which is genuinely
+                               informational (not a recommendation, not
+                               chrome) — the one spot the reference palette's
+                               "info" color earns its keep.
+   Contrast checked against the WCAG formula, not eyeballed: --accent on
+   --bg ≈ 7.2:1, --text-muted on --bg ≈ 5.6:1, --green on --bg ≈ 6.1:1 — all
+   clear AA passes (4.5:1 normal text) with margin, even though several of
+   these are used at 11-13px. */
+
+:root {
+  --bg: #1a1512;             /* warm near-black brown, replaces #1a1a2e */
+  --panel-bg: #241c16;       /* panel/active-input fill, replaces #16213e */
+  --surface-2: #33261a;      /* input/button/chip/track fill, replaces #0f3460 */
+  --timber-border: #6b4a2f;  /* panel/outer-edge borders */
+  --divider: #4a3420;        /* internal dividers, table borders, dashed rules */
+  --text: #ede6dc;           /* warm off-white body text, replaces #eee */
+  --text-muted: #9c8d78;     /* tatami-tan muted labels, replaces #999 */
+  --accent: #c89b6c;         /* wood-gold: titles/borders/active states, replaces #00d9ff */
+  --green: #7ba05b;          /* arena sage: recommendation highlight only */
+  --blue: #8ab4c8;           /* soft doorway blue: opponent move-dist bar only */
+  --error: #ff6b6b;          /* unchanged — already reads as distinct from the new warm palette */
+}
 
 * { box-sizing: border-box; }
 
@@ -9,15 +47,15 @@ body {
   margin: 0;
   padding: 20px;
   font-family: "Courier New", Courier, monospace;
-  background-color: #1a1a2e;
-  color: #eee;
+  background-color: var(--bg);
+  color: var(--text);
   min-height: 100vh;
 }
 
-h1, h2, h3 { color: #eee; margin: 0 0 10px 0; }
+h1, h2, h3 { color: var(--text); margin: 0 0 10px 0; }
 h1 { font-size: 22px; }
-h2 { font-size: 16px; color: #00d9ff; border-bottom: 1px solid #0f3460; padding-bottom: 6px; }
-h3 { font-size: 13px; color: #00d9ff; margin-top: 16px; }
+h2 { font-size: 16px; color: var(--accent); border-bottom: 1px solid var(--divider); padding-bottom: 6px; }
+h3 { font-size: 13px; color: var(--accent); margin-top: 16px; }
 
 .app-header {
   display: flex;
@@ -40,8 +78,8 @@ h3 { font-size: 13px; color: #00d9ff; margin-top: 16px; }
 }
 
 .mon-panel, .panel {
-  background: #16213e;
-  border: 1px solid #0f3460;
+  background: var(--panel-bg);
+  border: 1px solid var(--timber-border);
   border-radius: 6px;
   padding: 14px;
 }
@@ -56,14 +94,14 @@ h3 { font-size: 13px; color: #00d9ff; margin-top: 16px; }
 
 .field-row label {
   min-width: 90px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
 select, input[type="text"], input[type="number"] {
-  background: #0f3460;
-  color: #eee;
-  border: 1px solid #16213e;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--panel-bg);
   border-radius: 3px;
   font-family: inherit;
   font-size: 13px;
@@ -72,7 +110,7 @@ select, input[type="text"], input[type="number"] {
 
 select:focus, input:focus {
   outline: none;
-  border-color: #00d9ff;
+  border-color: var(--accent);
 }
 
 input[type="number"] { width: 60px; }
@@ -97,9 +135,9 @@ input[type="checkbox"][disabled] {
   display: inline-block;
   padding: 5px 10px;
   margin: 0 2px 2px 0;
-  background: #0f3460;
-  color: #eee;
-  border: 1px solid #0f3460;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--surface-2);
   border-radius: 3px;
   cursor: pointer;
   font-size: 12px;
@@ -108,9 +146,9 @@ input[type="checkbox"][disabled] {
 
 input[type="radio"]:checked + label.btn,
 input[type="checkbox"]:checked + label.btn {
-  background: #16213e;
-  color: #00d9ff;
-  border: 1px solid #00d9ff;
+  background: var(--panel-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .btn-disabled, label.btn-disabled {
@@ -119,10 +157,10 @@ input[type="checkbox"]:checked + label.btn {
 }
 
 .btn-turn { min-width: 28px; text-align: center; }
-.btn-toggle-field { background: #0f3460; border: 1px solid #00d9ff; color: #00d9ff; }
+.btn-toggle-field { background: var(--surface-2); border: 1px solid var(--accent); color: var(--accent); }
 
 .turn-indicator { display: flex; align-items: center; gap: 4px; }
-.turn-label { color: #999; font-size: 12px; margin-right: 4px; }
+.turn-label { color: var(--text-muted); font-size: 12px; margin-right: 4px; }
 
 .ev-table, .msb-table, .options-table {
   width: 100%;
@@ -135,9 +173,9 @@ input[type="checkbox"]:checked + label.btn {
 .options-table th, .options-table td {
   padding: 3px 4px;
   text-align: center;
-  border: 1px solid #0f3460;
+  border: 1px solid var(--divider);
 }
-.ev-table th, .msb-table th, .options-table th { color: #999; font-weight: normal; }
+.ev-table th, .msb-table th, .options-table th { color: var(--text-muted); font-weight: normal; }
 .ev-table input, .msb-table input { width: 50px; }
 
 .moves-grid {
@@ -152,19 +190,19 @@ input[type="checkbox"]:checked + label.btn {
 .hp-block input { width: 55px; }
 .hpbar {
   height: 14px;
-  border: 1px solid #0f3460;
+  border: 1px solid var(--timber-border);
   border-radius: 3px;
   margin-top: 6px;
-  background: #0f3460;
+  background: var(--surface-2);
 }
 
 .showdown-text {
   width: 100%;
   height: 90px;
   margin: 6px 0;
-  background: #0f3460;
-  color: #eee;
-  border: 1px solid #16213e;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--panel-bg);
   font-family: inherit;
   font-size: 11px;
   resize: vertical;
@@ -177,11 +215,11 @@ input[type="checkbox"]:checked + label.btn {
 .smogon-section {
   margin: 10px 0 14px 0;
   padding-bottom: 10px;
-  border-bottom: 1px dashed #0f3460;
+  border-bottom: 1px dashed var(--divider);
 }
 .smogon-label {
   display: block;
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
   margin-bottom: 4px;
   text-transform: uppercase;
@@ -191,7 +229,7 @@ input[type="checkbox"]:checked + label.btn {
 
 .custom-panel {
   margin-bottom: 14px;
-  border: 1px solid #0f3460;
+  border: 1px solid var(--divider);
   border-radius: 4px;
 }
 .custom-panel-header {
@@ -202,31 +240,31 @@ input[type="checkbox"]:checked + label.btn {
   cursor: pointer;
   user-select: none;
 }
-.custom-panel-title { color: #00d9ff; font-size: 12px; }
-.chevron { color: #999; transition: transform 0.15s ease; }
+.custom-panel-title { color: var(--accent); font-size: 12px; }
+.chevron { color: var(--text-muted); transition: transform 0.15s ease; }
 .chevron.open { transform: rotate(180deg); }
 .custom-panel-body {
   display: none;
   padding: 10px;
-  border-top: 1px dashed #0f3460;
+  border-top: 1px dashed var(--divider);
 }
 .custom-panel-body.open { display: block; }
 
 .field-group {
   margin-bottom: 14px;
   padding-bottom: 10px;
-  border-bottom: 1px dashed #0f3460;
+  border-bottom: 1px dashed var(--divider);
 }
 .field-group-label {
   display: block;
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
   margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 .field-group.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.inline-label { color: #999; font-size: 11px; margin-left: 6px; }
+.inline-label { color: var(--text-muted); font-size: 11px; margin-left: 6px; }
 .turns-num { width: 45px; }
 
 .stage-grid {
@@ -235,30 +273,30 @@ input[type="checkbox"]:checked + label.btn {
   gap: 4px 8px;
   align-items: center;
   font-size: 12px;
-  color: #999;
+  color: var(--text-muted);
 }
 
 .results-block { margin-top: 4px; }
 .best-move {
   font-size: 18px;
-  color: #00d9ff;
+  color: var(--green);
   font-weight: bold;
   padding: 10px;
-  background: #0f3460;
+  background: var(--surface-2);
   border-radius: 4px;
   text-align: center;
 }
-.projected-row th, .projected-row td { color: #00d9ff; }
+.projected-row th, .projected-row td { color: var(--green); }
 
 .opp-set-moves {
   font-size: 12px;
-  color: #999;
+  color: var(--text-muted);
   margin: -4px 0 10px 0;
 }
 .move-chip {
   display: inline-block;
-  background: #0f3460;
-  color: #eee;
+  background: var(--surface-2);
+  color: var(--text);
   border-radius: 3px;
   padding: 2px 6px;
   margin: 2px 3px 2px 0;
@@ -268,10 +306,10 @@ input[type="checkbox"]:checked + label.btn {
 .opp-move-dist {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px dashed #0f3460;
+  border-top: 1px dashed var(--divider);
 }
 .opp-move-dist-title {
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -284,30 +322,30 @@ input[type="checkbox"]:checked + label.btn {
   font-size: 12px;
   margin-bottom: 4px;
 }
-.opp-move-dist-label { min-width: 110px; color: #eee; }
+.opp-move-dist-label { min-width: 110px; color: var(--text); }
 .opp-move-dist-bar-wrap {
   flex: 1;
-  background: #0f3460;
+  background: var(--surface-2);
   border-radius: 3px;
   height: 12px;
   overflow: hidden;
 }
-.opp-move-dist-bar { height: 100%; background: #00d9ff; }
-.opp-move-dist-pct { min-width: 42px; text-align: right; color: #999; }
+.opp-move-dist-bar { height: 100%; background: var(--blue); }
+.opp-move-dist-pct { min-width: 42px; text-align: right; color: var(--text-muted); }
 
 .set-input-block {
   margin-top: 16px;
   padding-top: 14px;
-  border-top: 1px solid #0f3460;
+  border-top: 1px solid var(--divider);
 }
 
 .error-display {
-  color: #ff6b6b;
+  color: var(--error);
   font-size: 12px;
   margin-top: 10px;
   white-space: pre-wrap;
 }
 
 .hidden { display: none; }
-.radio-inline { font-size: 12px; color: #999; margin-right: 10px; }
+.radio-inline { font-size: 12px; color: var(--text-muted); margin-right: 10px; }
 .radio-inline input { margin-right: 4px; }

@@ -345,6 +345,35 @@ function accuracyDownFamilyViability(ctx) {
   return dist;
 }
 
+// AI_CV_HighCrit (data/battle_ai_scripts.s:1449-1460), shared by
+// EFFECT_HIGH_CRITICAL/EFFECT_BLAZE_KICK/EFFECT_POISON_TAIL (dispatched at
+// :686/:766/:772) — the one real super-effective-move-encouragement branch
+// in Frontier AI (see HANDOFF.md §3's FRONTIER AI FLAG SET reference: every
+// OTHER effectiveness-gated branch across all 3 active scripts is either a
+// resistance penalty or AI_TryToFaint's x4-only DoubleSuperEffective bonus —
+// this is the only one that rewards a plain x2 hit). No AI_CBM_HighCrit
+// exists in source's CheckBadMove dispatch table, so no checkBadMove here —
+// intentional, not an omission.
+//   x0.25/x0.5 -> end, no bonus, ever.
+//   x2/x4      -> skip straight to the second roll (HighCrit2): 128/256 (50%)
+//                 -> nothing, else -> score +1.
+//   x1 (or x0, which isn't separately checked in source either) -> first
+//                 roll 128/256 (50%) -> end, no bonus; else falls through to
+//                 the SAME second roll as the x2/x4 case. Net p(+1) =
+//                 (128/256)*(128/256) = 1/4 — both sequential gates must
+//                 pass, collapsed into one combined-probability branch, same
+//                 convention as AI_CV_EvasionUp's toxic-poison low-HP branch
+//                 above (two ANDed rolls -> one multiplied-probability pair).
+function highCritViability(ctx) {
+  const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+  if (eff === 0.5 || eff === 0.25) return [{ p: 1, delta: 0 }];
+  if (eff === 2 || eff === 4) {
+    return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
+  }
+  const pPlus1 = (128 / 256) * (128 / 256);
+  return [{ p: 1 - pPlus1, delta: 0 }, { p: pPlus1, delta: 1 }];
+}
+
 const AI_HANDLERS = {
   EFFECT_TOXIC: {
     // AI_CBM_Toxic (data/battle_ai_scripts.s:341-352) — completing this now
@@ -488,6 +517,15 @@ const AI_HANDLERS = {
     },
     checkViability: () => 0,
   },
+  // AI_CV_HighCrit — see highCritViability's own comment above for the full
+  // source citation and branch shape. Karate Chop/Razor Leaf/Crabhammer/
+  // Slash/Aeroblast/Cross Chop/Air Cutter/Leaf Blade share EFFECT_HIGH_CRITICAL;
+  // Blaze Kick and Poison Tail are their own effects but dispatch to the
+  // identical AI_CV_HighCrit routine in source (:766/:772), so they share
+  // this same handler function, not a separate copy.
+  EFFECT_HIGH_CRITICAL: { checkViability: highCritViability },
+  EFFECT_BLAZE_KICK: { checkViability: highCritViability },
+  EFFECT_POISON_TAIL: { checkViability: highCritViability },
   // ── Systematic AI-handler port, batch 1 (see HANDOFF.md §7 step 1) ────────
   EFFECT_PARALYZE: {
     // AI_CBM_Paralyze (data/battle_ai_scripts.s:397-403) — fully deterministic,
@@ -1143,6 +1181,18 @@ const AI_HANDLERS = {
       return 0;
     },
   },
+  // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:154 dispatches
+  // EFFECT_LEVEL_DAMAGE here — same routine as EFFECT_RETURN/EFFECT_FRUSTRATION
+  // just above; mirrored verbatim, not reinvented). No AI_CV_LevelDamage exists
+  // in source's CheckViability dispatch table at all — checkViability
+  // intentionally omitted, not a gap.
+  EFFECT_LEVEL_DAMAGE: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+  },
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
   // needed). If an OPPONENT ever carries one, chooseOpponentMoves will throw
   // naming the exact effect — port its AI_CV_*/AI_CBM_* handler from
@@ -1251,6 +1301,18 @@ function calcDamage(attacker, defender, moveName, {
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
+  // EFFECT_LEVEL_DAMAGE (Night Shade/Seismic Toss): damage is EXACTLY the
+  // user's level — bypasses Atk/Def/STAB/power/the formula entirely, and
+  // (unlike every other damaging move) has NO 0.85-1.0 roll either, since
+  // it's a flat fixed value in source, not a formula output. Type IMMUNITY
+  // still applies (Night Shade=Ghost does 0 to Normal-types, Seismic
+  // Toss=Fighting does 0 to Ghost-types) — checked directly here since this
+  // branch returns before the formula's own `eff`/type-effectiveness
+  // handling further down even runs. Normal resist/weak (0.5x/2x) is
+  // deliberately NOT applied — only the binary immune/not-immune gate.
+  if (move.effect === "EFFECT_LEVEL_DAMAGE") {
+    return typeEffectiveness(move.type, defender.types) === 0 ? 0 : attacker.level;
+  }
   const effectivePower = moveName === "Flail" || moveName === "Reversal" ? getFlailPower(attackerHpPct)
     : (move.effect === "EFFECT_RETURN" || move.effect === "EFFECT_FRUSTRATION") ? getFriendshipPower(move.effect, attacker.friendship)
     : move.power;
@@ -2064,12 +2126,16 @@ function resolveAbilityInteraction(moveName, moveData, attacker, defender) {
 // coverage audit findings, not yet ported (deliberately NOT fixed here, see
 // HANDOFF.md §10 task 2).
 const SILENT_FALLTHROUGH_EFFECTS = new Set([
-  "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_LEVEL_DAMAGE", "EFFECT_PSYWAVE",
+  "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_PSYWAVE",
   "EFFECT_SUPER_FANG", "EFFECT_ENDEAVOR", "EFFECT_LOW_KICK", "EFFECT_MAGNITUDE",
   "EFFECT_PRESENT", "EFFECT_HIDDEN_POWER", "EFFECT_BIDE",
   // EFFECT_RETURN/EFFECT_FRUSTRATION REMOVED from this set — now correctly
   // handled via calcDamage's friendship-based effectivePower (see
   // getFriendshipPower/buildMon's `friendship` field).
+  // EFFECT_LEVEL_DAMAGE REMOVED (this session) — now correctly handled via
+  // calcDamage's own EFFECT_LEVEL_DAMAGE branch (flat user.level, immunity-
+  // gated) plus an AI_HANDLERS["EFFECT_LEVEL_DAMAGE"] checkBadMove entry
+  // (AI_CBM_HighRiskForDamage, mirrors EFFECT_RETURN/EFFECT_FRUSTRATION above).
 ]);
 
 // Recoil (src/battle_script_commands.c:2636-2643/2843-2850, dispatched via

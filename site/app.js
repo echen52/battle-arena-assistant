@@ -107,7 +107,7 @@ function renderOppSetMoves(entry) {
 function drawHealthBar(barEl, percent) {
   const p = Math.max(0, Math.min(100, percent));
   const color = p > 50 ? "#2ecc71" : p > 20 ? "#e6c229" : "#e74c3c";
-  barEl.style.background = `linear-gradient(to right, ${color} ${p}%, #0f3460 0%)`;
+  barEl.style.background = `linear-gradient(to right, ${color} ${p}%, #33261a 0%)`;
 }
 
 function wireHpInputs(currentId, percentId, barId) {
