@@ -33,7 +33,6 @@
     <div class="field-row">
       <label>Saved Sets</label>
       <select id="youLoadSet" class="calc-trigger"><option value="">— Select a saved set —</option></select>
-      <button id="youDeleteSet" class="btn">Delete</button>
     </div>
 
     <!-- Live match state — stages/HP/status describe what's happening RIGHT
@@ -72,6 +71,20 @@
         <option value="sleep">Sleep</option>
       </select>
     </div>
+
+    <!-- Confusion/Attraction are volatile STATUS2 conditions, independent of
+         and stackable with the primary status above (a mon can be
+         paralyzed AND confused AND attracted at once) — two separate
+         toggles, not select options. Both are real, enumerated engine
+         branches for the You side only (logic.js: metagrossConfused,
+         youAttracted) — see HANDOFF.md. Attracted is additionally gated by
+         live gender-compatibility (app.js), since the engine's own override
+         path does not itself validate gender for a directly-set toggle. -->
+    <div class="field-row">
+      <label>Volatile</label>
+      <input type="checkbox" id="youConfused" class="calc-trigger" /><label for="youConfused" class="btn btn-field">Confused</label>
+      <input type="checkbox" id="youAttracted" class="calc-trigger" /><label for="youAttracted" class="btn btn-field" id="youAttractedLabel">Attracted</label>
+    </div>
   </section>
 
   <!-- ───────────────────────── CENTER FIELD PANEL ───────────────────────── -->
@@ -85,18 +98,14 @@
       <input type="radio" name="weather" value="rain" id="weatherRain" class="calc-trigger" /><label for="weatherRain" class="btn btn-field">Rain</label>
       <input type="radio" name="weather" value="sandstorm" id="weatherSand" class="calc-trigger" /><label for="weatherSand" class="btn btn-field">Sand</label>
       <input type="radio" name="weather" value="hail" id="weatherHail" class="calc-trigger" /><label for="weatherHail" class="btn btn-field">Hail</label>
-      <label class="inline-label">Turns left (blank = permanent)</label>
-      <input type="number" id="weatherTurns" class="calc-trigger" min="0" max="5" placeholder="—" />
     </div>
 
     <div class="field-group two-col">
       <div>
         <span class="field-group-label">Your side</span>
         <input type="checkbox" id="youReflect" class="calc-trigger" /><label for="youReflect" class="btn btn-field">Reflect</label>
-        <input type="number" id="youReflectTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
         <br/>
         <input type="checkbox" id="youLightScreen" class="calc-trigger" /><label for="youLightScreen" class="btn btn-field">Light Screen</label>
-        <input type="number" id="youLightScreenTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
         <br/>
         <input type="checkbox" id="youSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
         <label for="youSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
@@ -104,10 +113,8 @@
       <div>
         <span class="field-group-label">Opponent side</span>
         <input type="checkbox" id="oppReflect" class="calc-trigger" /><label for="oppReflect" class="btn btn-field">Reflect</label>
-        <input type="number" id="oppReflectTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
         <br/>
         <input type="checkbox" id="oppLightScreen" class="calc-trigger" /><label for="oppLightScreen" class="btn btn-field">Light Screen</label>
-        <input type="number" id="oppLightScreenTurnsNum" class="calc-trigger turns-num" min="0" max="5" placeholder="5" />
         <br/>
         <input type="checkbox" id="oppSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
         <label for="oppSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
@@ -168,8 +175,19 @@
         <label class="smogon-label">Paste Smogon Export</label>
         <textarea id="youImportExportText" class="showdown-text" placeholder="Snorlax @ Leftovers&#10;Ability: Immunity&#10;Level: 50&#10;EVs: 36 HP / 220 Def / 252 Spe&#10;Brave Nature&#10;- Body Slam&#10;- Amnesia&#10;- Curse&#10;- Rest"></textarea>
         <div class="btn-row">
-          <button id="youImport" class="btn">Parse Set</button>
-          <button id="youExport" class="btn">Export current</button>
+          <button id="youImport" class="btn btn-primary">Parse Set</button>
+          <button id="youSaveSet" class="btn btn-primary">Save Set</button>
+        </div>
+
+        <!-- Palace-style saved-set chips: name + inline ✕ delete, living right
+             next to Parse Set/Save Set (echen52/battle-palace-assistant's
+             .saved-section convention, re-skinned to the warm theme) — see
+             HANDOFF.md. Deletion moved here (was a top-of-panel "Delete"
+             button next to the load-only dropdown); the top Saved Sets
+             dropdown stays load-only. -->
+        <div class="saved-section">
+          <div class="saved-title">Saved Sets</div>
+          <div class="saved-list" id="youSavedChips"></div>
         </div>
       </div>
 
@@ -183,7 +201,11 @@
         <div class="custom-panel-body" id="youManualBody">
           <div class="field-row">
             <label>Species</label>
-            <select id="youSpecies" class="calc-trigger"></select>
+            <div class="combo-wrap">
+              <input type="text" id="youSpeciesInput" class="combo-input" autocomplete="off" placeholder="Type to search species…" />
+              <div class="combo-list" id="youSpeciesList"></div>
+              <select id="youSpecies" class="calc-trigger hidden-select"></select>
+            </div>
           </div>
           <div class="field-row">
             <label>Level</label>
@@ -232,10 +254,6 @@
             <select class="calc-trigger move-select" data-slot="2"></select>
             <select class="calc-trigger move-select" data-slot="3"></select>
           </div>
-
-          <div class="btn-row">
-            <button id="youSaveSet" class="btn">Save as custom set</button>
-          </div>
         </div>
       </div>
     </div>
@@ -253,7 +271,11 @@
 
     <div id="oppSetPicker" class="field-row">
       <label>Set</label>
-      <select id="oppSetName" class="calc-trigger"></select>
+      <div class="combo-wrap">
+        <input type="text" id="oppSetNameInput" class="combo-input" autocomplete="off" placeholder="Type to search sets…" />
+        <div class="combo-list" id="oppSetNameList"></div>
+        <select id="oppSetName" class="calc-trigger hidden-select"></select>
+      </div>
       <select id="oppAbilityChoice" class="calc-trigger" style="display:none"></select>
     </div>
     <div id="oppSetMoves" class="opp-set-moves"></div>
@@ -261,7 +283,11 @@
     <div id="oppManualBuild" class="hidden">
       <div class="field-row">
         <label>Species</label>
-        <select id="oppSpecies" class="calc-trigger"></select>
+        <div class="combo-wrap">
+          <input type="text" id="oppSpeciesInput" class="combo-input" autocomplete="off" placeholder="Type to search species…" />
+          <div class="combo-list" id="oppSpeciesList"></div>
+          <select id="oppSpecies" class="calc-trigger hidden-select"></select>
+        </div>
       </div>
       <div class="field-row">
         <label>Level</label>
@@ -333,6 +359,20 @@
         <option value="poison">Poison</option>
         <option value="sleep">Sleep</option>
       </select>
+    </div>
+
+    <!-- Opponent-side confusion/attraction are NOT modeled — the engine's
+         own turn-resolution hardcodes both to "actor === 'you' ? ... :
+         false" (logic.js), i.e. it structurally cannot apply these to the
+         opponent regardless of any state override. Disabled, mirroring the
+         Spikes convention, rather than wiring to a no-op field. See
+         HANDOFF.md. -->
+    <div class="field-row">
+      <label>Volatile</label>
+      <input type="checkbox" id="oppConfused" disabled title="Opponent-side confusion is not modeled in the engine yet — turn-resolution hardcodes only the You side as confusable (logic.js: metagrossConfused). This toggle is inert." />
+      <label for="oppConfused" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Confused (unsupported)</label>
+      <input type="checkbox" id="oppAttracted" disabled title="Opponent-side attraction is not modeled in the engine yet — same one-directional limitation as confusion (logic.js: youAttracted). This toggle is inert." />
+      <label for="oppAttracted" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Attracted (unsupported)</label>
     </div>
 
     <div class="opp-move-dist" id="oppMoveDistBlock">

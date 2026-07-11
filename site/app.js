@@ -1,14 +1,19 @@
 import {
   SPECIES_LIST, MOVE_LIST, NATURE_NAMES, OPPONENT_SET_NAMES,
-  getSpeciesAbilities, OPPONENT_SETS,
+  getSpeciesAbilities, OPPONENT_SETS, canAttractPair,
 } from "./pokemon-data.js";
 import {
   freshMatchState, solve, resolveOpponentBySetName,
-  serializeToShowdown, parseShowdownText,
+  parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
 } from "./ui-logic.js";
 
 const $ = (id) => document.getElementById(id);
+
+// Reflect/Light Screen ON value — see buildMatchState's comment for why this
+// isn't null (weather's permanent sentinel); any value above the fixed
+// 3-turn match length keeps the screen active for the whole match.
+const SCREEN_ACTIVE_TURNS = 5;
 
 // ── Populate static dropdowns ──────────────────────────────────────────
 function fillSelect(select, options, { withBlank = false } = {}) {
@@ -34,6 +39,105 @@ fillSelect($("oppSetName"), OPPONENT_SET_NAMES);
 document.querySelectorAll(".move-select, .opp-move-select").forEach((sel) => fillSelect(sel, MOVE_LIST, { withBlank: true }));
 document.querySelectorAll(".stage-select, .opp-stage-select").forEach(fillStageSelect);
 
+// ── Filtering combobox for the two long lists (opponent set: ~552 entries;
+// species: ~386) — a native <select> lets you type-to-jump but doesn't
+// NARROW the visible options, which is the actual problem at this size.
+// Pattern ported from the Battle Palace Assistant's move-autocomplete
+// (.move-ac/.move-ac-item/.move-ac.open, echen52/battle-palace-assistant),
+// re-skinned to the warm theme — see HANDOFF.md. The real <select> stays in
+// the DOM (hidden via .hidden-select) as the actual state everything else
+// reads/writes; this is a picker UI layered on top, not a new data path —
+// selecting a match sets select.value and dispatches a real "change" event,
+// so every existing listener (recalculate, ability-refresh, dual-ability
+// disambiguation, move-chip render) fires exactly as it did with a plain
+// <select>. Short lists (stat stages, saved sets, weather, status) are left
+// as native selects — typeahead isn't the problem there.
+function setupCombobox(selectId, inputId, listId, options) {
+  const select = $(selectId), input = $(inputId), list = $(listId);
+  let hi = -1;
+
+  function setValue(value) {
+    select.value = value;
+    input.value = value;
+  }
+
+  function closeList() {
+    list.classList.remove("open");
+    list.innerHTML = "";
+    hi = -1;
+  }
+
+  function choose(value) {
+    setValue(value);
+    closeList();
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function renderList(matches) {
+    hi = -1;
+    if (!matches.length) {
+      list.innerHTML = '<div class="combo-empty">No matches</div>';
+      list.classList.add("open");
+      return;
+    }
+    list.innerHTML = matches.map((opt) => `<div class="combo-item" data-value="${opt}">${opt}</div>`).join("");
+    list.classList.add("open");
+    list.querySelectorAll(".combo-item").forEach((el) => {
+      // mousedown (not click) + preventDefault so the input never blurs
+      // before the selection registers — same reasoning as Palace's own
+      // move-ac implementation.
+      el.addEventListener("mousedown", (e) => { e.preventDefault(); choose(el.dataset.value); });
+    });
+  }
+
+  function filterAndRender() {
+    const q = input.value.trim().toLowerCase();
+    if (!q) { closeList(); return; }
+    const starts = options.filter((o) => o.toLowerCase().startsWith(q));
+    const rest = options.filter((o) => !o.toLowerCase().startsWith(q) && o.toLowerCase().includes(q));
+    renderList(starts.concat(rest).slice(0, 50));
+  }
+
+  input.addEventListener("input", filterAndRender);
+  input.addEventListener("focus", () => { input.select(); filterAndRender(); });
+
+  input.addEventListener("keydown", (e) => {
+    const items = list.querySelectorAll(".combo-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      hi = Math.min(hi + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle("hi", i === hi));
+      if (hi >= 0) items[hi].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      hi = Math.max(hi - 1, -1);
+      items.forEach((el, i) => el.classList.toggle("hi", i === hi));
+      if (hi >= 0) items[hi].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      if (hi >= 0 && items[hi]) { e.preventDefault(); choose(items[hi].dataset.value); }
+    } else if (e.key === "Escape") {
+      closeList();
+    }
+  });
+
+  input.addEventListener("blur", () => {
+    setTimeout(() => {
+      closeList();
+      // The visible text must always match the real <select> value (what
+      // actually feeds the engine) — revert if the user typed something and
+      // clicked away without picking a real match.
+      if (input.value !== select.value) input.value = select.value;
+    }, 150);
+  });
+
+  input.value = select.value; // initial sync with the already-filled select
+  return setValue;
+}
+
+const setYouSpecies = setupCombobox("youSpecies", "youSpeciesInput", "youSpeciesList", SPECIES_LIST);
+const setOppSpecies = setupCombobox("oppSpecies", "oppSpeciesInput", "oppSpeciesList", SPECIES_LIST);
+const setOppSetName = setupCombobox("oppSetName", "oppSetNameInput", "oppSetNameList", OPPONENT_SET_NAMES);
+
 function refreshAbilityOptions(speciesSelectId, abilitySelectId) {
   const species = $(speciesSelectId).value;
   fillSelect($(abilitySelectId), getSpeciesAbilities(species));
@@ -43,12 +147,19 @@ refreshAbilityOptions("oppSpecies", "oppAbility");
 $("youSpecies").addEventListener("change", () => refreshAbilityOptions("youSpecies", "youAbility"));
 $("oppSpecies").addEventListener("change", () => refreshAbilityOptions("oppSpecies", "oppAbility"));
 
-// ── Custom-set picker ───────────────────────────────────────────────────
+// ── Custom-set picker: top dropdown (load-only) + chip list (load or ✕
+// delete), both reading the same localStorage-backed store — see
+// HANDOFF.md for the save/delete restructure this session. ─────────────
 function refreshCustomSetPicker() {
   const sets = loadCustomSets();
   fillSelect($("youLoadSet"), Object.keys(sets), { withBlank: true });
 }
-refreshCustomSetPicker();
+
+function refreshSavedSets() {
+  refreshCustomSetPicker();
+  renderSavedChips();
+}
+refreshSavedSets();
 
 // ── Build-manually collapsible panel (mirrors the Battle Palace Assistant's
 // Custom Set Calculator: collapsed by default, chevron-toggle open) ────────
@@ -127,27 +238,6 @@ function wireHpInputs(currentId, percentId, barId) {
 wireHpInputs("youCurrentHp", "youPercentHp", "youHpBar");
 wireHpInputs("oppCurrentHp", "oppPercentHp", "oppHpBar");
 
-// ── Reflect/Light Screen checkbox -> default turns-remaining wiring ──────
-function wireScreenCheckbox(checkboxId, numId, defaultTurns = 5) {
-  const checkbox = $(checkboxId), num = $(numId);
-  checkbox.addEventListener("change", () => {
-    if (checkbox.checked && !num.value) num.value = defaultTurns;
-    if (!checkbox.checked) num.value = "";
-  });
-  num.addEventListener("input", () => {
-    checkbox.checked = num.value !== "" && Number(num.value) > 0;
-  });
-}
-wireScreenCheckbox("youReflect", "youReflectTurnsNum");
-wireScreenCheckbox("youLightScreen", "youLightScreenTurnsNum");
-wireScreenCheckbox("oppReflect", "oppReflectTurnsNum");
-wireScreenCheckbox("oppLightScreen", "oppLightScreenTurnsNum");
-
-// ── Weather turns default: when a real weather is picked with no turns
-// entered yet, leave it blank (= permanent) rather than guessing 5, since
-// "permanent" vs "5 turns left" is a real distinction the engine models
-// (weatherTurns: null) and the user, not this tool, knows which is true.
-
 // ── Config builders (read the DOM into engine-shaped config objects) ────
 function readEvIvBlock(selector, ivSelector) {
   const evs = {};
@@ -217,18 +307,47 @@ function buildMatchState() {
   s.oppStages = readStages(".opp-stage-select");
   s.youStatus = $("youStatus").value || null;
   s.oppStatus = $("oppStatus").value || null;
+  // Confusion/Attraction: independent volatile toggles, stackable with the
+  // primary status above and with each other — real, You-side-only engine
+  // fields (see HANDOFF.md). Opponent-side toggles are disabled in the
+  // markup (the engine has no branch for them at all), so there's nothing
+  // to read for the opponent here.
+  s.metagrossConfused = $("youConfused").checked;
+  s.youAttracted = $("youAttracted").checked;
+  // Weather/Reflect/Light Screen are plain on/off toggles in this UI — no
+  // turn-count input. ON passes the engine's own "active indefinitely"
+  // value: weatherTurns: null (engine convention — see logic.js's ability-
+  // set-weather comment, "null turns = permanent when weatherType is set").
+  // Reflect/Light Screen have no null-permanent sentinel in the engine (they
+  // always count down), so ON uses SCREEN_ACTIVE_TURNS, comfortably above
+  // the fixed 3-turn match length so it never decrements to off mid-match.
   s.weatherType = document.querySelector("input[name='weather']:checked").value || null;
-  const wt = $("weatherTurns").value;
-  s.weatherTurns = wt === "" ? null : Number(wt);
-  s.youReflectTurns = $("youReflect").checked ? (Number($("youReflectTurnsNum").value) || 5) : null;
-  s.oppReflectTurns = $("oppReflect").checked ? (Number($("oppReflectTurnsNum").value) || 5) : null;
-  s.youLightScreenTurns = $("youLightScreen").checked ? (Number($("youLightScreenTurnsNum").value) || 5) : null;
-  s.oppLightScreenTurns = $("oppLightScreen").checked ? (Number($("oppLightScreenTurnsNum").value) || 5) : null;
+  s.weatherTurns = null;
+  s.youReflectTurns = $("youReflect").checked ? SCREEN_ACTIVE_TURNS : null;
+  s.oppReflectTurns = $("oppReflect").checked ? SCREEN_ACTIVE_TURNS : null;
+  s.youLightScreenTurns = $("youLightScreen").checked ? SCREEN_ACTIVE_TURNS : null;
+  s.oppLightScreenTurns = $("oppLightScreen").checked ? SCREEN_ACTIVE_TURNS : null;
   return s;
 }
 
 // ── The recalculation loop: any calc-trigger change re-solves from
 // scratch, using the CURRENT observed state — this is the live re-solve. ──
+// Disables the You-side Attracted toggle (and force-unchecks it) whenever
+// the current You/Opponent species pairing can NEVER be gender-compatible
+// (either side genderless, or both fixed to the same single gender) — the
+// engine's own override path doesn't validate this itself (see
+// buildMatchState's comment), so an impossible state must never reach it.
+// Runs BEFORE buildMatchState() reads the checkbox, so a forced uncheck
+// takes effect in the same solve, not one interaction late.
+function updateAttractedGate(youSpecies, oppSpecies) {
+  const checkbox = $("youAttracted"), label = $("youAttractedLabel");
+  const possible = youSpecies && oppSpecies ? canAttractPair(youSpecies, oppSpecies) : true;
+  checkbox.disabled = !possible;
+  label.classList.toggle("btn-disabled", !possible);
+  label.title = possible ? "" : "Not possible: this species pairing can never be gender-compatible (one side is genderless, or both resolve to the same fixed gender) — Attract could never land here.";
+  if (!possible && checkbox.checked) checkbox.checked = false;
+}
+
 function recalculate() {
   const errorEl = $("errorDisplay");
   errorEl.textContent = "";
@@ -236,6 +355,7 @@ function recalculate() {
   try {
     youConfig = buildYouConfig();
     oppConfig = buildOppConfig();
+    updateAttractedGate(youConfig.species, oppConfig.species);
     matchState = buildMatchState();
     if (!youConfig.species || !oppConfig.species) return;
     if (youConfig.moves.length === 0) { errorEl.textContent = "Pick at least one move for your Pokemon."; return; }
@@ -335,13 +455,17 @@ function renderResult(result, matchState) {
   }
 }
 
-// ── Custom-set save/load/import/export ──────────────────────────────────
+// ── Custom-set save/load/delete + chip list ──────────────────────────────
+// One consolidated "Save Set" action (renamed/repurposed from the old
+// "Export current" button — see HANDOFF.md) next to Parse Set; deletion
+// lives on the chips below, not as a separate top-of-panel button. The top
+// "Saved Sets" dropdown stays load-only, unchanged.
 $("youSaveSet").addEventListener("click", () => {
   const config = buildYouConfig();
   const name = prompt("Save as (name):", config.species + " custom");
   if (!name) return;
   saveCustomSet(name, config);
-  refreshCustomSetPicker();
+  refreshSavedSets();
 });
 
 $("youLoadSet").addEventListener("change", () => {
@@ -354,16 +478,42 @@ $("youLoadSet").addEventListener("change", () => {
   recalculate();
 });
 
-$("youDeleteSet").addEventListener("click", () => {
-  const name = $("youLoadSet").value;
-  if (!name) return;
-  if (!confirm(`Delete saved set "${name}"?`)) return;
-  deleteCustomSet(name);
-  refreshCustomSetPicker();
-});
+// Palace-style chips (echen52/battle-palace-assistant's .saved-chip): click
+// the chip to load that set, click its ✕ to delete — updates the chip list
+// AND the top dropdown, since both read the same localStorage store.
+function renderSavedChips() {
+  const container = $("youSavedChips");
+  const sets = loadCustomSets();
+  const names = Object.keys(sets);
+  if (!names.length) {
+    container.innerHTML = '<span class="no-saved">No saved sets yet.</span>';
+    return;
+  }
+  container.innerHTML = names.map((name) => `
+    <div class="saved-chip" data-name="${name}">
+      <span class="chip-label">${name}</span>
+      <span class="del-btn" data-del="${name}" title="Delete">✕</span>
+    </div>`).join("");
+
+  container.querySelectorAll(".saved-chip").forEach((chip) => {
+    chip.addEventListener("click", (e) => {
+      if (e.target.dataset.del) return;
+      const config = sets[chip.dataset.name];
+      if (!config) return;
+      applyYouConfig(config);
+      openManualPanel();
+      recalculate();
+    });
+    chip.querySelector(".del-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteCustomSet(e.target.dataset.del);
+      refreshSavedSets();
+    });
+  });
+}
 
 function applyYouConfig(config) {
-  $("youSpecies").value = config.species;
+  setYouSpecies(config.species);
   refreshAbilityOptions("youSpecies", "youAbility");
   $("youLevel").value = config.level || 50;
   $("youNature").value = config.nature || "Hardy";
@@ -374,11 +524,6 @@ function applyYouConfig(config) {
   const moveSelects = document.querySelectorAll(".move-select");
   moveSelects.forEach((sel, i) => { sel.value = (config.moves && config.moves[i]) || ""; });
 }
-
-$("youExport").addEventListener("click", () => {
-  const config = buildYouConfig();
-  $("youImportExportText").value = serializeToShowdown(config);
-});
 
 $("youImport").addEventListener("click", () => {
   try {
@@ -409,7 +554,7 @@ function loadDefaultDemo() {
     evs: { atk: 252, spd: 4, spe: 252 }, ivs: {},
     moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"],
   });
-  $("oppSetName").value = "Umbreon 4";
+  setOppSetName("Umbreon 4");
   $("oppSetName").dispatchEvent(new Event("change"));
 }
 loadDefaultDemo();
