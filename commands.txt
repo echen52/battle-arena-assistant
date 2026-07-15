@@ -1,0 +1,20 @@
+Read the Battle Arena judging logic from two sources and produce a factual spec — no code changes, no files written, output to stdout only.
+
+SOURCE 1 (canonical): the pokeemerald decompilation. Find the Battle Arena scoring implementation — likely src/battle_arena.c plus any referenced constants in include/constants/. Read it in full.
+
+SOURCE 2 (our port): battle_arena_sim/logic.js. Find every function and code path that computes or resolves Mind, Skill, or Body scoring, and the function that resolves the three categories into a matchup result.
+
+For each of the three categories (Mind, Skill, Body), report:
+- The exact scoring rule as implemented in pokeemerald: what increments/decrements the tally, by how much, and under what condition. Quote the relevant source lines with file path and line numbers.
+- Every edge case the source handles explicitly. Specifically: what counts as "not attacking"; how status moves score; what a missed attack scores; how charge turns of two-turn moves (Dive/Fly/Dig) score; how Endure/Protect/Detect score; what a move that fails outright scores.
+- The data type and range of the tally.
+
+Then report the resolution function:
+- How each category resolves to a winner (player / opponent / tie), including the exact comparison and any thresholds.
+- What happens on a per-category tie.
+- How the three category results combine into a matchup result, and what the 3-3 case does.
+- For Body specifically: whether the comparison is HP ratio, HP percentage, or a bucketed threshold, and the exact arithmetic including any integer division.
+
+Finally, produce a divergence table: for every rule above, state whether logic.js matches pokeemerald exactly, differs, or does not implement it. Where it differs, show both versions side by side. Do not speculate about which is correct — just report.
+
+Output as a plain structured spec. Cite file:line for every claim. If any behavior is unclear from the source, say so explicitly rather than inferring.
