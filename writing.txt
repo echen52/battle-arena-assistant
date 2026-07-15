@@ -1,0 +1,98 @@
+\section{Scoring Mechanics}
+
+The Arena's judgment is decided across three categories: Mind, Skill, and Body. Bulbapedia describes these, roughly, as rewarding aggression, effective move usage, and remaining HP respectively. This is correct as far as it goes, but the implementation is considerably more particular than the description, and several of its details are invisible to a player yet decisive in close matchups. This section states each category as the game actually implements it.
+
+Judgment fires only if both Pok\'emon are still standing at the end of the third turn. It is not a tiebreaker applied to a battle in progress; it is a forced termination that immediately faints the loser.
+
+\subsection{Mind}
+
+Mind rewards the \emph{selection} of an attacking move, and nothing else.
+
+Each move carries a fixed Mind rating. Every move with non-zero power rates $+1$, with three exceptions: Counter, Mirror Coat, and Bide rate $0$ (each carries a placeholder power value in the game's data rather than real damage), and Fake Out rates $-1$. Every move with zero power rates $0$, except Protect, Detect, and Endure, which rate $-1$.
+
+The critical detail is \emph{when} the rating is applied. Mind is scored at the moment the move is selected, before the game checks whether the move can execute at all. The consequences:
+
+\begin{itemize}
+    \item A Pok\'emon that is fully paralysed, still frozen, flinched, or immobilised by infatuation still scores its move's Mind rating. The move never happens; the point is banked regardless.
+    \item A move that misses scores identically to a move that hits. Mind does not observe the outcome.
+    \item A move that fails outright scores its rating anyway.
+    \item A two-turn move (Fly, Dig, Dive, Solar Beam, and so on) is selected twice --- once on the charge turn, once on the attack turn --- and therefore scores its rating \emph{twice}. Fly is worth $+2$ across its two turns, not $+1$.
+\end{itemize}
+
+Mind is, in effect, a measure of intent. The game asks what the Pok\'emon tried to do, not what happened.
+
+\subsection{Skill}
+
+Skill rewards moves that connect, and punishes moves that do not. Unlike Mind, it is evaluated after the move resolves.
+
+The main rule is a single chain of conditions, evaluated in order, with the first match winning:
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Condition & Skill \\
+\hline
+Move used on an already-statused target & $-2$ \\
+No effect (missed, failed, or did not affect the target) & $-2$ \\
+Super effective and not very effective (mixed dual type) & $+1$ \\
+Super effective & $+2$ \\
+Not very effective & $-1$ \\
+Otherwise (connected) & $+1$ \\
+\hline
+\end{tabular}
+\end{center}
+
+Three consequences of this ordering are worth drawing out.
+
+\textbf{A move blocked by the opponent's Protect is not penalised.} The block sets the move's result to \emph{missed}, which would ordinarily fire the $-2$. But the no-effect branch carries an explicit exemption for exactly this case, and once that branch is entered, the chain is consumed --- the later conditions cannot be reached. The move scores nothing at all: not $-2$, not $+1$. Skill is simply unchanged.
+
+\textbf{The charge turn of a two-turn move scores $+1$.} The charging turn runs no accuracy check and no type calculation, so no result flags are set at all, and the chain falls through to the final ``connected'' case. Combined with the Mind double-count above, a Fly that lands is worth $+2$ Mind and $+2$ Skill across its two turns --- as much as two separate landed hits.
+
+\textbf{Protect and Endure score differently from each other.} A successful Endure scores $+1$; a successful Protect scores $0$. The two moves set different internal flags, and only Protect's is the one the final condition excludes. A failed Protect or Endure scores $-2$.
+
+\subsubsection{Ability blocks}
+
+Skill has a second, independent mechanism. Certain battle messages --- eighteen of them, all announcing that an ability or item prevented something --- deduct $-3$ when displayed, regardless of what the main rule above already scored. Both mechanisms write to the same Skill total, and neither disables the other.
+
+The result is that an ability block's true cost depends on \emph{which} ability, by a route no player would guess:
+
+\begin{center}
+\begin{tabular}{lccc}
+\hline
+Ability & Main rule & Message & Net \\
+\hline
+Wonder Guard & $-2$ & --- & $-2$ \\
+Levitate & $-2$ & --- & $-2$ \\
+Soundproof & $+1$ & $-3$ & $-2$ \\
+Flash Fire & $+1$ & $-3$ & $-2$ \\
+Volt Absorb & $-2$ & $-3$ & $-5$ \\
+Water Absorb & $-2$ & $-3$ & $-5$ \\
+\hline
+\end{tabular}
+\end{center}
+
+Wonder Guard and Levitate set a ``missed'' result and print a message not on the deduction list, so they take the plain $-2$. Soundproof and Flash Fire set no result flags whatsoever --- the move is intercepted before any accuracy or type check --- so the main rule scores them as a \emph{landed hit} at $+1$, which the message then claws back to a net $-2$. Volt Absorb and Water Absorb are the worst case: they set a result flag \emph{and} print a listed message, taking both penalties for a net $-5$.
+
+Four different abilities arrive at $-2$ by two opposite routes, and the two absorption abilities cost more than twice as much as Wonder Guard --- a total immunity.
+
+\subsection{Body}
+
+Body compares remaining HP as a percentage. Two details make it sharper than it sounds.
+
+\textbf{The baseline is not maximum HP.} It is the Pok\'emon's HP at the moment it entered the field. Since the Arena is a sequence of independent 1v1s within one continuous battle, with no healing between them, a Pok\'emon that wins one matchup carries its damage into the next --- and its Body baseline is reset to whatever HP it had on arrival. A Pok\'emon that enters a matchup at 60\% of its maximum and holds that HP is at 100\% for Body purposes.
+
+This has a consequence that surprises: because the ratio is not capped, a Pok\'emon that enters below full and then heals produces a Body score \emph{above} 100. A Pok\'emon entering at 90\% and taking a single Leftovers tick scores 106. One entering at 50\% and using Rest scores 200.
+
+\textbf{The comparison is integer arithmetic.} The percentage is computed as
+\[
+\left\lfloor \frac{\mathrm{HP}_{\text{current}} \times 100}{\mathrm{HP}_{\text{at entry}}} \right\rfloor
+\]
+and it is this truncated integer, not the true percentage, that is compared. Two Pok\'emon at $75.48\%$ and $75.77\%$ both score 75: a tie, not a win for the second. The category is decided on whole percentage points, and any margin finer than that is discarded.
+
+\subsection{Resolution}
+
+Each category is resolved independently: the winner takes 2 points, the loser 0. If a category ties, both sides take 1.
+
+Since every category distributes exactly 2 points between the two sides, the totals always sum to 6. A side wins the matchup by exceeding 3. Exactly 3--3 is a tie, and both Pok\'emon are removed --- each side sends out its next Pok\'emon. There is no special handling for this case; it is simply the equality branch. A 3--3 can arise several ways: all three categories tied, or each side winning one with the third tied.
+
+The winner of a judged matchup carries its remaining HP forward, and its Body baseline resets on arrival to the next matchup.
