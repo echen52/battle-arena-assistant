@@ -421,8 +421,16 @@ function renderOppMoveDist(oppMoveDist, moveList, turnsRemaining) {
 }
 
 function renderResult(result, matchState) {
-  $("bodyYouDisplay").textContent = matchState.yourHpPct.toFixed(1) + "%";
-  $("bodyOppDisplay").textContent = matchState.oppHpPct.toFixed(1) + "%";
+  // Body score, not raw HP: floor(current / round-start * 100), mirroring
+  // evaluateTerminal (logic.js:4130) byte-for-byte so a cell reading 75 lines
+  // up exactly with what the engine scores. matchState carries yourHpPctAtStart
+  // only when the round-start field was filled (freshMatchState omits it), so
+  // fall back to current HP — the engine's own default (a mon that entered at
+  // its current HP is at full Body), matching buildStartState's default.
+  const youStart = matchState.yourHpPctAtStart ?? matchState.yourHpPct;
+  const oppStart = matchState.oppHpPctAtStart ?? matchState.oppHpPct;
+  $("bodyYouDisplay").textContent = Math.floor(matchState.yourHpPct / youStart * 100) + "%";
+  $("bodyOppDisplay").textContent = Math.floor(matchState.oppHpPct / oppStart * 100) + "%";
 
   if (result.isTerminal) {
     $("bestMoveDisplay").textContent = "Match over — judge decides (P(win)=" + result.winProb.toFixed(3) + ")";
@@ -454,8 +462,13 @@ function renderResult(result, matchState) {
     skillYouSum += b.prob * b.state.skillYou;
     mindOppSum += b.prob * b.state.mindOpp;
     skillOppSum += b.prob * b.state.skillOpp;
-    hpYouSum += b.prob * b.state.yourHpPct;
-    hpOppSum += b.prob * b.state.oppHpPct;
+    // Weight the Body SCORE per branch, not raw HP — same floor(current /
+    // round-start * 100) as the "so far" cells and evaluateTerminal. Each
+    // forward-walk state carries its own baseline (cloneState threads
+    // yourHpPctAtStart forward from buildStartState), so the projection is a
+    // probability-weighted average of scores, not of raw HP percentages.
+    hpYouSum += b.prob * Math.floor(b.state.yourHpPct / b.state.yourHpPctAtStart * 100);
+    hpOppSum += b.prob * Math.floor(b.state.oppHpPct / b.state.oppHpPctAtStart * 100);
     totalP += b.prob;
   }
   if (totalP > 0) {
