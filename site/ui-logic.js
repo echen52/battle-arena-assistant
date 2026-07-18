@@ -38,7 +38,7 @@ export function freshMatchState() {
 // names (Session 4's buildStartState overrides path). No renaming, no
 // reshaping: if this function ever needs to transform a value, that's a sign
 // the matchState shape has drifted from the engine's own state shape.
-function buildOverrides(matchState) {
+export function buildOverrides(matchState) {
   return {
     turn: matchState.turn,
     youStages: { ...matchState.youStages },
