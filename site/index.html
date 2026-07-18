@@ -58,6 +58,14 @@
       <input type="number" id="youPercentHp" class="calc-trigger percent-hp" value="100" min="0" max="100" />
       <span>%)</span>
       <div class="hpbar" id="youHpBar"></div>
+      <!-- Round-start HP (#13): the Body-score baseline — HP when THIS round
+           began, NOT current HP (writing.txt §Body). Blank = this mon started
+           the round at its current HP (default; reproduces pre-#13 behavior). A
+           value here (even 100) pins the baseline regardless of current HP, for
+           a mon that entered the round already damaged. Distinct control from
+           the persistent Status dropdown; per-solve, read fresh each solve. -->
+      <label class="round-start-label" for="youStartHp" title="HP % when this round began — the Body baseline. Leave blank if this mon entered the round at its current HP (no damage carried in).">Round-start HP % (blank = current)</label>
+      <input type="number" id="youStartHp" class="calc-trigger round-start-hp" placeholder="= current" min="0" max="100" />
     </div>
 
     <div class="field-row">
@@ -347,6 +355,10 @@
       <input type="number" id="oppPercentHp" class="calc-trigger percent-hp" value="100" min="0" max="100" />
       <span>%)</span>
       <div class="hpbar" id="oppHpBar"></div>
+      <!-- Round-start HP (#13): see the You-side note above. Blank = opponent
+           entered this round at its current HP. -->
+      <label class="round-start-label" for="oppStartHp" title="HP % when this round began — the Body baseline. Leave blank if this mon entered the round at its current HP (no damage carried in).">Round-start HP % (blank = current)</label>
+      <input type="number" id="oppStartHp" class="calc-trigger round-start-hp" placeholder="= current" min="0" max="100" />
     </div>
 
     <div class="field-row">

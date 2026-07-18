@@ -33,27 +33,34 @@ export function freshMatchState() {
   };
 }
 
-// Builds the overrides object handed to buildStartState — a direct,
-// unmodified passthrough of matchState's fields using the EXACT engine field
-// names (Session 4's buildStartState overrides path). No renaming, no
-// reshaping: if this function ever needs to transform a value, that's a sign
-// the matchState shape has drifted from the engine's own state shape.
+// The ONLY matchState keys that must NOT reach the engine: the per-turn transient
+// scratch fields the engine itself resets every turn via freshTurnDamageTracking
+// (logic.js:2145-2150). They are meaningless as a starting observation, so even
+// if a future matchState carried one it must not leak into the solve.
+//
+// Everything else on matchState is a real engine base key and flows through
+// untouched. This is a DENYLIST, deliberately NOT an allowlist: buildStartState's
+// merge was designed to accept any base key with no gatekeeper
+// (HANDOFF.md:1190-1193), so the UI must not re-enumerate which keys exist — a
+// prior allowlist here silently dropped mindYou/skillYou (the change #12 bug).
+// The denylist makes that whole bug class impossible AND lets the 24 deferred
+// inputs (seeded, substituteHP, charging, sleepTurns, …) reach the engine the
+// instant a future UI control sets them on matchState — deferring them was a
+// UI-source decision, never a boundary block, so no change here is needed later.
+const UI_ONLY_KEYS = new Set([
+  "youDamageTaken", "oppDamageTaken",             // Counter/Mirror Coat scratch — reset each turn
+  "youEndureActive", "oppEndureActive",           // Endure "active this turn" flag — reset each turn
+  "youProtected", "oppProtected",                 // Protect "active this turn" flag — reset each turn
+  "youDestinyBondActive", "oppDestinyBondActive", // Destiny Bond "armed this turn" flag — reset each turn
+]);
+
 export function buildOverrides(matchState) {
-  return {
-    turn: matchState.turn,
-    youStages: { ...matchState.youStages },
-    oppStages: { ...matchState.oppStages },
-    youStatus: matchState.youStatus,
-    oppStatus: matchState.oppStatus,
-    metagrossConfused: matchState.metagrossConfused,
-    youAttracted: matchState.youAttracted,
-    weatherType: matchState.weatherType,
-    weatherTurns: matchState.weatherTurns,
-    youReflectTurns: matchState.youReflectTurns,
-    oppReflectTurns: matchState.oppReflectTurns,
-    youLightScreenTurns: matchState.youLightScreenTurns,
-    oppLightScreenTurns: matchState.oppLightScreenTurns,
-  };
+  const overrides = {};
+  for (const key of Object.keys(matchState)) {
+    if (UI_ONLY_KEYS.has(key)) continue;
+    overrides[key] = matchState[key];
+  }
+  return overrides;
 }
 
 // The one function that actually calls into the engine. Used UNIFORMLY for

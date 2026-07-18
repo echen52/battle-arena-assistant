@@ -327,6 +327,16 @@ function buildMatchState() {
   s.oppReflectTurns = $("oppReflect").checked ? SCREEN_ACTIVE_TURNS : null;
   s.youLightScreenTurns = $("youLightScreen").checked ? SCREEN_ACTIVE_TURNS : null;
   s.oppLightScreenTurns = $("oppLightScreen").checked ? SCREEN_ACTIVE_TURNS : null;
+  // Round-start HP (#13): the Body-score baseline. Read fresh each solve. Empty
+  // input = untouched -> leave the key ABSENT (not null) so the denylist doesn't
+  // forward it and buildStartState defaults yourHpPctAtStart to current HP —
+  // byte-identical to pre-#13 behavior. A filled value (even 100) IS forwarded,
+  // pinning the baseline distinct from current HP. Must stay absent-when-empty:
+  // a null would flow through the denylist and overwrite the engine's default.
+  const youStart = $("youStartHp").value.trim();
+  if (youStart !== "") s.yourHpPctAtStart = Number(youStart);
+  const oppStart = $("oppStartHp").value.trim();
+  if (oppStart !== "") s.oppHpPctAtStart = Number(oppStart);
   return s;
 }
 
