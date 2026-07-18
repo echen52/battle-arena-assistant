@@ -374,6 +374,150 @@ function highCritViability(ctx) {
   return [{ p: 1 - pPlus1, delta: 0 }, { p: pPlus1, delta: 1 }];
 }
 
+// Shared by AI_CV_Counter (data/battle_ai_scripts.s:1618-1673) and
+// AI_CV_MirrorCoat (:2116-2182) — GameFreak wrote this routine twice with a
+// flipped type list and a flipped ownership check; every constant below is
+// identical between the two, confirmed line-by-line, not assumed from shape
+// alone (change #8's trace).
+//
+// Status short-circuit: Counter :1619-1621 / MirrorCoat :2117-2119 —
+// asleep/infatuated/confused target -> flat -1, done. (ctx.targetConfused is
+// currently hardcoded false in chooseOpponentMoves — a pre-existing gap
+// shared with EFFECT_CONFUSE's own checkBadMove, not something this handler
+// fixes.)
+//
+// Two independent own-HP penalty gates, each conditionally rolled and
+// composed additively — HP<=30% clears BOTH thresholds, so both can fire on
+// the same evaluation (up to -2 total):
+//   Gate A: Counter :1622-1624 / MirrorCoat :2120-2122 — HP<=30% -> 246/256
+//   chance of -1, else 0.
+//   Gate B: Counter :1626-1628 / MirrorCoat :2124-2126 — HP<=50% -> 156/256
+//   chance of -1, else 0.
+//
+// Terminal branch: Counter :1629-1668 / MirrorCoat :2127-2166. Taunt
+// sub-branches are omitted — Taunt has zero representation anywhere in this
+// engine, so if_target_not_taunted is always true and those score+1-if-taunted
+// paths are unreachable dead code under this engine's current scope, same
+// convention as targetSafeguarded/targetCantEscape/etc. defaulting false
+// elsewhere in this file.
+//
+//   Sibling-ownership bypass: Counter :1630 (has Mirror Coat) / MirrorCoat
+//   :2128 (has Counter) — reciprocal checks, same target roll either way,
+//   skipping straight to the final roll below and ignoring the target's last
+//   move entirely.
+//
+//   Else, fetch the target's last used move (Counter :1631-1633 / MirrorCoat
+//   :2129-2131 — gLastMoves[target], the battle-wide last-move tracker, NOT
+//   the AI's fog-of-war BATTLE_HISTORY; ctx.targetLastMoveHadPower already
+//   threads this exact value for AI_CV_DefenseUp/AI_CV_SpDefUp, reused as-is
+//   here):
+//
+//     Last move had real power (Counter :1637-1643 / MirrorCoat :2135-2141):
+//     checks that move's own TYPE against the caller's type list —
+//     lastMoveMatchesCategory already encodes this per call site
+//     (move-data.js's `category` field is the Gen III type-based split,
+//     cross-verified against Dark-type Crunch being stored "special", not
+//     the modern per-move split). Non-matching -> flat -1. Matching ->
+//     156/256 chance of +1.
+//
+//     Last move had power 0 — includes a fresh turn-1 root, where
+//     gLastMoves[target] is still MOVE_NONE (Counter :1645-1668 / MirrorCoat
+//     :2143-2166). This branch checks the TARGET'S OWN SPECIES TYPE(S), not
+//     the last move's type. BUGFIX is commented out in this repo
+//     (config.h:48), so real cartridges ship the #else branch (Counter
+//     :1656-1660 / MirrorCoat :2155-2158) — which each routine's own source
+//     comment (:1616-1617 / :2114-2115) calls a bug: it rewards the move
+//     against a target with NEITHER type on the caller's list, and gives a
+//     target with ANY matching-category type a flat 0 (straight to End, no
+//     roll at all). This is a DELIBERATE reproduction of that shipped bug on
+//     BOTH routines, not a porting mistake — do not "correct" it to the
+//     BUGFIX behavior.
+//
+//       Target has >=1 matching-category type: 0, unreachable for a bonus,
+//       full stop (Counter :1657-1660 / MirrorCoat :2155-2158).
+//
+//       Target's types are BOTH non-matching-category: two sequential
+//       rolls, the pre-filter THEN the final roll (Counter :1662-1666 /
+//       MirrorCoat :2160-2164) — NOT independent. The final roll is only
+//       even reached on the 206/256 complement of the pre-filter's 50/256
+//       skip-to-End. A prior audit computed this as a flat ~61% (156/256,
+//       the final roll alone) by dropping the pre-filter entirely, on BOTH
+//       routines. The real combined probability of +4 is
+//       (206/256)*(156/256) = 32136/65536 ~= 49.04%, not ~61% — collapsed
+//       below into a single pair the same way highCritViability collapses
+//       its own two sequential 128/256 rolls above, so the derivation stays
+//       visible in the code instead of hidden in a nested combineDist call.
+function reflectFamilyViability(ctx, { typeList, ownsSiblingMove, lastMoveMatchesCategory }) {
+  if (ctx.targetStatus === "sleep" || ctx.targetInfatuated || ctx.targetConfused) {
+    return [{ p: 1, delta: -1 }];
+  }
+
+  let dist = [{ p: 1, delta: 0 }];
+  if (!(ctx.userHpPct > 30)) {
+    dist = combineDist(dist, [{ p: 10 / 256, delta: 0 }, { p: 246 / 256, delta: -1 }]);
+  }
+  if (!(ctx.userHpPct > 50)) {
+    dist = combineDist(dist, [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: -1 }]);
+  }
+
+  let terminal;
+  if (ownsSiblingMove) {
+    terminal = [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 4 }];
+  } else if (ctx.targetLastMoveHadPower) {
+    terminal = lastMoveMatchesCategory
+      ? [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 1 }]
+      : [{ p: 1, delta: -1 }];
+  } else if (ctx.targetTypes.some((t) => typeList.includes(t))) {
+    terminal = [{ p: 1, delta: 0 }];
+  } else {
+    const pFinalRollReached = 206 / 256; // 1 - the pre-filter's 50/256 skip-to-End
+    const pPlus4 = pFinalRollReached * (156 / 256); // the final roll, gated by the above
+    terminal = [{ p: 1 - pPlus4, delta: 0 }, { p: pPlus4, delta: 4 }];
+  }
+  return combineDist(dist, terminal);
+}
+
+// AI_CV_Counter (data/battle_ai_scripts.s:1618-1673) — unique CV dispatch,
+// NOT shared with Mirror Coat (which has its own AI_CV_MirrorCoat at :738).
+// See reflectFamilyViability's comment above for the full shared trace.
+//
+// COUNTERINTUITIVE BUT SOURCE-CORRECT — DO NOT "FIX" THIS (same standard as
+// change #7's Explosion note): BUGFIX is commented out at config.h:48, so
+// the shipped, non-BUGFIX fallback (source's own comment at :1616-1617 calls
+// it a bug) rewards Counter against a target with NEITHER type on
+// PHYSICAL_TYPES, and gives a target with ANY physical-category type a flat
+// 0 — the opposite of what you'd expect from a move that only pays off
+// against physical attackers. Reproduced deliberately, not a porting slip.
+function counterViability(ctx) {
+  return reflectFamilyViability(ctx, {
+    typeList: PHYSICAL_TYPES,
+    ownsSiblingMove: ctx.userHasMirrorCoat,
+    lastMoveMatchesCategory: ctx.targetLastMoveWasPhysical,
+  });
+}
+
+// AI_CV_MirrorCoat (data/battle_ai_scripts.s:2116-2182) — unique CV dispatch,
+// NOT shared with Counter (which has its own AI_CV_Counter at :713). See
+// reflectFamilyViability's comment above for the full shared trace — this is
+// the same routine as AI_CV_Counter with PHYSICAL_TYPES/SPECIAL_TYPES and
+// the sibling-ownership check both flipped.
+//
+// COUNTERINTUITIVE BUT SOURCE-CORRECT — DO NOT "FIX" THIS (same standard as
+// counterViability above, and change #7's Explosion note): BUGFIX is
+// commented out at config.h:48, so the shipped, non-BUGFIX fallback
+// (source's own comment at :2114-2115 calls it a bug) rewards Mirror Coat
+// against a target with NEITHER type on SPECIAL_TYPES, and gives a target
+// with ANY special-category type a flat 0 — the opposite of what you'd
+// expect from a move that only pays off against special attackers.
+// Reproduced deliberately, not a porting slip.
+function mirrorCoatViability(ctx) {
+  return reflectFamilyViability(ctx, {
+    typeList: SPECIAL_TYPES,
+    ownsSiblingMove: ctx.userHasCounter,
+    lastMoveMatchesCategory: ctx.targetLastMoveWasSpecial,
+  });
+}
+
 const AI_HANDLERS = {
   EFFECT_TOXIC: {
     // AI_CBM_Toxic (data/battle_ai_scripts.s:341-352) — completing this now
@@ -686,6 +830,42 @@ const AI_HANDLERS = {
     checkViability: (ctx) => {
       if (!ctx.targetHasDreamEaterOrNightmare) return [{ p: 1, delta: 0 }];
       return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
+    },
+  },
+  // EFFECT_ABSORB (Absorb / Mega Drain / Leech Life / Giga Drain) — AI_CV_Absorb
+  // (data/battle_ai_scripts.s:789-798), dispatched from AI_CheckViability at :655.
+  // SCORING side only. The drain-heal is a SEPARATE, still-open gap (no executor,
+  // opponent HP understated on every drain hit) — deliberately NOT touched here so
+  // this change's blast radius stays attributable; it is change #10.
+  //
+  // Source discourages a RESISTED drain: if raw type effectiveness is EXACTLY
+  // 0.5x or 0.25x, it rolls, and on the COMPLEMENT of the roll applies score -3.
+  // The source label is AI_CV_AbsorbEncourageMaybe but its body DISCOURAGES — a
+  // source misnomer, called out here so grepping the .s doesn't mislead.
+  //
+  // PROBABILITY 206/256 (80.47%), NOT 50%: `if_random_less_than 50` is a byte
+  // compare (Random() % 256 < 50) and the taken jump SKIPS the score command, so
+  // -3 fires on the (256-50)/256 that DON'T jump. Read as a flat 50% by a prior
+  // audit — the same misread class as the earlier ~61% Counter-roll error; this
+  // note exists to stop a third repeat.
+  //
+  // EQUALITY, not threshold: source's if_type_effectiveness is an EXACT match
+  // against quantized constants (x0_5 == 20, x0_25 == 10). STAB is irrelevant —
+  // the command re-quantizes the STAB-inflated 30->20 and 15->10 before comparing,
+  // so a raw 0.5/0.25 covers STAB and non-STAB alike. Expressed with the file's
+  // standard typeEffectiveness(...) === n idiom; all reachable products are exact
+  // binary fractions, so === is safe (same reliance as the existing === 2/=== 4).
+  //
+  // 0x (immune) is NOT penalized: source has no if_type_effectiveness x0 line, so
+  // an immune target falls straight through to score 0. Counterintuitive but
+  // source-exact — do NOT "fix" a 0x target into the penalty branch.
+  EFFECT_ABSORB: {
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.5 || eff === 0.25) {
+        return [{ p: 206 / 256, delta: -3 }, { p: 50 / 256, delta: 0 }];
+      }
+      return 0;
     },
   },
   // ── Batch 4: Dragon Dance, Curse, Leech Seed, Baton Pass ─────────────────
@@ -1193,6 +1373,33 @@ const AI_HANDLERS = {
       return 0;
     },
   },
+  // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:156 dispatches
+  // EFFECT_COUNTER here — same shared routine as EFFECT_RETURN/
+  // EFFECT_FRUSTRATION/EFFECT_LEVEL_DAMAGE above, mirrored verbatim, not
+  // reinvented). checkViability is AI_CV_Counter (:713 -> :1618-1673) — see
+  // counterViability's own long comment above for the full trace.
+  EFFECT_COUNTER: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: counterViability,
+  },
+  // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:182 dispatches
+  // EFFECT_MIRROR_COAT here — same shared routine as EFFECT_RETURN/
+  // EFFECT_FRUSTRATION/EFFECT_LEVEL_DAMAGE/EFFECT_COUNTER above, mirrored
+  // verbatim, not reinvented). checkViability is AI_CV_MirrorCoat
+  // (:738 -> :2116-2182) — see mirrorCoatViability's own comment above
+  // (and reflectFamilyViability's shared trace) for the full derivation.
+  EFFECT_MIRROR_COAT: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: mirrorCoatViability,
+  },
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
   // needed). If an OPPONENT ever carries one, chooseOpponentMoves will throw
   // naming the exact effect — port its AI_CV_*/AI_CBM_* handler from
@@ -1479,9 +1686,54 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
   if (move.power > 0) {
     const simDmg = calcDamage(user, target, moveName, { rollFrac: 0.925 });
     const targetHp = Math.round((ctx.targetHpPct / 100) * target.stats.hp);
-    if (simDmg >= targetHp) {
-      // if_can_faint branch (AI_TryToFaint_TryToEncourageQuickAttack) — already ported.
-      dist = combineDist(dist, [{ p: 1, delta: 4 }]);
+    // Cmd_if_can_faint (src/battle_ai_script_commands.c:1743-1750) opens with
+    // `if (power < 2) { /* always take the non-KO branch */ }`, BEFORE ever
+    // calling AI_CalcDmg — a move whose STATIC TABLE power is the 1-placeholder
+    // (Counter/Mirror Coat/Flail/Reversal/Night Shade/Seismic Toss/OHKO/etc.)
+    // never gets a real damage computation here, no matter how lethal its true
+    // dynamically-computed damage would be. `move.power > 1` is the exact
+    // complement of `power < 2` for integers — no off-by-one.
+    //
+    // This gate belongs HERE, on the KO check specifically, and must NOT be
+    // hoisted onto the enclosing `if (move.power > 0)` block above. Source's
+    // power<2 exemption is local to Cmd_if_can_faint alone — the sibling
+    // AI_TryToFaint_DoubleSuperEffective x4-effectiveness bonus just below
+    // (battle_ai_scripts.s:2624-2627) runs completely ungated by power, and
+    // Cmd_get_how_powerful_move_is's own power>1 gate (mirrored by
+    // isPowerfulMoveEligible above) only suppresses the -1 "not most
+    // powerful" penalty, never the x4 bonus check. Gating the outer block
+    // instead of this inner condition would silently suppress a bonus source
+    // actually grants to power-1 moves — a real divergence a prior proposal
+    // in this series would have introduced by "simplifying" the fix upward.
+    if (move.power > 1 && simDmg >= targetHp) {
+      // AI_TryToFaint_TryToEncourageQuickAttack (battle_ai_scripts.s:2629-2636).
+      if (move.effect === "EFFECT_EXPLOSION") {
+        // :2630 `if_effect EFFECT_EXPLOSION, AI_TryToFaint_End` jumps straight
+        // past BOTH the +2 Quick-Attack stack and the +4 ScoreUp4, landing on a
+        // bare `end` — no score command ever runs. Intentionally NOT a
+        // combineDist({p:1,delta:0}) call: source doesn't score a zero here, it
+        // skips the scoring construct entirely, and the two are behaviorally
+        // identical in this dist model anyway, so there's nothing to gain by
+        // manufacturing a fake branch.
+        //
+        // COUNTERINTUITIVE BUT SOURCE-CORRECT — DO NOT "FIX" THIS: a guaranteed
+        // kill via Explosion scores WORSE from AI_TryToFaint than a non-lethal
+        // one. The KO branch and the non-KO branch (x4-effectiveness roll,
+        // :2624-2627) are mutually exclusive — once if_can_faint is true for
+        // Explosion, it can NEVER reach the x4 roll either, even if the hit is
+        // also x4-effective. A merely-x4-effective, non-lethal Explosion can
+        // still land +2; a lethal one gets nothing. This is a real asymmetry in
+        // the shipped AI, not an oversight in this port — same standard as the
+        // non-BUGFIX Counter6 note in change #5: reproduce it, don't correct it.
+      } else if (move.effect === "EFFECT_QUICK_ATTACK") {
+        // :2631-2634 falls through score+2 THEN score+4 (ScoreUp4) with no
+        // jump between them — additive, +6 total, not a +2-vs-+4 alternative.
+        dist = combineDist(dist, [{ p: 1, delta: 6 }]);
+      } else {
+        // Everything else lands on ScoreUp4 directly (either via :2631's jump,
+        // or having never been Explosion in the first place): the plain +4.
+        dist = combineDist(dist, [{ p: 1, delta: 4 }]);
+      }
     } else {
       // Move can't already secure the KO — get_how_powerful_move_is, THEN
       // (mutually exclusive with the penalty below) the x4-effectiveness
@@ -1602,6 +1854,11 @@ function chooseOpponentMoves(opp, you, state) {
     // (power 0), matching get_move_power_from_result on an empty history.
     targetLastMoveHadPower: state.youLastMove != null && MOVES[state.youLastMove].power > 0,
     targetLastMoveWasPhysical: state.youLastMove != null && MOVES[state.youLastMove].category === "physical",
+    // AI_CV_MirrorCoat's own last-move-category check (:2136-2138) — the
+    // exact mirror of targetLastMoveWasPhysical above, checked against
+    // SPECIAL_TYPES instead of PHYSICAL_TYPES via move-data.js's `category`
+    // field (same Gen III type-based split, not the modern per-move split).
+    targetLastMoveWasSpecial: state.youLastMove != null && MOVES[state.youLastMove].category === "special",
     // AI_CV_Sleep's has_move_with_effect(AI_TARGET, ...) check — the player's
     // ("you") KNOWN moveset, not the current turn's chosen move.
     targetHasDreamEaterOrNightmare: you.moves.some((m) => ["EFFECT_DREAM_EATER", "EFFECT_NIGHTMARE"].includes(MOVES[m]?.effect)),
@@ -1630,6 +1887,14 @@ function chooseOpponentMoves(opp, you, state) {
     // and get_turn_count checks — both about the OPPONENT's own moveset/the
     // battle's turn counter, not the target.
     userHasPsychUp: opp.moves.includes("Psych Up"),
+    // AI_CV_Counter's if_has_move(AI_USER, MOVE_MIRROR_COAT) check
+    // (data/battle_ai_scripts.s:1630) — the OPPONENT'S own moveset, same
+    // convention as userHasPsychUp just above.
+    userHasMirrorCoat: opp.moves.includes("Mirror Coat"),
+    // AI_CV_MirrorCoat's reciprocal if_has_move(AI_USER, MOVE_COUNTER) check
+    // (data/battle_ai_scripts.s:2128) — the OPPONENT'S own moveset, same
+    // convention as userHasMirrorCoat just above, flipped.
+    userHasCounter: opp.moves.includes("Counter"),
     isFirstTurn: state.turn === 1,
     // Batch 8 (Safeguard/Mean Look):
     userHasSafeguard: state.oppSafeguardTurns != null,
@@ -1704,7 +1969,10 @@ function skillDelta(outcome) {
     case "landedNVE": return -1;
     case "miss": return -2;
     case "noEffect": return -2;
-    case "blocked": return -3; // ability/item block (Wonder Guard, Levitate, Volt/Water Absorb, Soundproof) — confirmed via BattleArena_DeductSkillPoints
+    // "blocked" REMOVED (was a flat -3) — ability/item blocks do not share a
+    // single Skill delta in source. See ABILITY_BLOCK_SKILL_DELTA below;
+    // resolveAbilityInteraction() attaches the correct per-ability value
+    // directly rather than routing through this generic outcome dispatch.
     default: return 0;
   }
 }
@@ -1761,7 +2029,37 @@ function permanentWeatherFromAbility(mon) {
 // The no-overrides call path is UNCHANGED byte-for-byte from before this was
 // added (see the early return below) — this is a strict additive capability,
 // not a replacement of the default path.
-function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourUsablePartyMons = 2, oppUsablePartyMons = 2, you = null, opp = null, overrides = null } = {}) {
+// yourHpPctAtStart/oppHpPctAtStart: the Body-scoring baseline pokeemerald
+// calls hpAtStart — HP at SWITCH-IN for this specific 1v1, not max HP
+// (BattleArena_InitPoints, src/battle_arena.c:569-581, sets hpAtStart[i] =
+// gBattleMons[i].hp; called from two sites, both firing only when a mon is
+// freshly placed on the field: Cmd_switchinanim, src/battle_script_
+// commands.c:4696-4697, and the battle-intro send-out, src/battle_main.c:
+// 3485-3486). Never re-baselined mid-round — UpdateHPAtStart
+// (battle_arena.c:654-661) is confirmed dead code (zero callers anywhere in
+// source), and Arena confirmed disallows switching while the active mon is
+// still alive (VARIOUS_ARENA_*_MON_LOST handlers, battle_script_commands.c:
+// 6408-6431, only trigger a switch after a forced faint) — so the baseline
+// is fixed for a mon's entire active stint BY DESIGN, not by accident of
+// what this port happens to call once.
+//
+// Default (when the caller supplies only yourHpPct/oppHpPct): silently set
+// to the SAME value. This is exactly correct whenever the caller's
+// yourHpPct/oppHpPct genuinely IS the round's true starting HP — which is
+// every current caller of this function (a fresh 100/100 match, and the
+// carry-forward case where a mon's carried-in HP IS what this new round
+// starts at, e.g. test-team-workflow.js). It is the CALLER's responsibility
+// to pass yourHpPctAtStart/oppHpPctAtStart explicitly whenever yourHpPct/
+// oppHpPct instead represents an OBSERVED MID-ROUND value (HP already past
+// the round's true start) — this function has no way to distinguish the two
+// cases from a bare number. KNOWN GAP: the live coaching UI (site/app.js,
+// site/ui-logic.js) has exactly one HP input per side ("Current HP"), reused
+// for both a fresh-round start AND a mid-round live re-solve, and currently
+// has no field to supply a true round-start reference separate from
+// whatever's currently observed — so a mid-turn coaching session will
+// silently inherit this default today. Not yet fixed; flagged here so a
+// future reader finds it rather than assumes it's covered.
+function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, you = null, opp = null, overrides = null } = {}) {
   const freshStages = () => ({ atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 });
   // weatherType: null | "rain" | "sun" | "sandstorm" | "hail" — a single
   // GLOBAL condition, not per-side (src/battle_main.c:695, one gBattleWeather
@@ -1774,6 +2072,11 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourUsablePartyMons 
   const base = {
     turn: 1,
     yourHpPct, oppHpPct,
+    // Captured once here, frozen for the rest of this state's lifetime — no
+    // write site anywhere else in this file touches yourHpPctAtStart/
+    // oppHpPctAtStart (mirrors hpAtStart never being re-baselined mid-round
+    // in source, see the doc comment on this function's signature above).
+    yourHpPctAtStart, oppHpPctAtStart,
     weatherType: initialWeather, weatherTurns: null, // null turns = permanent when weatherType is set from an ability
 
     yourUsablePartyMons, oppUsablePartyMons, // PER-MATCHUP inputs like yourHpPct/oppHpPct, not constants — see analyzeMatchup's comment
@@ -2080,35 +2383,94 @@ function typeEffectivenessBreakdown(moveType, defTypes) {
   return { hadSuper, hadNVE };
 }
 
+// Ability-block Skill deltas — deliberately NOT one flat number. Two
+// INDEPENDENT pokeemerald mechanisms both write to arenaSkillPoints for the
+// same move: BattleArena_AddSkillPoints (src/battle_arena.c:588-622, fired
+// from Cmd_end, src/battle_script_commands.c:3950-3957 — once per move,
+// branches on gMoveResultFlags) and BattleArena_DeductSkillPoints
+// (src/battle_arena.c:624-652, fired from PlayerHandlePrintString /
+// OpponentHandlePrintString — src/battle_controller_player.c:2543-2555,
+// src/battle_controller_opponent.c:1522-1533 — once per matching printed
+// string, mid-script, well before Cmd_end runs). Neither gates the other, so
+// both fire for every ability block; the two mechanisms disagree on which
+// abilities cost what, and the combined total is per-ability, not a shared
+// constant:
+//
+// Wonder Guard / Levitate — both scored -2, DeductSkillPoints contributes 0:
+//   Cmd_typecalc (src/battle_script_commands.c:1409-1419 Wonder Guard,
+//   1375-1383 Levitate) sets MOVE_RESULT_MISSED (Levitate also sets
+//   MOVE_RESULT_DOESNT_AFFECT_FOE), MISS_TYPE = B_MSG_AVOIDED_DMG /
+//   B_MSG_GROUND_MISS. AddSkillPoints' NO_EFFECT branch fires (-2,
+//   battle_arena.c:600-604: `!(MISSED) || MISS_TYPE != B_MSG_PROTECTED` is
+//   true either way, since MISS_TYPE is neither case B_MSG_PROTECTED here).
+//   The miss-strings this prints (STRINGID_AVOIDEDDAMAGE,
+//   STRINGID_PKMNMAKESGROUNDMISS — src/battle_message.c:895-896) are NOT
+//   among the 18 strings DeductSkillPoints matches (battle_arena.c:630-649),
+//   so it contributes 0. Net: -2 + 0 = -2.
+//   CAVEAT: verified for ordinary power-based attacks routing through the
+//   standard Cmd_typecalc immunity block; NOT exhaustively re-checked
+//   against OHKO/fixed-damage move variants, which may resolve
+//   effectiveness through a different path.
+//
+// Soundproof / Flash Fire — both scored -2, via the OPPOSITE split (+1 / -3):
+//   Soundproof blocks at Cmd_attackcanceler (AbilityBattleEffects
+//   ABILITYEFFECT_MOVES_BLOCK, src/battle_util.c:2659-2674); Flash Fire
+//   blocks at the accuracycheck-adjacent ABILITYEFFECT_ABSORBING check
+//   (src/battle_util.c:2703-2727, reached via JumpIfMoveFailed,
+//   src/battle_script_commands.c:1009-1025). Both happen BEFORE typecalc,
+//   so no MOVE_RESULT_* flag is ever set — AddSkillPoints' whole branch
+//   chain falls through to the final fallback (+1, battle_arena.c:617-620).
+//   But the printed string IS in DeductSkillPoints' list: STRINGID_
+//   PKMNSXBLOCKSY for Soundproof (data/battle_scripts_1.s:4162, matched at
+//   battle_arena.c:637); STRINGID_PKMNRAISEDFIREPOWERWITH or STRINGID_
+//   PKMNSXMADEYINEFFECTIVE for Flash Fire (src/battle_message.c:1242-1246,
+//   matched at battle_arena.c:645/635) — both -3. Net: +1 + -3 = -2.
+//
+// Volt Absorb / Water Absorb — scored -5, both mechanisms penalize:
+//   BattleScript_MoveHPDrain (data/battle_scripts_1.s:4078-4089) sets
+//   MOVE_RESULT_DOESNT_AFFECT_FOE (line 4088) — AddSkillPoints' NO_EFFECT
+//   branch fires (-2, battle_arena.c:600-604: MISSED is NOT set here, so
+//   `!(MISSED)` alone is true). It also prints STRINGID_PKMNRESTOREDHPUSING
+//   (line 4086), which IS in DeductSkillPoints' list (battle_arena.c:640):
+//   -3. Net: -2 + -3 = -5.
+const ABILITY_BLOCK_SKILL_DELTA = {
+  "Wonder Guard": -2,
+  "Levitate": -2,
+  "Soundproof": -2,
+  "Flash Fire": -2,
+  "Volt Absorb": -5,
+  "Water Absorb": -5,
+};
+
 // Resolves ability-based interactions that override normal damage/type
 // resolution. Called before normal damage calc for any power>0 move, and
 // before status-effect application for power===0 moves (Soundproof blocks
 // both). Returns one of:
-//   { type: "normal" }                      — proceed as usual
-//   { type: "blocked" }                      — treated as ability/item block (Skill -3)
-//   { type: "absorb", healFraction: 0.25 }   — Volt/Water Absorb: heal defender instead
-//   { type: "flashFireTrigger" }             — Flash Fire: no damage, sets standing boost flag
+//   { type: "normal" }                                          — proceed as usual
+//   { type: "blocked", skillDelta }                              — ability/item block (see ABILITY_BLOCK_SKILL_DELTA above)
+//   { type: "absorb", healFraction: 0.25, skillDelta }           — Volt/Water Absorb: heal defender instead
+//   { type: "flashFireTrigger", skillDelta }                     — Flash Fire: no damage, sets standing boost flag
 function resolveAbilityInteraction(moveName, moveData, attacker, defender) {
   if (defender.ability === "Soundproof" && SOUND_MOVES.has(moveName)) {
-    return { type: "blocked" };
+    return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Soundproof"] };
   }
   if (moveData.power === 0) return { type: "normal" };
 
   if (defender.ability === "Levitate" && moveData.type === "Ground") {
-    return { type: "blocked" };
+    return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Levitate"] };
   }
   if (defender.ability === "Volt Absorb" && moveData.type === "Electric") {
-    return { type: "absorb", healFraction: 0.25 };
+    return { type: "absorb", healFraction: 0.25, skillDelta: ABILITY_BLOCK_SKILL_DELTA["Volt Absorb"] };
   }
   if (defender.ability === "Water Absorb" && moveData.type === "Water") {
-    return { type: "absorb", healFraction: 0.25 };
+    return { type: "absorb", healFraction: 0.25, skillDelta: ABILITY_BLOCK_SKILL_DELTA["Water Absorb"] };
   }
   if (defender.ability === "Flash Fire" && moveData.type === "Fire") {
-    return { type: "flashFireTrigger" };
+    return { type: "flashFireTrigger", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Flash Fire"] };
   }
   if (defender.ability === "Wonder Guard") {
     const { hadSuper, hadNVE } = typeEffectivenessBreakdown(moveData.type, defender.types);
-    if (!(hadSuper && !hadNVE)) return { type: "blocked" }; // only a CLEAN super-effective hit gets through
+    if (!(hadSuper && !hadNVE)) return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Wonder Guard"] }; // only a CLEAN super-effective hit gets through
   }
   return { type: "normal" };
 }
@@ -2136,6 +2498,17 @@ const SILENT_FALLTHROUGH_EFFECTS = new Set([
   // calcDamage's own EFFECT_LEVEL_DAMAGE branch (flat user.level, immunity-
   // gated) plus an AI_HANDLERS["EFFECT_LEVEL_DAMAGE"] checkBadMove entry
   // (AI_CBM_HighRiskForDamage, mirrors EFFECT_RETURN/EFFECT_FRUSTRATION above).
+  //
+  // KNOWN INCOMPLETE — conditional-multiplier power. This set catches fixed/
+  // level/HP-based power, but NOT effects that deal ordinary power-based damage
+  // multiplied by a runtime condition: EFFECT_FACADE (2x if user statused, 16
+  // sets), EFFECT_PURSUIT (2x on a switching target, 2 sets), EFFECT_REVENGE
+  // (2x if user was hit first, 1 set) — 19 sets under-computing their damage
+  // today (calcDamage has no branch for any of them, so they use raw base
+  // power). These are the SAME axis as this set ("the damage number is wrong"),
+  // NOT the change #11 mandatory-mechanic axis, so they are deliberately NOT in
+  // the #11 guard. Folding them in here would drop the sweep by 19 and needs
+  // the same accepted-unmodeled ledger treatment — queued as a SEPARATE change.
 ]);
 
 // Recoil (src/battle_script_commands.c:2636-2643/2843-2850, dispatched via
@@ -2157,6 +2530,17 @@ const SILENT_FALLTHROUGH_EFFECTS = new Set([
 // Rock Head check even runs) — moot here since no set in this pool carries
 // Struggle, but preserved as a comment in case that ever changes.
 const RECOIL_FRACTION = { EFFECT_RECOIL: 4, EFFECT_DOUBLE_EDGE: 3 };
+
+// Drain moves (Absorb/Mega Drain/Leech Life/Giga Drain share EFFECT_ABSORB;
+// Dream Eater is EFFECT_DREAM_EATER) heal the USER for half the HP actually
+// removed from the target. Handled inline in the damage path alongside
+// RECOIL_FRACTION — a mandatory on-hit HP side effect, structurally identical
+// to recoil — NOT via EFFECT_EXECUTORS, whose dispatch is gated behind
+// secondaryTriggered and would be permanently dead code for a move with no
+// secondaryEffect chance (that gate's power=0-only throw is exactly what hid
+// this bug; see change #10). Both effects heal on the same half divisor, so
+// one set covers both. Dream Eater additionally has a sleep gate (see below).
+const DRAIN_EFFECTS = new Set(["EFFECT_ABSORB", "EFFECT_DREAM_EATER"]);
 
 const EFFECT_EXECUTORS = {
   EFFECT_ATTACK_UP_HIT: (s, actor) => {
@@ -2545,6 +2929,152 @@ const EFFECT_EXECUTORS = {
   // affects the rare chance-triggered bonus, not the move's main function.
 };
 
+// ── Mandatory-mechanic guard (engine change #11) ─────────────────────────────
+// AXIS DISTINCTION — this guard is ORTHOGONAL to SILENT_FALLTHROUGH_EFFECTS,
+// and there is deliberately no overlap between the two sets:
+//   * SILENT_FALLTHROUGH_EFFECTS: "the damage NUMBER is meaningless" — fixed/
+//     level/HP-based moves whose real power isn't power-based, so the generic
+//     power formula computes garbage off a move-data.js placeholder.
+//   * This guard:                 "the damage number is FINE, but a mandatory
+//     on-hit/on-use MECHANIC is missing" — the move deals correct generic
+//     damage but silently drops an always-happens side effect (self stat-drop,
+//     recharge, charge, lock-in, guaranteed flinch, delayed damage, ...).
+// The bug this closes: for power>0 moves the executor at the bottom of the
+// damage path is gated on `secondaryTriggered`, which is true ONLY for the
+// three SECONDARY_EFFECT_CHANCE moves. Every other power>0 move whose effect
+// carries a mandatory mechanic falls straight through to plain damage with no
+// throw — the same class of silent degradation that hid EFFECT_ABSORB (29
+// sets) and EFFECT_DREAM_EATER (5) until changes #9/#10.
+//
+// DESIGN: fail CLOSED. Rather than blocklisting "effects with mandatory
+// mechanics" (which rots — the next unported effect won't be on it), we derive
+// the set of effects whose execution is COMPLETE from the tables that already
+// encode that, and throw on anything power>1 that is neither handled nor on an
+// explicit, shrinking allowlist of known-unmodeled effects. A brand-new,
+// unclassified effect therefore stops here loudly instead of degrading.
+
+// PURE_DAMAGE: power>1 effects whose ONLY consequence is damage (any accuracy/
+// priority/charge-bypass quirk they have is already modeled elsewhere), so a
+// generic damage hit is the complete, correct behavior — no executor needed.
+const PURE_DAMAGE_EFFECTS = new Set([
+  "EFFECT_HIT",            // plain damage
+  "EFFECT_EARTHQUAKE",     // Dig double-damage bypass handled via INVULN_BYPASS
+  "EFFECT_ALWAYS_HIT",     // accuracy bypass handled (accuracy: null)
+  "EFFECT_QUICK_ATTACK",   // +1 priority handled in turn-order resolution
+  "EFFECT_HIGH_CRITICAL",  // crits not modeled by design (HANDOFF §4); AI scoring ported #9
+  "EFFECT_RETURN",         // friendship-based power handled in calcDamage
+  "EFFECT_FRUSTRATION",    // friendship-based power handled in calcDamage
+  "EFFECT_SKY_UPPERCUT",   // hits-through-Fly bypass; inert here (target never Flies)
+]);
+
+// INLINE_HANDLED: mandatory-mechanic effects whose consequence is applied
+// INLINE in applyMove's damage path (not via EFFECT_EXECUTORS), so they are
+// fully modeled despite never dispatching through the secondaryTriggered gate.
+const INLINE_HANDLED_EFFECTS = new Set([
+  "EFFECT_EXPLOSION",         // self-faint, applied unconditionally (l.~2996)
+  "EFFECT_SEMI_INVULNERABLE", // 2-turn charge/invuln (l.~3117-3132)
+  "EFFECT_COUNTER",           // physical reflect (l.~3056) — power=1, but list for completeness
+  "EFFECT_MIRROR_COAT",       // special reflect (l.~3056) — power=1
+  "EFFECT_DREAM_EATER",       // drain + sleep gate (DRAIN_EFFECTS + l.~3176)
+]);
+
+// CHANCE_SECONDARY: effects whose ONLY consequence beyond damage is a
+// PROBABILISTIC secondary (a % status/stat-drop/flinch on an otherwise normal
+// attack). Dropping these is the documented accepted simplification — the
+// engine only rolls a secondary for the three SECONDARY_EFFECT_CHANCE moves;
+// for every other move the secondary is silently skipped. This is a DIFFERENT
+// disposition from ACCEPTED_UNMODELED below: a chance secondary is an
+// intentional probabilistic omission (no warn), not mandatory-mechanic debt.
+// Two are not costless and are the first candidates if this policy is ever
+// revisited: EFFECT_FLINCH_HIT (77 sets — a flinch is a whole turn) and the
+// paralyze family. NOTE: EFFECT_PARALYZE_HIT/FREEZE_HIT/BURN_HIT/POISON_HIT/
+// ATTACK_UP_HIT are also chance secondaries but already sit in HANDLED via
+// EFFECT_EXECUTORS (their executor simply never dispatches off-SECONDARY_EFFECT_
+// CHANCE), so they are intentionally not re-listed here.
+const CHANCE_SECONDARY_EFFECTS = new Set([
+  "EFFECT_SPECIAL_DEFENSE_DOWN_HIT", // Psychic/Crunch/Shadow Ball SpD-down %
+  "EFFECT_FLINCH_HIT",               // Rock Slide/Headbutt/Bite flinch %
+  "EFFECT_THUNDER",                  // Thunder para % (never-miss-in-rain handled l.~3761)
+  "EFFECT_SPEED_DOWN_HIT",           // Bubblebeam/Icy Wind speed-down %
+  "EFFECT_DEFENSE_DOWN_HIT",         // Iron Tail/Crush Claw def-down %
+  "EFFECT_ALL_STATS_UP_HIT",         // AncientPower/Silver Wind all-up %
+  "EFFECT_DEFENSE_UP_HIT",           // Steel Wing def-up %
+  "EFFECT_TRI_ATTACK",               // Tri Attack burn/para/freeze %
+  "EFFECT_CONFUSE_HIT",              // Confusion/Psybeam/Water Pulse confuse %
+  "EFFECT_ACCURACY_DOWN_HIT",        // Mud-Slap/Muddy Water accuracy-down %
+  "EFFECT_FLINCH_MINIMIZE_HIT",      // Stomp/Extrasensory flinch % (+2x vs minimize)
+  "EFFECT_SPECIAL_ATTACK_DOWN_HIT",  // Mist Ball SpA-down %
+  "EFFECT_BLAZE_KICK",               // burn % (+ high-crit, crits unmodeled by design; AI scoring ported #9)
+  "EFFECT_SECRET_POWER",             // terrain-dependent status %
+  "EFFECT_POISON_FANG",              // bad-poison %
+]);
+
+// DAMAGE_MAGNITUDE_ONLY: power>1 effects that deal ordinary power-based damage
+// multiplied by a runtime CONDITION the engine does not yet apply — EFFECT_FACADE
+// (2x if user statused), EFFECT_PURSUIT (2x on a switching target), EFFECT_REVENGE
+// (2x if user was hit first). They drop NO mandatory mechanic, so from THIS
+// guard's axis they proceed cleanly; their gap is a wrong damage NUMBER, which
+// is the SILENT_FALLTHROUGH axis (see that set's "conditional-multiplier"
+// comment). Listed here only so the fail-closed guard does not throw on them —
+// their real fix is a SEPARATE queued change, deliberately not folded into #11.
+const DAMAGE_MAGNITUDE_ONLY_EFFECTS = new Set([
+  "EFFECT_FACADE", "EFFECT_PURSUIT", "EFFECT_REVENGE",
+]);
+
+// HANDLED: the set of power>0 effects for which reaching the damage path with
+// NO secondary executor is legitimate — either execution is complete, or the
+// only thing dropped is an accepted probabilistic secondary / a damage-magnitude
+// condition tracked on another axis. Derived from the tables that actually
+// implement effects (plus the curated PURE/CHANCE/DMG-MAGNITUDE sets), so it
+// cannot drift out of sync with the implementation it summarizes. Anything
+// power>1 NOT in here and NOT in ACCEPTED_UNMODELED_EFFECTS fails closed.
+const HANDLED_EFFECTS = new Set([
+  ...Object.keys(EFFECT_EXECUTORS),
+  ...DRAIN_EFFECTS,
+  ...Object.keys(RECOIL_FRACTION),
+  ...Object.keys(MULTI_HIT_DISTRIBUTION),
+  ...INLINE_HANDLED_EFFECTS,
+  ...PURE_DAMAGE_EFFECTS,
+  ...CHANCE_SECONDARY_EFFECTS,
+  ...DAMAGE_MAGNITUDE_ONLY_EFFECTS,
+]);
+
+// ACCEPTED_UNMODELED: power>1 effects with a MANDATORY mechanic that is known
+// to be unported and is, for now, deliberately allowed to degrade to plain
+// damage. This list is the honest debt ledger: each fix-change deletes its
+// entry and moves the effect into HANDLED, shrinking this set toward empty.
+// Firing on one of these WARNS ONCE (deduped by effect) and proceeds, so the
+// sweep and every P(win) stay exactly as they were — the guard adds no
+// computed-output change, only visibility. Set counts are the current pool
+// (552 sets); see change #11 report §2.
+const ACCEPTED_UNMODELED_EFFECTS = {
+  EFFECT_BRICK_BREAK:   "removes target's Reflect/Light Screen pre-damage — unmodeled (38 sets; INERT here, target never has screens up)",
+  EFFECT_OVERHEAT:      "user SpA -2 after hit (Overheat, Psycho Boost) — unmodeled (23 sets)",
+  EFFECT_SOLAR_BEAM:    "2-turn charge unless sun — unmodeled, resolves as a free 1-turn hit (15 sets)",
+  EFFECT_FOCUS_PUNCH:   "fails if user is damaged before moving; priority -3 — unmodeled (12 sets)",
+  EFFECT_FAKE_OUT:      "guaranteed flinch on turn 1; priority — unmodeled (9 sets; flinch has no model at all yet)",
+  EFFECT_RECHARGE:      "user loses next turn (Hyper Beam family) — unmodeled (8 sets)",
+  EFFECT_SUPERPOWER:    "user Atk -1 & Def -1 after hit — unmodeled (4 sets)",
+  EFFECT_TRAP:          "partial-trap residual damage + switch-block — unmodeled (2 sets)",
+  EFFECT_RAMPAGE:       "2-3 turn lock-in then self-confusion (Thrash/Outrage/Petal Dance) — unmodeled (2 sets)",
+  EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
+  EFFECT_RECOIL_IF_MISS: "crash damage on miss (Hi Jump Kick) — unmodeled (1 set)",
+  EFFECT_SKY_ATTACK:    "2-turn charge (+30% flinch) — unmodeled (1 set)",
+  EFFECT_KNOCK_OFF:     "removes target's held item — unmodeled (1 set)",
+  EFFECT_SMELLINGSALT:  "cures target's paralysis (+2x vs paralyzed) — unmodeled (1 set)",
+  EFFECT_ROLLOUT:       "5-turn lock-in, escalating power — unmodeled (1 set)",
+};
+
+// Warn-once dedup — module-scoped so a full 552-set sweep prints at most one
+// line per accepted-unmodeled effect, not one per set/turn/branch.
+const _warnedUnmodeledEffects = new Set();
+function warnUnmodeledMechanicOnce(effect, moveName) {
+  if (_warnedUnmodeledEffects.has(effect)) return;
+  _warnedUnmodeledEffects.add(effect);
+  console.warn(`[mandatory-mechanic] "${moveName}" (${effect}): ${ACCEPTED_UNMODELED_EFFECTS[effect]} ` +
+    `— degrading to plain damage (change #11 accepted-unmodeled ledger).`);
+}
+
 function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
@@ -2764,7 +3294,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   if (hit || moveData.power === 0) {
     const interaction = resolveAbilityInteraction(moveName, moveData, selfMon, foeMon);
     if (interaction.type === "blocked") {
-      s[skillKey] += skillDelta("blocked");
+      s[skillKey] += interaction.skillDelta;
       return;
     }
     if (interaction.type === "absorb") {
@@ -2773,12 +3303,12 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       if (s[foeHpKey] < 100) {
         s[foeHpKey] = Math.min(100, s[foeHpKey] + (healAmount / foeMon.stats.hp) * 100);
       }
-      s[skillKey] += skillDelta("blocked"); // still an ability-block for Skill purposes
+      s[skillKey] += interaction.skillDelta; // still an ability-block for Skill purposes
       return;
     }
     if (interaction.type === "flashFireTrigger") {
       s[isYou ? "oppFlashFireActive" : "youFlashFireActive"] = true;
-      s[skillKey] += skillDelta("blocked");
+      s[skillKey] += interaction.skillDelta;
       return;
     }
   }
@@ -2790,6 +3320,19 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         `power-based path would silently compute a near-meaningless number off its move-data.js ` +
         `placeholder power (same bug class as the historical EFFECT_OHKO bug, see HANDOFF.md §10). ` +
         `Port its real mechanic before using it.`);
+    }
+    // Dream Eater sleep gate (data/battle_scripts_1.s BattleScript_EffectDreamEater:
+    // jumpifstatus2 BS_TARGET, SUBSTITUTE -> NoEffect, then jumpifstatus BS_TARGET,
+    // SLEEP -> DreamEaterWorked; otherwise DreamEaterNoEffect -> WasntAffected).
+    // Both checks sit BEFORE accuracycheck, so vs an awake (or substituted) target
+    // Dream Eater fails outright — no damage, no heal, no accuracy roll. Scored as
+    // a real "no effect" (WasntAffected). The accuracy-miss and substitute-fail
+    // splits are unreachable here (Dream Eater is 100 acc and Metagross has no
+    // evasion move, and Metagross never carries Substitute), so only the awake-hit
+    // case matters; not modeling the miss/sub branches is an accepted limitation.
+    if (moveData.effect === "EFFECT_DREAM_EATER" && s[foeStatusKey] !== "sleep") {
+      s[skillKey] += skillDelta("noEffect");
+      return;
     }
     const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
     const defStatKey = moveData.category === "physical" ? "def" : "spd";
@@ -2845,6 +3388,11 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // single-hit code path unchanged (runs its body exactly once).
       const hits = hitCount ?? 1;
       let recoilBasis = 0; // last hit's actual HP removed (sub-absorbed amount, or real damage) — recoil's gHpDealt
+      // drainBasis: source's gHpDealt PROPERLY CAPPED at HP actually removed
+      // (src/battle_script_commands.c:1880 substitute branch, :1927 real-HP
+      // branch), for the drain heal below. Kept SEPARATE from recoilBasis on
+      // purpose — see the non-substitute branch note where they diverge.
+      let drainBasis = 0;
       for (let i = 0; i < hits; i++) {
         if (s[foeHpKey] <= 0) break; // already fainted from an earlier hit this sequence (src: jumpifhasnohp BS_TARGET)
 
@@ -2864,6 +3412,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           s[foeSubKey] -= absorbed;
           if (s[foeSubKey] <= 0) s[foeSubKey] = null; // sub breaks, fully absorbed regardless of excess
           recoilBasis = absorbed;
+          drainBasis = absorbed; // = source gHpDealt (:1880); already capped at sub HP, so identical to recoilBasis here
           // NOTE: foeDamageTakenKey deliberately NOT set — the real mon took no
           // direct damage, so Counter/Mirror Coat have nothing to reflect (this
           // specific interaction wasn't chased further in source, but matches
@@ -2873,6 +3422,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           // only intercepts direct move damage, never residual (burn/poison)
           // ticks (those don't flow through this code path at all). Only
           // relevant here since a substitute already fully absorbs otherwise.
+          const foeAbsHpBefore = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
           let hitDmg = dmg;
           let endureTriggeredThisHit = false;
           if (s[foeEndureKey]) {
@@ -2881,6 +3431,14 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           }
           s[foeHpKey] = Math.max(0, s[foeHpKey] - (hitDmg / foeMon.stats.hp) * 100);
           recoilBasis = hitDmg;
+          // FINDING (deliberately NOT fixed in change #10 — recoil is checkpointed):
+          // recoilBasis is the RAW hitDmg, uncapped. Source's gHpDealt caps at the
+          // HP actually removed on an overkill KO (:1927), and source recoil is
+          // computed off that capped gHpDealt (Cmd_recoil, :2637 gBattleMoveDamage =
+          // gHpDealt / 4). So on an overkill KO, recoil here is taken off raw damage
+          // rather than the (smaller) HP removed — a latent overstatement. The drain
+          // heal below must NOT inherit this, so it uses the capped drainBasis:
+          drainBasis = Math.min(hitDmg, foeAbsHpBefore); // = source gHpDealt (:1927)
           // Overwritten each hit, not accumulated — matches source, where
           // gProtectStructs[target].physicalDmg/specialDmg is a plain
           // assignment per hit (Cmd_datahpupdate), so Counter/Mirror Coat
@@ -2919,6 +3477,25 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         const recoilDmg = Math.max(1, Math.floor(recoilBasis / recoilDivisor));
         s[selfHpKey] = Math.max(0, s[selfHpKey] - (recoilDmg / selfMon.stats.hp) * 100);
       }
+
+      // Drain heal (see DRAIN_EFFECTS above): the USER recovers half the HP
+      // actually removed from the target. Cmd_negativedamage (src/battle_script_
+      // commands.c:6924-6928): gBattleMoveDamage = -(gHpDealt / 2), then if the
+      // halved value is 0 it is floored to 1 (min 1 heal). Integer /2 truncates
+      // toward zero (gHpDealt >= 0), and the floor-to-1 applies to the HALVED
+      // value — so drainBasis == 1 halves to 0 then floors to a 1-HP heal. Gated
+      // on eff !== 0: a type-immune hit never reaches negativedamage in source
+      // (MOVE_RESULT_NO_EFFECT skips it), and without this gate the min-1 floor
+      // would wrongly heal 1 off a 0 basis. Capped at full HP, mirroring the
+      // Volt/Water-Absorb heal above. Liquid Ooze (jumpifability BS_TARGET,
+      // LIQUID_OOZE -> manipulatedamage DMG_CHANGE_SIGN, which flips the heal into
+      // self-damage) is an ACCEPTED LIMITATION here, not modeled: the target is
+      // always Metagross/Clear Body in this pool and Metagross carries no drain,
+      // so a drain never targets a Liquid Ooze holder.
+      if (DRAIN_EFFECTS.has(moveData.effect) && eff !== 0) {
+        const heal = Math.max(1, Math.floor(drainBasis / 2));
+        s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
+      }
     }
     s[skillKey] += skillDelta(classifyOutcome(hit, eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
@@ -2929,6 +3506,39 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     if (secondaryTriggered) {
       const executor = EFFECT_EXECUTORS[moveData.effect];
       if (executor) executor(s, actor, ctx, moveData);
+    } else if (moveData.power > 1) {
+      // Mandatory-mechanic guard (change #11). Covers every power>1 move that
+      // did NOT dispatch a secondary executor — i.e. all but the three
+      // SECONDARY_EFFECT_CHANCE moves on their trigger branch. Damage is already
+      // applied above; here we only assert that dropping the executor was
+      // legitimate. See the HANDLED / ACCEPTED_UNMODELED definitions above for
+      // the axis distinction vs SILENT_FALLTHROUGH_EFFECTS.
+      //
+      // Scope is power>1 (matching the coverage test and get_how_powerful's own
+      // eligibility gate). power===1 is the placeholder-power family — Flail/
+      // Reversal (EFFECT_FLAIL) and Seismic Toss/Night Shade (EFFECT_LEVEL_
+      // DAMAGE) reach this path but get their real damage from calcDamage's own
+      // branches and carry no secondary mechanic; Counter/Mirror Coat/OHKO
+      // early-return before ever reaching here. None need this guard.
+      const effect = moveData.effect;
+      if (!HANDLED_EFFECTS.has(effect)) {
+        if (effect in ACCEPTED_UNMODELED_EFFECTS) {
+          // Known, tracked, deliberately-unported mandatory mechanic: warn once
+          // (deduped by effect) and proceed — no computed-output change.
+          warnUnmodeledMechanicOnce(effect, moveName);
+        } else {
+          // Fail closed: an unclassified power>0 effect. Either it is pure
+          // damage (add it to PURE_DAMAGE_EFFECTS), it is handled by a table
+          // this guard doesn't yet consult (add it to HANDLED's derivation),
+          // or it carries an unported mandatory mechanic (add it to
+          // ACCEPTED_UNMODELED_EFFECTS with a citation and queue the fix).
+          throw new Error(`"${moveName}" (effect: ${effect}) reached the power>0 damage path with no ` +
+            `secondary executor and is not classified as handled or accepted-unmodeled — it may be ` +
+            `silently dropping a mandatory on-hit mechanic (change #11 guard). Classify it: add to ` +
+            `PURE_DAMAGE_EFFECTS, wire its executor/inline handler into HANDLED, or register it in ` +
+            `ACCEPTED_UNMODELED_EFFECTS.`);
+        }
+      }
     }
   } else if (!hit) {
     // A genuine accuracy miss on a power=0 status move (e.g. Attract, whose
@@ -3491,7 +4101,35 @@ function evaluateTerminal(state) {
 
   const mindWin = state.mindYou > state.mindOpp ? 2 : state.mindYou < state.mindOpp ? 0 : 1;
   const skillWin = state.skillYou > state.skillOpp ? 2 : state.skillYou < state.skillOpp ? 0 : 1;
-  const bodyWin = state.yourHpPct > state.oppHpPct ? 2 : state.yourHpPct < state.oppHpPct ? 0 : 1;
+  // Body is judged on TRUNCATED INTEGER percentages RELATIVE TO EACH SIDE'S
+  // OWN ROUND-START HP in source, not raw floats and not relative to max HP:
+  // ShowJudgmentSprite's ARENA_CATEGORY_BODY branch (src/battle_arena.c:
+  // 530-533) computes `(gBattleMons[battler].hp * 100) / hpAtStart[battler]`
+  // as C integer division (hp/hpAtStart are both u16 -> promoted to int),
+  // truncating toward zero BEFORE the two sides are ever compared
+  // (battle_arena.c:536-557). hpAtStart is HP at SWITCH-IN for this specific
+  // 1v1 (BattleArena_InitPoints, battle_arena.c:569-581), NOT max HP — see
+  // the long comment on buildStartState's yourHpPctAtStart/oppHpPctAtStart
+  // parameters for the full trace (both InitPoints call sites, why it's
+  // never re-baselined mid-round, and the known UI gap). A mon that starts a
+  // round below max HP and heals during it can legitimately push this ratio
+  // ABOVE 100 — capping at 100 (as this engine's yourHpPct/oppHpPct tracking
+  // correctly does for "% of max HP" purposes elsewhere) would UNDER-state
+  // that recovery relative to what pokeemerald actually judges. So the ratio
+  // is computed HERE, at judgment time only — yourHpPct/oppHpPct themselves
+  // stay exactly as tracked (% of max HP, still capped at 100 by their own
+  // write sites) for every other purpose (damage calc, Flail/Reversal power,
+  // etc.), and only this comparison rescales.
+  //
+  // Math.floor here is deliberately NOT Math.trunc and NOT removable as
+  // "redundant": it's only equivalent to trunc-toward-zero because both
+  // ratios are non-negative (guaranteed by the <= 0 early returns above,
+  // which route fainted-side cases to a win/loss/draw before bodyWin is ever
+  // computed, and by yourHpPctAtStart/oppHpPctAtStart never being 0 in any
+  // reachable state) — do not simplify this away.
+  const yourBody = Math.floor((state.yourHpPct / state.yourHpPctAtStart) * 100);
+  const oppBody = Math.floor((state.oppHpPct / state.oppHpPctAtStart) * 100);
+  const bodyWin = yourBody > oppBody ? 2 : yourBody < oppBody ? 0 : 1;
   const total = mindWin + skillWin + bodyWin;
   if (total > 3) return 1;
   if (total < 3) return 0;
@@ -3610,7 +4248,7 @@ function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
 // (AI_USER) check. Defaults to 2 for the same reason; we don't currently
 // model the opponent's full 3-mon Frontier roster (only the one named set
 // being analyzed), so this is a simplifying assumption until that's tracked.
-function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourUsablePartyMons = 2, oppUsablePartyMons = 2 } = {}) {
+function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2 } = {}) {
   const you = buildMon(youConfig);
   // Frontier trainer mons are generated at max friendship (255) — a real,
   // verified fact about this dataset's source, not a convenience default —
@@ -3618,7 +4256,7 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
   // side regardless of buildMon's own moveset-based guess (see buildMon).
   const opp = buildMon({ ...oppConfig, friendship: 255 });
   const ctx = { you, opp };
-  const state = buildStartState({ yourHpPct, oppHpPct, yourUsablePartyMons, oppUsablePartyMons, you, opp });
+  const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
   const result = search(ctx, state, 3);
   return { you, opp, result };
 }
@@ -3628,4 +4266,7 @@ export {
   scoreOpponentMove, chooseOpponentMoves,
   buildStartState, resolveTurn, search, printTree,
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
+  // Change #11 guard tables — exported so the coverage test pins them to the
+  // live pool rather than duplicating them.
+  HANDLED_EFFECTS, ACCEPTED_UNMODELED_EFFECTS,
 };

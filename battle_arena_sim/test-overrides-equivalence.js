@@ -40,6 +40,17 @@ console.log("  turn=" + branchState.turn + " weatherType=" + branchState.weather
 const overrideState = buildStartState({
   yourHpPct: branchState.yourHpPct,
   oppHpPct: branchState.oppHpPct,
+  // Engine change #4: yourHpPctAtStart/oppHpPctAtStart default SILENTLY to
+  // yourHpPct/oppHpPct when omitted (logic.js's buildStartState doc comment)
+  // — correct for a fresh round, WRONG here, where branchState.yourHpPct/
+  // oppHpPct are already a turn-1-damaged OBSERVATION, not the match's true
+  // start. Without these two lines this test fails not because the engine
+  // is wrong, but because THIS reconstruction silently invents a false
+  // round-start baseline from the damaged snapshot — exactly the caller
+  // responsibility the fix's contract documents. Must be threaded through
+  // like every other field below, not left to the default.
+  yourHpPctAtStart: branchState.yourHpPctAtStart,
+  oppHpPctAtStart: branchState.oppHpPctAtStart,
   yourUsablePartyMons: branchState.yourUsablePartyMons,
   oppUsablePartyMons: branchState.oppUsablePartyMons,
   you, opp,
