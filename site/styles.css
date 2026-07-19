@@ -442,12 +442,16 @@ input[type="checkbox"]:checked + label.btn {
 .sk-hint { font-size: 11px; color: var(--text-muted); font-weight: normal; }
 .sk-grid {
   display: grid;
-  /* label | Move (wide enough for "Meteor Mash"/"Confuse Ray") | Outcome | Phase.
-     Fixed mins stop the move box from clipping; the Phase column is auto and
-     collapses to just its header until a two-turn move needs it. */
-  grid-template-columns: auto minmax(130px, 1fr) minmax(170px, 1.3fr) auto;
+  /* label | Move | Outcome | Phase. Columns size to CONTENT (not fr) so the
+     panel stays compact and left-aligned instead of stretching to the coaching
+     column's full width. Move fits the widest move name; Outcome is capped so
+     the long greyed "… — score by hand" options (which live in the popup, not
+     the closed box) don't blow the box out while still fitting the widest
+     selectable label. Phase collapses to its header until a two-turn move. */
+  grid-template-columns: auto minmax(120px, max-content) minmax(160px, 210px) auto;
   gap: 6px 8px;
   align-items: center;
+  justify-content: start;
   margin-bottom: 10px;
 }
 .sk-col-head { font-size: 11px; color: var(--text-muted); }

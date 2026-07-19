@@ -581,9 +581,13 @@ const SK_OUTCOMES = [
   { value: OUTCOME.HIT, label: "Hit" },
   { value: OUTCOME.MISSED, label: "Missed" },
   { value: OUTCOME.PROTECT, label: "Blocked (Protect/Detect)" },
-  { value: OUTCOME.IMMOBILIZED, label: "Immobilized (couldn't act)" }, // para/freeze/sleep collapse here — all bank Mind=selected/Skill=0 via the paralysis driver
-  { value: OUTCOME.CONFUSION_SELF, label: "Hurt itself (confusion)" },
-  { value: OUTCOME.ATTRACT, label: "Immobilized (attract)" },
+  // Labels short so the Outcome box stays compact; each still routes to its own
+  // drive state (IMMOBILIZED->youStatus, CONFUSION_SELF->metagrossConfused,
+  // ATTRACT->youAttracted) — distinct paths, not merged. (para/freeze/sleep all
+  // collapse under IMMOBILIZED, banking Mind=selected/Skill=0 via paralysis.)
+  { value: OUTCOME.IMMOBILIZED, label: "Immobilized" },
+  { value: OUTCOME.CONFUSION_SELF, label: "Confused (self-hit)" },
+  { value: OUTCOME.ATTRACT, label: "Attracted" },
   { value: "FLINCH", label: "Flinched", unsupported: true }, // no engine flinch model — hand-score only
 ];
 let skOutcomesInited = false;
