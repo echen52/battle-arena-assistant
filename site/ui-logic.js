@@ -7,6 +7,7 @@
 import { buildMon, buildStartState, search, chooseOpponentMoves } from "../battle_arena_sim/logic.js";
 import { getOpponentConfig } from "../battle_arena_sim/opponent-adapter.js";
 import { MOVES } from "../battle_arena_sim/move-data.js";
+import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
 
 // matchState shape (the UI's own notion of "what's observed right now" —
 // distinct from youConfig/oppConfig, which describe WHO the mon is, not the
@@ -98,6 +99,27 @@ export function solve(youConfig, oppConfig, matchState) {
   const oppMoveDist = turnsRemaining > 0 ? chooseOpponentMoves(opp, you, state) : [];
 
   return { you, opp, state, result, turnsRemaining, oppMoveDist };
+}
+
+// Scorekeeper wrapper — the thin config->mon adapter over the shared drive-and-
+// read scorer (scorekeeper.js). Builds the two mons EXACTLY as solve() does
+// (opp at max friendship, per the Frontier convention) so the scored turn uses
+// the same combatants the solver would, then delegates to the one shared
+// scoring path. Returns the four signed deltas (+ diagnostic matched counts) to
+// ADD to the running "so far" boxes.
+export function scoreTurn(youConfig, oppConfig, report) {
+  const you = buildMon(youConfig);
+  const opp = buildMon({ ...oppConfig, friendship: 255 });
+  return scoreReportedTurn(you, opp, report);
+}
+
+// Re-export the scorekeeper's report vocabulary so app.js (which imports only
+// from this boundary module) can build reports and grey the unsupported cases.
+export { OUTCOME, PHASE, UNSUPPORTED_OPP } from "../battle_arena_sim/scorekeeper.js";
+
+// Two-turn (Dive/Fly/Dig/Bounce) detection for the report UI's phase control.
+export function isTwoTurnMove(move) {
+  return MOVES[move]?.effect === "EFFECT_SEMI_INVULNERABLE";
 }
 
 export function resolveOpponentBySetName(setName, abilityOverride) {

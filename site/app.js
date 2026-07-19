@@ -6,6 +6,7 @@ import {
   freshMatchState, solve, resolveOpponentBySetName,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
+  scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove,
 } from "./ui-logic.js";
 
 const $ = (id) => document.getElementById(id);
@@ -366,6 +367,7 @@ function recalculate() {
     youConfig = buildYouConfig();
     oppConfig = buildOppConfig();
     updateAttractedGate(youConfig.species, oppConfig.species);
+    updateScorekeeperMoves(youConfig, oppConfig);
     matchState = buildMatchState();
     if (!youConfig.species || !oppConfig.species) return;
     if (youConfig.moves.length === 0) { errorEl.textContent = "Pick at least one move for your Pokemon."; return; }
@@ -568,6 +570,122 @@ $("youImport").addEventListener("click", () => {
 // turskain: one listener on a shared class, not per-field handlers) ──────
 document.addEventListener("change", (e) => { if (e.target.classList.contains("calc-trigger")) recalculate(); });
 document.addEventListener("input", (e) => { if (e.target.classList.contains("calc-trigger")) recalculate(); });
+
+// ── Scorekeeper (Record a turn) ─────────────────────────────────────────────
+// Report one observed turn; drive the engine (via scoreTurn -> the shared
+// scorekeeper path) and ADD the banked Mind/Skill deltas to the four editable
+// "so far" boxes. The report controls are deliberately NOT calc-triggers and
+// addToBox sets .value WITHOUT dispatching an event, so recording never
+// re-solves and never overwrites a hand-edit — the widget's job ends at the boxes.
+const SK_OUTCOMES = [
+  { value: OUTCOME.HIT, label: "Hit" },
+  { value: OUTCOME.MISSED, label: "Missed" },
+  { value: OUTCOME.PROTECT, label: "Blocked (Protect/Detect)" },
+  { value: OUTCOME.IMMOBILIZED, label: "Immobilized (para/freeze/sleep)" },
+  { value: OUTCOME.CONFUSION_SELF, label: "Hurt itself (confusion)" },
+  { value: OUTCOME.ATTRACT, label: "Immobilized (attract)" },
+  { value: "FLINCH", label: "Flinched", unsupported: true }, // no engine flinch model — hand-score only
+];
+let skOutcomesInited = false;
+const skUndoStack = [];
+
+// Populate an outcome dropdown, greying the reports the drive model can't score
+// for this side (never silently substituting a same-shape neighbor): FLINCH on
+// either side, and confusion/attract on the opponent (engine has no branch).
+function populateOutcomeSelect(sel, side) {
+  sel.innerHTML = "";
+  for (const o of SK_OUTCOMES) {
+    const disabled = o.unsupported || (side === "opp" && UNSUPPORTED_OPP.has(o.value));
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = disabled ? `${o.label} — score by hand` : o.label;
+    opt.disabled = disabled;
+    sel.appendChild(opt);
+  }
+}
+
+function updatePhaseVisibility(prefix) {
+  const phaseSel = $(prefix + "Phase");
+  if (isTwoTurnMove($(prefix + "Move").value)) {
+    if (!phaseSel.dataset.filled) {
+      const c = document.createElement("option"); c.value = PHASE.CHARGE; c.textContent = "Charging (submerged/flew/dug)";
+      const a = document.createElement("option"); a.value = PHASE.ATTACK; a.textContent = "Attack (surfaced/hit)";
+      phaseSel.append(c, a);
+      phaseSel.dataset.filled = "1";
+    }
+    phaseSel.hidden = false;
+  } else {
+    phaseSel.hidden = true;
+  }
+}
+
+function updateScorekeeperMoves(youConfig, oppConfig) {
+  fillSelect($("skYouMove"), (youConfig.moves || []).filter(Boolean));
+  fillSelect($("skOppMove"), (oppConfig.moves || []).filter(Boolean));
+  if (!skOutcomesInited) {
+    populateOutcomeSelect($("skYouOutcome"), "you");
+    populateOutcomeSelect($("skOppOutcome"), "opp");
+    skOutcomesInited = true;
+  }
+  updatePhaseVisibility("skYou");
+  updatePhaseVisibility("skOpp");
+}
+
+function readSideReport(prefix) {
+  const move = $(prefix + "Move").value;
+  let outcome = $(prefix + "Outcome").value;
+  const phaseSel = $(prefix + "Phase");
+  let phase = null;
+  if (!phaseSel.hidden) {
+    phase = phaseSel.value;
+    if (phase === PHASE.CHARGE) outcome = OUTCOME.HIT; // a charge turn always "succeeds"
+  }
+  return { move, outcome, phase };
+}
+
+// Additive, non-dispatching: reads the CURRENT (possibly hand-edited) box value
+// and adds the delta on top. No event fires, so no re-solve is triggered.
+function skAddToBox(id, delta) {
+  const box = $(id);
+  box.value = (Number(box.value) || 0) + delta;
+}
+
+function skUpdateLog() {
+  const n = skUndoStack.length;
+  $("skLog").textContent = n ? `${n} turn${n > 1 ? "s" : ""} recorded` : "";
+}
+
+$("skYouMove").addEventListener("change", () => updatePhaseVisibility("skYou"));
+$("skOppMove").addEventListener("change", () => updatePhaseVisibility("skOpp"));
+
+$("skRecord").addEventListener("click", () => {
+  const errEl = $("skError");
+  errEl.textContent = "";
+  try {
+    const youConfig = buildYouConfig();
+    const oppConfig = buildOppConfig();
+    if (!youConfig.species || !oppConfig.species) { errEl.textContent = "Pick both Pokemon first."; return; }
+    const report = { you: readSideReport("skYou"), opp: readSideReport("skOpp") };
+    if (!report.you.move || !report.opp.move) { errEl.textContent = "Pick a move for each side."; return; }
+    const d = scoreTurn(youConfig, oppConfig, report);
+    skAddToBox("mindYou", d.dMindYou); skAddToBox("skillYou", d.dSkillYou);
+    skAddToBox("mindOpp", d.dMindOpp); skAddToBox("skillOpp", d.dSkillOpp);
+    skUndoStack.push(d);
+    $("skUndo").disabled = false;
+    skUpdateLog();
+  } catch (e) {
+    errEl.textContent = e.message.split("\n")[0];
+  }
+});
+
+$("skUndo").addEventListener("click", () => {
+  const d = skUndoStack.pop();
+  if (!d) return;
+  skAddToBox("mindYou", -d.dMindYou); skAddToBox("skillYou", -d.dSkillYou);
+  skAddToBox("mindOpp", -d.dMindOpp); skAddToBox("skillOpp", -d.dSkillOpp);
+  if (skUndoStack.length === 0) $("skUndo").disabled = true;
+  skUpdateLog();
+});
 
 // ── Initial state: a sensible default so the tool shows something on load
 // (the canonical regression matchup — Metagross vs Umbreon 4) ───────────

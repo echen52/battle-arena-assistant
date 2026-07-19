@@ -4269,4 +4269,11 @@ export {
   // Change #11 guard tables — exported so the coverage test pins them to the
   // live pool rather than duplicating them.
   HANDLED_EFFECTS, ACCEPTED_UNMODELED_EFFECTS,
+  // Arena-judge scoring primitives — surfaced (pure functions, no logic
+  // change) so the DRIVE-model scorekeeper (scorekeeper.js) can bank a
+  // reported turn's Mind/Skill by calling the ENGINE'S OWN scoring, never a
+  // reimplementation. applyMove is exported for the equivalence test's
+  // ground-truth branch deltas (it is the sole Mind/Skill banker resolveTurn
+  // uses — see logic.js:4068/4086; end-of-turn effects never touch score).
+  mindDelta, skillDelta, classifyOutcome, resolveAbilityInteraction, applyMove,
 };

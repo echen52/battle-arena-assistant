@@ -161,6 +161,37 @@
           </tr>
         </tbody>
       </table>
+
+      <!-- Scorekeeper (DRIVE model): report one observed turn; the widget drives
+           the real engine for that turn and ADDS the banked Mind/Skill deltas to
+           the editable "so far" boxes above. It never re-solves, never touches
+           HP, and never overwrites — the boxes stay hand-editable at all times. -->
+      <div id="scorekeeper" class="sk-panel">
+        <h3>Record a turn <span class="sk-hint">— adds Mind/Skill to the totals above; does not re-solve or touch HP</span></h3>
+        <div class="sk-grid">
+          <span class="sk-col-head"></span>
+          <span class="sk-col-head">Move</span>
+          <span class="sk-col-head">Outcome</span>
+          <span class="sk-col-head">Phase</span>
+
+          <span class="sk-side">You</span>
+          <select id="skYouMove" class="sk-move"></select>
+          <select id="skYouOutcome" class="sk-outcome"></select>
+          <select id="skYouPhase" class="sk-phase" hidden></select>
+
+          <span class="sk-side">Opp</span>
+          <select id="skOppMove" class="sk-move"></select>
+          <select id="skOppOutcome" class="sk-outcome"></select>
+          <select id="skOppPhase" class="sk-phase" hidden></select>
+        </div>
+        <div class="sk-actions">
+          <button id="skRecord" type="button" class="btn-primary">Record turn</button>
+          <button id="skUndo" type="button" class="btn" disabled>Undo last</button>
+          <span id="skLog" class="sk-log"></span>
+        </div>
+        <div id="skError" class="error-display"></div>
+      </div>
+
       <div id="errorDisplay" class="error-display"></div>
     </div>
 

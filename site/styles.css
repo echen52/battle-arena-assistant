@@ -430,3 +430,35 @@ input[type="checkbox"]:checked + label.btn {
 .hidden { display: none; }
 .radio-inline { font-size: 12px; color: var(--text-muted); margin-right: 10px; }
 .radio-inline input { margin-right: 4px; }
+
+/* ── Scorekeeper (Record a turn) ─────────────────────────────────────────── */
+.sk-panel {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--timber-border);
+  border-radius: 4px;
+}
+.sk-hint { font-size: 11px; color: var(--text-muted); font-weight: normal; }
+.sk-grid {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.sk-col-head { font-size: 11px; color: var(--text-muted); }
+.sk-side { font-size: 12px; color: var(--accent); font-weight: bold; }
+.sk-move, .sk-outcome, .sk-phase {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--panel-bg);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  width: 100%;
+}
+.sk-phase[hidden] { display: none; }
+.sk-outcome option:disabled { color: var(--text-muted); font-style: italic; }
+.sk-actions { display: flex; align-items: center; gap: 10px; }
+.sk-log { font-size: 11px; color: var(--text-muted); }
