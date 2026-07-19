@@ -442,7 +442,10 @@ input[type="checkbox"]:checked + label.btn {
 .sk-hint { font-size: 11px; color: var(--text-muted); font-weight: normal; }
 .sk-grid {
   display: grid;
-  grid-template-columns: auto 1fr 1fr auto;
+  /* label | Move (wide enough for "Meteor Mash"/"Confuse Ray") | Outcome | Phase.
+     Fixed mins stop the move box from clipping; the Phase column is auto and
+     collapses to just its header until a two-turn move needs it. */
+  grid-template-columns: auto minmax(130px, 1fr) minmax(170px, 1.3fr) auto;
   gap: 6px 8px;
   align-items: center;
   margin-bottom: 10px;
@@ -458,7 +461,19 @@ input[type="checkbox"]:checked + label.btn {
   font-size: 12px;
   width: 100%;
 }
-.sk-phase[hidden] { display: none; }
+/* Keep the hidden phase select AS A GRID ITEM (override the UA [hidden] ->
+   display:none) so it never drops out of the grid's auto-flow and shift the
+   Opp row into the You row's cells. Collapse it to a zero-width, invisible box
+   instead: the row stays 4 cells wide and aligned; the Phase column shrinks to
+   just its header until a two-turn move selection reveals the control. */
+.sk-phase[hidden] {
+  display: inline-block;
+  visibility: hidden;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
 .sk-outcome option:disabled { color: var(--text-muted); font-style: italic; }
 .sk-actions { display: flex; align-items: center; gap: 10px; }
 .sk-log { font-size: 11px; color: var(--text-muted); }

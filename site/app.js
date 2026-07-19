@@ -581,7 +581,7 @@ const SK_OUTCOMES = [
   { value: OUTCOME.HIT, label: "Hit" },
   { value: OUTCOME.MISSED, label: "Missed" },
   { value: OUTCOME.PROTECT, label: "Blocked (Protect/Detect)" },
-  { value: OUTCOME.IMMOBILIZED, label: "Immobilized (para/freeze/sleep)" },
+  { value: OUTCOME.IMMOBILIZED, label: "Immobilized (couldn't act)" }, // para/freeze/sleep collapse here — all bank Mind=selected/Skill=0 via the paralysis driver
   { value: OUTCOME.CONFUSION_SELF, label: "Hurt itself (confusion)" },
   { value: OUTCOME.ATTRACT, label: "Immobilized (attract)" },
   { value: "FLINCH", label: "Flinched", unsupported: true }, // no engine flinch model — hand-score only
