@@ -414,14 +414,13 @@ input[type="checkbox"]:checked + label.btn {
 .opp-move-dist-bar { height: 100%; background: var(--blue); }
 .opp-move-dist-pct { min-width: 42px; text-align: right; color: var(--text-muted); }
 
-/* In the You column the set-builder is a bounded "who your mon is" section:
-   divider above separates it from the Saved Sets quick-load group, divider
-   below separates it from the live match-state controls (Stage/HP/Status). */
+/* Set-builder sits at the BOTTOM of the You column (once-per-match setup). Its
+   top divider marks the live-state | builder boundary (between Volatile and
+   Your Set); no bottom divider needed since it's the last block in the panel. */
 .set-input-block {
-  margin: 16px 0;
-  padding: 14px 0;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--divider);
-  border-bottom: 1px solid var(--divider);
 }
 
 .error-display {
