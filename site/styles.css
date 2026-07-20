@@ -442,13 +442,16 @@ input[type="checkbox"]:checked + label.btn {
 .sk-hint { font-size: 11px; color: var(--text-muted); font-weight: normal; }
 .sk-grid {
   display: grid;
-  /* label | Move | Outcome | Phase. Columns size to CONTENT (not fr) so the
-     panel stays compact and left-aligned instead of stretching to the coaching
-     column's full width. Move fits the widest move name; Outcome is capped so
-     the long greyed "… — score by hand" options (which live in the popup, not
-     the closed box) don't blow the box out while still fitting the widest
-     selectable label. Phase collapses to its header until a two-turn move. */
-  grid-template-columns: auto minmax(120px, max-content) minmax(160px, 210px) auto;
+  /* label | Move | Outcome | Phase. Columns size to CONTENT (not fr) and the
+     grid is left-aligned (justify-content:start) so the whole thing fits WITHIN
+     the fixed 340px center column with margin on the right, instead of
+     overflowing past the panel border. Move fits the widest move name; Outcome
+     is capped just above its widest *selectable* label ("Immobilized") so the
+     long greyed "… — score by hand" options (popup-only) don't blow the box out
+     — every selectable outcome is now terse ("Hit"/"Blocked"/"Confused"/…), so
+     the cap that used to need 210px for "Blocked (Protect/Detect)" is far
+     smaller. Phase collapses to its header until a two-turn move. */
+  grid-template-columns: auto minmax(104px, max-content) minmax(96px, 128px) auto;
   gap: 6px 8px;
   align-items: center;
   justify-content: start;
@@ -477,6 +480,19 @@ input[type="checkbox"]:checked + label.btn {
   min-width: 0;
   padding: 0;
   border: 0;
+}
+/* The Phase HEADER collapses in lockstep with the control (app.js toggles the
+   same [hidden] attribute on both). Keep it a grid item — override the UA
+   [hidden] -> display:none — so removing it never pulls the You/Opp rows up out
+   of their cells; just make it zero-width and invisible, exactly like the
+   select above, so the header row reads "Move / Outcome" until a two-turn move
+   reveals both the Phase header and its dropdown together. */
+.sk-col-head[hidden] {
+  display: inline-block;
+  visibility: hidden;
+  width: 0;
+  min-width: 0;
+  padding: 0;
 }
 .sk-outcome option:disabled { color: var(--text-muted); font-style: italic; }
 .sk-actions { display: flex; align-items: center; gap: 10px; }

@@ -580,13 +580,13 @@ document.addEventListener("input", (e) => { if (e.target.classList.contains("cal
 const SK_OUTCOMES = [
   { value: OUTCOME.HIT, label: "Hit" },
   { value: OUTCOME.MISSED, label: "Missed" },
-  { value: OUTCOME.PROTECT, label: "Blocked (Protect/Detect)" },
+  { value: OUTCOME.PROTECT, label: "Blocked" }, // terse like the rest; Protect/Detect are the only block sources (display only; route unchanged)
   // Labels short so the Outcome box stays compact; each still routes to its own
   // drive state (IMMOBILIZED->youStatus, CONFUSION_SELF->metagrossConfused,
   // ATTRACT->youAttracted) — distinct paths, not merged. (para/freeze/sleep all
   // collapse under IMMOBILIZED, banking Mind=selected/Skill=0 via paralysis.)
   { value: OUTCOME.IMMOBILIZED, label: "Immobilized" },
-  { value: OUTCOME.CONFUSION_SELF, label: "Confused (self-hit)" },
+  { value: OUTCOME.CONFUSION_SELF, label: "Confused" }, // self-hit is the only confusion outcome — parenthetical dropped (display only; route unchanged)
   { value: OUTCOME.ATTRACT, label: "Attracted" },
   { value: "FLINCH", label: "Flinched", unsupported: true }, // no engine flinch model — hand-score only
 ];
@@ -621,6 +621,14 @@ function updatePhaseVisibility(prefix) {
   } else {
     phaseSel.hidden = true;
   }
+  // The Phase column HEADER tracks the controls: shown only while at least one
+  // side's phase dropdown is revealed (a two-turn move is selected), hidden
+  // otherwise so it never floats over the collapsed, empty column. Same
+  // hidden-attribute mechanism as the select (see .sk-col-head[hidden] in
+  // styles.css) so the header and control stay in sync and the header stays a
+  // grid item — never dropping out of flow and shifting the rows.
+  const head = $("skPhaseHead");
+  if (head) head.hidden = $("skYouPhase").hidden && $("skOppPhase").hidden;
 }
 
 function updateScorekeeperMoves(youConfig, oppConfig) {
