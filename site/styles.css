@@ -291,7 +291,7 @@ input[type="checkbox"]:checked + label.btn {
   letter-spacing: 0.5px;
   margin-bottom: 6px;
 }
-.saved-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.saved-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
 .saved-chip {
   padding: 4px 8px 4px 10px;
   background: var(--surface-2);
@@ -414,10 +414,14 @@ input[type="checkbox"]:checked + label.btn {
 .opp-move-dist-bar { height: 100%; background: var(--blue); }
 .opp-move-dist-pct { min-width: 42px; text-align: right; color: var(--text-muted); }
 
+/* In the You column the set-builder is a bounded "who your mon is" section:
+   divider above separates it from the Saved Sets quick-load group, divider
+   below separates it from the live match-state controls (Stage/HP/Status). */
 .set-input-block {
-  margin-top: 16px;
-  padding-top: 14px;
+  margin: 16px 0;
+  padding: 14px 0;
   border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
 }
 
 .error-display {

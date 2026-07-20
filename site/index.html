@@ -34,6 +34,100 @@
       <label>Saved Sets</label>
       <select id="youLoadSet" class="calc-trigger"><option value="">— Select a saved set —</option></select>
     </div>
+    <!-- Chips = the saved-set list + inline ✕ delete, co-located directly under
+         the quick-load dropdown so both saved-set affordances read as one group. -->
+    <div class="saved-list" id="youSavedChips"></div>
+
+    <!-- Set-builder (who your mon is) — relocated into the You column so the
+         set identity lives with its live state. Same IDs/listeners as before;
+         only the DOM position moved, so app.js's getElementById wiring is
+         unaffected. -->
+    <div class="set-input-block">
+      <h3>Your Set</h3>
+
+      <!-- Adding a new set: Smogon paste is the main way (most sets come from
+           Smogon) — parsed by this project's OWN parseShowdownText, not
+           Palace's parseSmogon (Palace's is a deliberately simplified
+           Speed-EV-only extractor for its probability-table mechanic; Arena
+           needs full EV/IV/ability fidelity for damage calc — see HANDOFF §14).
+           Both parsers accept the same Smogon plain-text export format, so sets
+           stay consistent across both tools even though Arena keeps its own
+           parser. -->
+      <div class="smogon-section">
+        <label class="smogon-label">Paste Smogon Export</label>
+        <textarea id="youImportExportText" class="showdown-text" placeholder="Snorlax @ Leftovers&#10;Ability: Immunity&#10;Level: 50&#10;EVs: 36 HP / 220 Def / 252 Spe&#10;Brave Nature&#10;- Body Slam&#10;- Amnesia&#10;- Curse&#10;- Rest"></textarea>
+        <div class="btn-row">
+          <button id="youImport" class="btn btn-primary">Parse Set</button>
+          <button id="youSaveSet" class="btn btn-primary">Save Set</button>
+        </div>
+      </div>
+
+      <!-- Build from scratch: collapsed by default, like Palace's collapsed
+           manual-entry section — available but not primary. -->
+      <div class="custom-panel">
+        <div class="custom-panel-header" id="youManualToggle">
+          <span class="custom-panel-title">Build manually</span>
+          <span class="chevron" id="youManualChevron">▼</span>
+        </div>
+        <div class="custom-panel-body" id="youManualBody">
+          <div class="field-row">
+            <label>Species</label>
+            <div class="combo-wrap">
+              <input type="text" id="youSpeciesInput" class="combo-input" autocomplete="off" placeholder="Type to search species…" />
+              <div class="combo-list" id="youSpeciesList"></div>
+              <select id="youSpecies" class="calc-trigger hidden-select"></select>
+            </div>
+          </div>
+          <div class="field-row">
+            <label>Level</label>
+            <input type="number" id="youLevel" class="calc-trigger" value="50" min="1" max="100" />
+          </div>
+          <div class="field-row">
+            <label>Nature</label>
+            <select id="youNature" class="calc-trigger"></select>
+          </div>
+          <div class="field-row">
+            <label>Ability</label>
+            <select id="youAbility" class="calc-trigger"></select>
+          </div>
+          <div class="field-row">
+            <label>Item</label>
+            <input type="text" id="youItem" class="calc-trigger" placeholder="e.g. Cheri Berry" />
+          </div>
+
+          <table class="ev-table">
+            <thead><tr><th></th><th>HP</th><th>Atk</th><th>Def</th><th>SpA</th><th>SpD</th><th>Spe</th></tr></thead>
+            <tbody>
+              <tr>
+                <th>EVs</th>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="hp" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="atk" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="def" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spa" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spd" min="0" max="252" step="4" value="0" /></td>
+                <td><input type="number" class="calc-trigger ev-input" data-stat="spe" min="0" max="252" step="4" value="0" /></td>
+              </tr>
+              <tr>
+                <th>IVs</th>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="hp" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="atk" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="def" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spa" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spd" min="0" max="31" value="31" /></td>
+                <td><input type="number" class="calc-trigger iv-input" data-stat="spe" min="0" max="31" value="31" /></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="moves-grid">
+            <select class="calc-trigger move-select" data-slot="0"></select>
+            <select class="calc-trigger move-select" data-slot="1"></select>
+            <select class="calc-trigger move-select" data-slot="2"></select>
+            <select class="calc-trigger move-select" data-slot="3"></select>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Live match state — stages/HP/status describe what's happening RIGHT
          NOW, not who the mon is, so these stay outside the collapsed
@@ -193,108 +287,6 @@
       </div>
 
       <div id="errorDisplay" class="error-display"></div>
-    </div>
-
-    <!-- Set-input UI, relocated here (bottom center, beneath the Mind/Skill/
-         Body table) — see HANDOFF §15/§17. Still describes "who is You,"
-         same IDs/listeners as before; only the DOM position moved, so
-         app.js's getElementById wiring is unaffected. -->
-    <div class="set-input-block">
-      <h3>Your Set</h3>
-
-      <!-- Adding a new set: Smogon paste is the main way (most sets come from
-           Smogon) — parsed by this project's OWN parseShowdownText, not
-           Palace's parseSmogon (Palace's is a deliberately simplified
-           Speed-EV-only extractor for its probability-table mechanic; Arena
-           needs full EV/IV/ability fidelity for damage calc — see HANDOFF §14).
-           Both parsers accept the same Smogon plain-text export format, so sets
-           stay consistent across both tools even though Arena keeps its own
-           parser. -->
-      <div class="smogon-section">
-        <label class="smogon-label">Paste Smogon Export</label>
-        <textarea id="youImportExportText" class="showdown-text" placeholder="Snorlax @ Leftovers&#10;Ability: Immunity&#10;Level: 50&#10;EVs: 36 HP / 220 Def / 252 Spe&#10;Brave Nature&#10;- Body Slam&#10;- Amnesia&#10;- Curse&#10;- Rest"></textarea>
-        <div class="btn-row">
-          <button id="youImport" class="btn btn-primary">Parse Set</button>
-          <button id="youSaveSet" class="btn btn-primary">Save Set</button>
-        </div>
-
-        <!-- Palace-style saved-set chips: name + inline ✕ delete, living right
-             next to Parse Set/Save Set (echen52/battle-palace-assistant's
-             .saved-section convention, re-skinned to the warm theme) — see
-             HANDOFF.md. Deletion moved here (was a top-of-panel "Delete"
-             button next to the load-only dropdown); the top Saved Sets
-             dropdown stays load-only. -->
-        <div class="saved-section">
-          <div class="saved-title">Saved Sets</div>
-          <div class="saved-list" id="youSavedChips"></div>
-        </div>
-      </div>
-
-      <!-- Build from scratch: collapsed by default, like Palace's collapsed
-           manual-entry section — available but not primary. -->
-      <div class="custom-panel">
-        <div class="custom-panel-header" id="youManualToggle">
-          <span class="custom-panel-title">Build manually</span>
-          <span class="chevron" id="youManualChevron">▼</span>
-        </div>
-        <div class="custom-panel-body" id="youManualBody">
-          <div class="field-row">
-            <label>Species</label>
-            <div class="combo-wrap">
-              <input type="text" id="youSpeciesInput" class="combo-input" autocomplete="off" placeholder="Type to search species…" />
-              <div class="combo-list" id="youSpeciesList"></div>
-              <select id="youSpecies" class="calc-trigger hidden-select"></select>
-            </div>
-          </div>
-          <div class="field-row">
-            <label>Level</label>
-            <input type="number" id="youLevel" class="calc-trigger" value="50" min="1" max="100" />
-          </div>
-          <div class="field-row">
-            <label>Nature</label>
-            <select id="youNature" class="calc-trigger"></select>
-          </div>
-          <div class="field-row">
-            <label>Ability</label>
-            <select id="youAbility" class="calc-trigger"></select>
-          </div>
-          <div class="field-row">
-            <label>Item</label>
-            <input type="text" id="youItem" class="calc-trigger" placeholder="e.g. Cheri Berry" />
-          </div>
-
-          <table class="ev-table">
-            <thead><tr><th></th><th>HP</th><th>Atk</th><th>Def</th><th>SpA</th><th>SpD</th><th>Spe</th></tr></thead>
-            <tbody>
-              <tr>
-                <th>EVs</th>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="hp" min="0" max="252" step="4" value="0" /></td>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="atk" min="0" max="252" step="4" value="0" /></td>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="def" min="0" max="252" step="4" value="0" /></td>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="spa" min="0" max="252" step="4" value="0" /></td>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="spd" min="0" max="252" step="4" value="0" /></td>
-                <td><input type="number" class="calc-trigger ev-input" data-stat="spe" min="0" max="252" step="4" value="0" /></td>
-              </tr>
-              <tr>
-                <th>IVs</th>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="hp" min="0" max="31" value="31" /></td>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="atk" min="0" max="31" value="31" /></td>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="def" min="0" max="31" value="31" /></td>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="spa" min="0" max="31" value="31" /></td>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="spd" min="0" max="31" value="31" /></td>
-                <td><input type="number" class="calc-trigger iv-input" data-stat="spe" min="0" max="31" value="31" /></td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="moves-grid">
-            <select class="calc-trigger move-select" data-slot="0"></select>
-            <select class="calc-trigger move-select" data-slot="1"></select>
-            <select class="calc-trigger move-select" data-slot="2"></select>
-            <select class="calc-trigger move-select" data-slot="3"></select>
-          </div>
-        </div>
-      </div>
     </div>
   </section>
 
