@@ -451,7 +451,7 @@ input[type="checkbox"]:checked + label.btn {
      — every selectable outcome is now terse ("Hit"/"Blocked"/"Confused"/…), so
      the cap that used to need 210px for "Blocked (Protect/Detect)" is far
      smaller. Phase collapses to its header until a two-turn move. */
-  grid-template-columns: auto minmax(104px, max-content) minmax(96px, 128px) auto;
+  grid-template-columns: auto minmax(116px, max-content) minmax(140px, 148px) auto;
   gap: 6px 8px;
   align-items: center;
   justify-content: start;
