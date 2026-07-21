@@ -207,6 +207,9 @@ input[type="checkbox"]:checked + label.btn {
 .btn-toggle-field { background: var(--surface-2); border: 1px solid var(--accent); color: var(--accent); }
 
 .turn-indicator { display: flex; align-items: center; gap: 4px; }
+/* Keep the top-bar action buttons (Toggle Field + Reset) adjacent at the right,
+   instead of space-between spreading them apart across the header. */
+.header-actions { display: flex; align-items: center; gap: 8px; }
 .turn-label { color: var(--text-muted); font-size: 12px; margin-right: 4px; }
 
 .ev-table, .msb-table, .options-table {

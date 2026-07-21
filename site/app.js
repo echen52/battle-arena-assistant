@@ -699,6 +699,50 @@ $("skUndo").addEventListener("click", () => {
   skUpdateLog();
 });
 
+// ── Reset button: clear every observed battle-state input back to a fresh slate
+// (HP, stat stages, status, volatiles, field, Record-a-turn, Mind/Skill totals,
+// turn) WITHOUT touching mon identity or persistence (species/ability/item/
+// nature/EVs/IVs/moves, saved sets, chips, dropdown, paste box all stay put).
+// Parity with the Facilities Assistant's reset. UI-only: this resets the inputs
+// the engine reads, not how it solves. Every field is set DIRECTLY (no change/
+// input event dispatched), then a single recalculate() re-solves the fresh board
+// — exactly one solve at the end, not one per field. Acts immediately, no dialog.
+$("resetBtn").addEventListener("click", () => {
+  // HP -> full both sides: set linked current/percent directly, redraw the bars
+  // (no input event fires, so the wired handlers don't redraw them for us).
+  for (const [cur, pct, bar] of [["youCurrentHp", "youPercentHp", "youHpBar"], ["oppCurrentHp", "oppPercentHp", "oppHpBar"]]) {
+    $(cur).value = 100; $(pct).value = 100; drawHealthBar($(bar), 100);
+  }
+  // Round-start HP overrides -> blank (= current; the engine's own default).
+  $("youStartHp").value = ""; $("oppStartHp").value = "";
+  // Stat stages -> 0, both sides, all seven.
+  document.querySelectorAll(".stage-select, .opp-stage-select").forEach((s) => { s.value = "0"; });
+  // Primary status -> Healthy, both sides.
+  $("youStatus").value = ""; $("oppStatus").value = "";
+  // Volatiles (You side only; the Opp toggles are disabled/inert) -> off.
+  $("youConfused").checked = false; $("youAttracted").checked = false;
+  // Field: Weather None, all screens off both sides (Spikes stay inert).
+  $("weatherNone").checked = true;
+  $("youReflect").checked = false; $("oppReflect").checked = false;
+  $("youLightScreen").checked = false; $("oppLightScreen").checked = false;
+  // Mind/Skill "so far" totals -> 0 (Body is derived, not stored).
+  $("mindYou").value = 0; $("skillYou").value = 0; $("mindOpp").value = 0; $("skillOpp").value = 0;
+  // Turn counter -> 1 (checking one radio unchecks the rest).
+  $("turn1").checked = true;
+  // Record-a-turn: outcomes/phases back to their first option; move dropdowns are
+  // refilled to their defaults by the recalculate() below. Wipe the undo stack.
+  for (const id of ["skYouOutcome", "skOppOutcome", "skYouPhase", "skOppPhase"]) {
+    const el = $(id); if (el.options.length) el.selectedIndex = 0;
+  }
+  skUndoStack.length = 0;
+  $("skUndo").disabled = true;
+  $("skError").textContent = "";
+  skUpdateLog();
+  // One re-solve from the cleared board: refills the scorekeeper move dropdowns
+  // and re-renders Recommendation + opponent move-probabilities off fresh state.
+  recalculate();
+});
+
 // ── Initial state: a sensible default so the tool shows something on load
 // (the canonical regression matchup — Metagross vs Umbreon 4) ───────────
 function loadDefaultDemo() {
