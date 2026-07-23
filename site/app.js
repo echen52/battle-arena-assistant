@@ -6,7 +6,7 @@ import {
   freshMatchState, solve, resolveOpponentBySetName,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
-  scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove,
+  scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove, isDrivableHealMove,
 } from "./ui-logic.js";
 
 const $ = (id) => document.getElementById(id);
@@ -631,6 +631,19 @@ function updatePhaseVisibility(prefix) {
   if (head) head.hidden = $("skYouPhase").hidden && $("skOppPhase").hidden;
 }
 
+// Show the "Did it heal?" control only for the six drivable HP-dependent heals,
+// and only on the You side (the widget scores an opponent's heal by hand — see
+// scorekeeper's validateReport). Same zero-width collapse mechanism as Phase:
+// the header tracks the control so the 5th column vanishes until a heal move is
+// picked. Reading it happens in readSideReport, gated on visibility.
+function updateHealVisibility(prefix) {
+  const sel = $(prefix + "Heal");
+  if (!sel) return; // only the You row has a heal control
+  sel.hidden = !isDrivableHealMove($(prefix + "Move").value);
+  const head = $("skHealHead");
+  if (head) head.hidden = sel.hidden;
+}
+
 function updateScorekeeperMoves(youConfig, oppConfig) {
   fillSelect($("skYouMove"), (youConfig.moves || []).filter(Boolean));
   fillSelect($("skOppMove"), (oppConfig.moves || []).filter(Boolean));
@@ -641,6 +654,7 @@ function updateScorekeeperMoves(youConfig, oppConfig) {
   }
   updatePhaseVisibility("skYou");
   updatePhaseVisibility("skOpp");
+  updateHealVisibility("skYou");
 }
 
 function readSideReport(prefix) {
@@ -652,7 +666,13 @@ function readSideReport(prefix) {
     phase = phaseSel.value;
     if (phase === PHASE.CHARGE) outcome = OUTCOME.HIT; // a charge turn always "succeeds"
   }
-  return { move, outcome, phase };
+  const report = { move, outcome, phase };
+  // "Did it heal?" — supplied only when the control is visible (You side, a
+  // drivable heal). The scorekeeper reads it only on a HIT; on any other outcome
+  // it's ignored, so passing it unconditionally when shown is safe.
+  const healSel = $(prefix + "Heal");
+  if (healSel && !healSel.hidden) report.healed = healSel.value === "yes";
+  return report;
 }
 
 // Additive, non-dispatching: reads the CURRENT (possibly hand-edited) box value
@@ -667,7 +687,7 @@ function skUpdateLog() {
   $("skLog").textContent = n ? `${n} turn${n > 1 ? "s" : ""} recorded` : "";
 }
 
-$("skYouMove").addEventListener("change", () => updatePhaseVisibility("skYou"));
+$("skYouMove").addEventListener("change", () => { updatePhaseVisibility("skYou"); updateHealVisibility("skYou"); });
 $("skOppMove").addEventListener("change", () => updatePhaseVisibility("skOpp"));
 
 $("skRecord").addEventListener("click", () => {
@@ -731,7 +751,7 @@ $("resetBtn").addEventListener("click", () => {
   $("turn1").checked = true;
   // Record-a-turn: outcomes/phases back to their first option; move dropdowns are
   // refilled to their defaults by the recalculate() below. Wipe the undo stack.
-  for (const id of ["skYouOutcome", "skOppOutcome", "skYouPhase", "skOppPhase"]) {
+  for (const id of ["skYouOutcome", "skOppOutcome", "skYouPhase", "skOppPhase", "skYouHeal"]) {
     const el = $(id); if (el.options.length) el.selectedIndex = 0;
   }
   skUndoStack.length = 0;

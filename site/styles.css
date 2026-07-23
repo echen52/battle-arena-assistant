@@ -457,7 +457,7 @@ input[type="checkbox"]:checked + label.btn {
      — every selectable outcome is now terse ("Hit"/"Blocked"/"Confused"/…), so
      the cap that used to need 210px for "Blocked (Protect/Detect)" is far
      smaller. Phase collapses to its header until a two-turn move. */
-  grid-template-columns: auto minmax(116px, max-content) minmax(140px, 148px) auto;
+  grid-template-columns: auto minmax(116px, max-content) minmax(140px, 148px) auto auto;
   gap: 6px 8px;
   align-items: center;
   justify-content: start;
@@ -465,7 +465,7 @@ input[type="checkbox"]:checked + label.btn {
 }
 .sk-col-head { font-size: 11px; color: var(--text-muted); }
 .sk-side { font-size: 12px; color: var(--accent); font-weight: bold; }
-.sk-move, .sk-outcome, .sk-phase {
+.sk-move, .sk-outcome, .sk-phase, .sk-heal {
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--panel-bg);
@@ -480,6 +480,18 @@ input[type="checkbox"]:checked + label.btn {
    instead: the row stays 4 cells wide and aligned; the Phase column shrinks to
    just its header until a two-turn move selection reveals the control. */
 .sk-phase[hidden] {
+  display: inline-block;
+  visibility: hidden;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+/* The You-side "Did it heal?" control (5th column, You side only) collapses the
+   same way the phase control does — zero-width invisible grid item when hidden,
+   so the Opp row's empty filler cell stays aligned and the column shrinks to
+   just its header until a drivable heal is selected. */
+.sk-heal[hidden] {
   display: inline-block;
   visibility: hidden;
   width: 0;

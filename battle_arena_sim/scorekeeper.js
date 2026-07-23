@@ -26,20 +26,37 @@ import { buildStartState, resolveTurn } from "./logic.js";
 import { MOVES } from "./move-data.js";
 
 // Status moves whose SUCCESS — and therefore Skill — is HP-dependent: they FAIL
-// at full HP (the 100% the drive assumes, since the model does no HP inference)
-// but a player reports them BECAUSE they succeeded at low HP. Scoring them off
-// the drive would silently bank the failure penalty (-2) for a move that
-// actually landed (+1) — a confident 3-point wrong Skill, the exact silent error
-// this architecture exists to prevent. So a reported HIT on one of these fails
-// LOUD ("score by hand") rather than banking -2. Mind is always 0 for them (they
-// are status moves), so nothing correct is lost. EFFECT_INGRAIN is deliberately
-// excluded: it is a setup move that lands regardless of current HP, not an
-// immediate HP-gated heal.
-const HEAL_HP_DEPENDENT = new Set([
+// at full HP (the 100% the drive assumes by default) but a player reports them
+// BECAUSE they succeeded at low HP. Split by DRIVABILITY:
+//
+//   DRIVABLE_HEAL_EFFECTS — the six backed by a real executor (healHalfMaxHp /
+//   Rest). These CAN be driven to BOTH branches and the Skill read off them:
+//   at full HP the executor returns "failed" -> Skill -2; at any sub-full HP it
+//   heals -> Skill +1 (a CONSTANT — the award does not vary with heal magnitude,
+//   verified stable across 1..99% HP). So instead of failing loud, a reported
+//   heal drives the SELECTED branch: the "Did it heal?" answer picks the HP
+//   setpoint (full -> failed, sub-full -> healed). This is branch SELECTION, not
+//   HP inference — the widget never reads an HP box, and because +1 is
+//   HP-independent the arbitrary sub-full value never leaks into the score.
+//   Mind is always 0 (status moves), so nothing is lost. EFFECT_INGRAIN is
+//   excluded: it lands regardless of current HP (a setup move), not HP-gated.
+//
+//   HEAL_UNMODELED_EFFECTS — Swallow and Wish have NO executor at all (driving
+//   throws "no execution logic yet"), AND their success is not HP-gated-at-cast
+//   anyway (Swallow is stockpile-gated, Wish heals on a LATER turn). They stay
+//   hand-scored, with a message that says exactly that — so it is never mistaken
+//   for the silent -2/+1 bug the drivable path fixes.
+const DRIVABLE_HEAL_EFFECTS = new Set([
   "EFFECT_RESTORE_HP", "EFFECT_SOFTBOILED", "EFFECT_REST",
   "EFFECT_MORNING_SUN", "EFFECT_SYNTHESIS", "EFFECT_MOONLIGHT",
-  "EFFECT_SWALLOW", "EFFECT_WISH",
 ]);
+const HEAL_UNMODELED_EFFECTS = new Set(["EFFECT_SWALLOW", "EFFECT_WISH"]);
+
+// Surfaced so the UI shows its "Did it heal?" control for exactly these six
+// (and, per the widget's design, only on the You side).
+export function isDrivableHealMove(moveName) {
+  return DRIVABLE_HEAL_EFFECTS.has(MOVES[moveName]?.effect);
+}
 
 // Benign filler for the non-scored side: occupies the foe slot so resolveTurn
 // runs a real turn. Its own outcome is irrelevant (never read) and it is weak
@@ -47,6 +64,22 @@ const HEAL_HP_DEPENDENT = new Set([
 // actor's action fragment and drop out of the matched set. Must be an engine-
 // handled move (Splash is NOT — EFFECT_SPLASH has no executor and throws).
 const FILLER_MOVE = "Tackle";
+
+// Non-damaging self-target filler used ONLY on the heal-drive path. A DAMAGING
+// filler (Tackle) contaminates the full-HP "failed" drive: if the faster foe's
+// hit lands it drops the actor below full, so the heal then SUCCEEDS (+1) —
+// while a miss leaves it at full and the heal FAILS (-2), a genuine [+1,-2]
+// branch DISAGREEMENT the value-agreement guard would (correctly) throw on.
+// Harden (power 0, accuracy null -> no hit/miss split, targets the foe's OWN
+// Defense and never the actor's HP) leaves the actor's HP set solely by the
+// setpoint below, collapsing both branches to a single clean match (matched=1).
+const HEAL_FILLER_MOVE = "Harden";
+// HP setpoints that SELECT the reported heal branch. Full HP -> the executor
+// returns "failed"; any sub-full HP -> the heal succeeds. 50 is an arbitrary
+// sub-full value — safe precisely because +1 is HP-independent (see above), so
+// which sub-full number we pick never affects the banked Skill.
+const HEAL_HP_FAILED = 100;
+const HEAL_HP_HEALED = 50;
 
 // Foe move used to force a Protect-block of the ACTOR's move. It must be a real
 // Protect/Detect the foe actually USES this turn: `oppProtected`/`youProtected`
@@ -137,14 +170,27 @@ function scoreSide(actorSide, actorMon, foeMon, sideReport) {
   const isYou = actorSide === "you";
   const you = isYou ? actorMon : foeMon;
   const opp = isYou ? foeMon : actorMon;
-  // The foe uses the benign filler — unless the actor reported a Protect-block,
-  // in which case the foe must actually Detect to make the engine block the
-  // actor's move (the pre-set flag is wiped at turn start).
-  const foeMove = sideReport.outcome === OUTCOME.PROTECT ? FOE_PROTECT_MOVE : FILLER_MOVE;
+
+  // HP-dependent heal reported as a HIT (with a "Did it heal?" answer): drive
+  // the SELECTED branch rather than the default full-HP one. Requires the
+  // non-damaging filler (so the actor's HP is set solely by the setpoint) plus
+  // an actor-HP override that reaches the reported branch (full -> failed,
+  // sub-full -> healed). Any other outcome/move keeps the standard drive.
+  const isHealDrive = sideReport.outcome === OUTCOME.HIT && isDrivableHealMove(sideReport.move);
+
+  // The foe uses the benign filler — the NON-DAMAGING one on a heal drive, else
+  // Tackle — unless the actor reported a Protect-block, in which case the foe
+  // must actually Detect to make the engine block the actor's move (the pre-set
+  // flag is wiped at turn start).
+  const foeMove = isHealDrive
+    ? HEAL_FILLER_MOVE
+    : sideReport.outcome === OUTCOME.PROTECT ? FOE_PROTECT_MOVE : FILLER_MOVE;
   const yourMove = isYou ? sideReport.move : foeMove;
   const oppMove = isYou ? foeMove : sideReport.move;
 
-  const s = buildStartState({ you, opp }); // scores 0; HP defaults 100/100 (Mind/Skill are HP-independent)
+  const startOpts = { you, opp }; // scores 0; HP defaults 100/100 (Mind/Skill are HP-independent)
+  if (isHealDrive) startOpts[isYou ? "yourHpPct" : "oppHpPct"] = sideReport.healed ? HEAL_HP_HEALED : HEAL_HP_FAILED;
+  const s = buildStartState(startOpts);
   applySideConditions(s, actorSide, sideReport);
 
   const branches = resolveTurn({ you, opp }, s, yourMove, oppMove);
@@ -169,8 +215,20 @@ function validateReport(report) {
   for (const side of ["you", "opp"]) {
     const r = report[side];
     if (!r || !r.move || !r.outcome) throw new Error(`scorekeeper: report.${side} needs { move, outcome }.`);
-    if (r.outcome === OUTCOME.HIT && HEAL_HP_DEPENDENT.has(MOVES[r.move]?.effect)) {
-      throw new Error(`scorekeeper: "${r.move}" is a heal move whose Skill is HP-dependent — the model assumes full HP, where it "fails". Cannot score without HP inference (out of scope). Score this side by hand: Mind +0, Skill +1 if it healed (or -2 if it truly failed at full HP).`);
+    if (r.outcome !== OUTCOME.HIT) continue;
+    const effect = MOVES[r.move]?.effect;
+    if (HEAL_UNMODELED_EFFECTS.has(effect)) {
+      // Deliberately NOT the drivable-heal path: no engine executor exists, and
+      // success is not HP-gated at cast (Swallow is stockpile-gated, Wish heals
+      // a later turn). Kept hand-scored — message spells out WHY it differs so
+      // it's not mistaken for the silent -2/+1 bug the heal control resolves.
+      throw new Error(`scorekeeper: "${r.move}" (${effect}) is NOT the HP-dependent-heal case — it has no engine executor and its success is stockpile-gated (Swallow) / delayed to a later turn (Wish), not HP-gated at cast. Score this side by hand: Mind +0, Skill +1 if it worked, -2 if it failed.`);
+    }
+    if (DRIVABLE_HEAL_EFFECTS.has(effect) && typeof r.healed !== "boolean") {
+      // A drivable heal reported as a HIT but with no "Did it heal?" answer.
+      // The You-side control supplies it; an opponent's heal has no control
+      // (the widget is You-side only), so it lands here and is hand-scored.
+      throw new Error(`scorekeeper: "${r.move}" is an HP-dependent heal — its Skill needs the "Did it heal?" answer to pick the branch. The heal control is You-side only; score an opponent's heal by hand (Mind +0, Skill +1 if it healed, -2 if it failed).`);
     }
   }
   if (UNSUPPORTED_OPP.has(report.opp.outcome)) {

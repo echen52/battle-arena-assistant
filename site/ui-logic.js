@@ -115,7 +115,7 @@ export function scoreTurn(youConfig, oppConfig, report) {
 
 // Re-export the scorekeeper's report vocabulary so app.js (which imports only
 // from this boundary module) can build reports and grey the unsupported cases.
-export { OUTCOME, PHASE, UNSUPPORTED_OPP } from "../battle_arena_sim/scorekeeper.js";
+export { OUTCOME, PHASE, UNSUPPORTED_OPP, isDrivableHealMove } from "../battle_arena_sim/scorekeeper.js";
 
 // Two-turn (Dive/Fly/Dig/Bounce) detection for the report UI's phase control.
 export function isTwoTurnMove(move) {

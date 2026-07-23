@@ -269,16 +269,22 @@
           <span class="sk-col-head">Move</span>
           <span class="sk-col-head">Outcome</span>
           <span id="skPhaseHead" class="sk-col-head" hidden>Phase</span>
+          <span id="skHealHead" class="sk-col-head" hidden>Did it heal?</span>
 
           <span class="sk-side">You</span>
           <select id="skYouMove" class="sk-move"></select>
           <select id="skYouOutcome" class="sk-outcome"></select>
           <select id="skYouPhase" class="sk-phase" hidden></select>
+          <select id="skYouHeal" class="sk-heal" hidden>
+            <option value="yes">Healed</option>
+            <option value="no">Failed</option>
+          </select>
 
           <span class="sk-side">Opp</span>
           <select id="skOppMove" class="sk-move"></select>
           <select id="skOppOutcome" class="sk-outcome"></select>
           <select id="skOppPhase" class="sk-phase" hidden></select>
+          <span class="sk-heal-cell" aria-hidden="true"></span>
         </div>
         <div class="sk-actions">
           <button id="skRecord" type="button" class="btn-primary">Record turn</button>
