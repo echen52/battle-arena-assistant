@@ -1400,6 +1400,112 @@ const AI_HANDLERS = {
     },
     checkViability: mirrorCoatViability,
   },
+  // ── LOCKSTEP PORT CAMPAIGN, BATCH 1 (2026-08-03) ──────────────────────
+  // The "silent-generic" class (dispatch-table audit 2026-08-03): damaging
+  // effects with dedicated source AI routines that previously scored through
+  // the generic path with ZERO handler delta — no throw, no warning. The
+  // remainder of the class is pinned by palace_predictor_sim/
+  // test_dispatch_coverage.mjs's KNOWN_AI_DISPATCH_GAPS registry. Handler
+  // text below is IDENTICAL in battle_arena_sim/logic.js and
+  // palace_predictor_sim/ai_engine.mjs (the lockstep invariant, enforced by
+  // test_fork_equivalence.mjs).
+
+  // AI_CBM_Explosion (data/battle_ai_scripts.s:224-232, dispatched :106) +
+  // AI_CV_SelfKO (:800-826, dispatched :656). EFFECT_MEMENTO also dispatches
+  // to AI_CV_SelfKO in source (:747) but is a status effect that still
+  // throws unhandled (Palace ledger) — this entry is EFFECT_EXPLOSION only.
+  // CBM (:224-232):
+  //   if_type_effectiveness AI_EFFECTIVENESS_x0, Score_Minus10
+  //   get_ability AI_TARGET / if_equal ABILITY_DAMP, Score_Minus10
+  //   count_usable_party_mons AI_USER   / if_not_equal 0, End
+  //   count_usable_party_mons AI_TARGET / if_not_equal 0, Score_Minus10
+  //   goto Score_Minus1
+  // CV (:800-826), stat_level encodings converted to this engine's DISPLAY
+  // stage convention (game 6 = display 0, so "less_than 7" = stage < +1,
+  // "less_than 10" = stage < +4); if_random_less_than N jumps AWAY with
+  // p N/256, so the fall-through score fires with p (256-N)/256:
+  //   :800-805  evasion block — target evasion >= +1: score -1; then
+  //             evasion >= +4: another -1 with p 128/256
+  //   :806-810  user HP >= 80 && user faster-or-tied: -3 with p 206/256
+  //   :811-824  otherwise the encouragement chain: HP > 50 (incl. the
+  //             HP >= 80 target-faster entry): -1 with p 206/256;
+  //             30 < HP <= 50: +1 with p 128/256; HP <= 30: +1 with
+  //             p 128/256 AND +1 with p 206/256 (independent rolls).
+  // The evasion block and the chain use independent rolls — convolved.
+  EFFECT_EXPLOSION: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Damp") return -10;
+      if (ctx.userUsablePartyMons !== 0) return 0;
+      if (ctx.targetUsablePartyMons !== 0) return -10;
+      return -1;
+    },
+    checkViability: (ctx) => {
+      const ev = ctx.targetStages.evasion;
+      const evasionPart =
+        ev < 1 ? [{ p: 1, delta: 0 }]
+        : ev < 4 ? [{ p: 1, delta: -1 }]
+        : [{ p: 128 / 256, delta: -1 }, { p: 128 / 256, delta: -2 }];
+      let chain;
+      if (ctx.userHpPct >= 80 && !ctx.targetFaster) {
+        chain = [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -3 }];
+      } else if (ctx.userHpPct > 50) {
+        chain = [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -1 }];
+      } else if (ctx.userHpPct > 30) {
+        chain = [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
+      } else {
+        chain = [
+          { p: (128 / 256) * (50 / 256), delta: 0 },
+          { p: (128 / 256) * (206 / 256) + (128 / 256) * (50 / 256), delta: 1 },
+          { p: (128 / 256) * (206 / 256), delta: 2 },
+        ];
+      }
+      const out = [];
+      for (const a of evasionPart) for (const b of chain) out.push({ p: a.p * b.p, delta: a.delta + b.delta });
+      return out;
+    },
+  },
+
+  // AI_CBM_DreamEater (:242-245, dispatched :107) + AI_CV_DreamEater
+  // (:828-835, dispatched :657). CBM: `if_not_status AI_TARGET,
+  // STATUS1_SLEEP, Score_Minus8` — Score_Minus8 (:616-618) ENDS the script,
+  // so the x0 check only ever runs against a sleeping target. CV: -1 on a
+  // resisted (x0.25/x0.5) hit. This closes the change-#10 deferral note
+  // ("AI_CBM_DreamEater is NOT ported — the AI over-picks Dream Eater vs an
+  // awake target") — the -8 awake gate now scores.
+  EFFECT_DREAM_EATER: {
+    checkBadMove: (ctx) => {
+      if (ctx.targetStatus !== "sleep") return -8;
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      return eff === 0.25 || eff === 0.5 ? -1 : 0;
+    },
+  },
+
+  // AI_CBM_DamageDuringSleep (:426-428, dispatched :158; source shares the
+  // routine with EFFECT_SLEEP_TALK, which remains unhandled/throwing — see
+  // the Palace ledger) + AI_CV_Snore (:1785-1787): unconditional score +2.
+  // ctx.userStatus (the opponent's OWN major status) added this batch.
+  EFFECT_SNORE: {
+    checkBadMove: (ctx) => (ctx.userStatus !== "sleep" ? -8 : 0),
+    checkViability: () => 2,
+  },
+
+  // AI_CBM_FutureSight (:500-504, dispatched :184): -12 if a delayed attack
+  // is already queued on EITHER side (SIDE_STATUS_FUTUREATTACK), else +5.
+  // No AI_CV_FutureSight exists in source. The queued state is NOT part of
+  // the modeled battle state (no delayed-attack tracking anywhere in this
+  // engine) — the two ctx flags default false in chooseOpponentMoves,
+  // registering the gap honestly the same way targetCantEscape does; a fresh
+  // state therefore always scores the real +5.
+  EFFECT_FUTURE_SIGHT: {
+    checkBadMove: (ctx) =>
+      ctx.futureSightQueuedOnUserSide || ctx.futureSightQueuedOnTargetSide ? -12 : 5,
+  },
+
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
   // needed). If an OPPONENT ever carries one, chooseOpponentMoves will throw
   // naming the exact effect — port its AI_CV_*/AI_CBM_* handler from
@@ -1924,6 +2030,14 @@ function chooseOpponentMoves(opp, you, state) {
     // AI_CBM_OneHitKO's if_level_cond check (EFFECT_OHKO) — the only handler
     // that needs either mon's raw level.
     userLevel: opp.level, targetLevel: you.level,
+    // Batch-1 lockstep additions: the opponent's OWN major status
+    // (AI_CBM_DamageDuringSleep's `if_not_status AI_USER, STATUS1_SLEEP`
+    // check for EFFECT_SNORE), and the Future Sight queued-state flags —
+    // delayed attacks are NOT modeled state, so these are always false here
+    // (see EFFECT_FUTURE_SIGHT's handler comment; same honest-default
+    // convention as targetCantEscape above).
+    userStatus: state.oppStatus,
+    futureSightQueuedOnUserSide: false, futureSightQueuedOnTargetSide: false,
   };
 
   const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, ctx) }));
