@@ -1506,6 +1506,123 @@ const AI_HANDLERS = {
       ctx.futureSightQueuedOnUserSide || ctx.futureSightQueuedOnTargetSide ? -12 : 5,
   },
 
+  // ── LOCKSTEP PORT CAMPAIGN, BATCH 2 (2026-08-03) ──────────────────────
+  // Same class, same lockstep rules as batch 1 above.
+
+  // AI_CBM_HighRiskForDamage (:368-376, dispatched for EFFECT_SUPERPOWER at
+  // :200 — same shared routine as EFFECT_RETURN/EFFECT_FRUSTRATION/
+  // EFFECT_LEVEL_DAMAGE/EFFECT_COUNTER/EFFECT_MIRROR_COAT above, mirrored
+  // verbatim) + AI_CV_Superpower (:2392-2404, dispatched :754):
+  //   if_type_effectiveness x0_25 / x0_5 -> score -1
+  //   if_stat_level_less_than AI_USER, STAT_ATK, DEFAULT_STAT_STAGE -> -1
+  //     (game encoding 6 = display 0: "own Atk stage < 0")
+  //   if_target_faster -> Superpower2 (:2400): -1 unless user HP < 60
+  //   else (user faster-or-tied): -1 if user HP > 40
+  // Deterministic — no random splits anywhere in the routine. This is the
+  // batch-1 Regirock-probe finding, now landed: at full HP Superpower is
+  // discouraged in virtually every state.
+  EFFECT_SUPERPOWER: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -1;
+      if (ctx.userAtkStage < 0) return -1;
+      if (ctx.targetFaster) return ctx.userHpPct < 60 ? 0 : -1;
+      return ctx.userHpPct > 40 ? -1 : 0;
+    },
+  },
+
+  // AI_CBM_HighRiskForDamage (dispatched for EFFECT_RECHARGE at :151) +
+  // AI_CV_Recharge (:1588-1599, dispatched :710) — identical shape to
+  // AI_CV_Superpower minus the Atk-stage check: resisted (x0_25/x0_5) -> -1;
+  // target faster: -1 unless user HP < 60; user faster-or-tied: -1 if user
+  // HP > 40. Deterministic. (Hyper Beam & co are discouraged at high HP —
+  // the AI saves them for the endgame.)
+  EFFECT_RECHARGE: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -1;
+      if (ctx.targetFaster) return ctx.userHpPct < 60 ? 0 : -1;
+      return ctx.userHpPct > 40 ? -1 : 0;
+    },
+  },
+
+  // AI_CBM_HighRiskForDamage (dispatched for EFFECT_FLAIL at :160) +
+  // AI_CV_Flail (:1817-1838, dispatched :720). SCORING side only — the
+  // damage side (the HP-fraction power tiers) is already special-cased in
+  // calcDamage. Branch walk (user = the Flail/Reversal user; percent HP):
+  //   user faster-or-tied (:1818-1822): HP > 33 -> -1; 20 < HP <= 33 -> 0;
+  //     HP < 8 -> +1 then the Flail3 roll; 8 <= HP <= 20 -> Flail3 roll
+  //   target faster (:1824-1827): HP > 60 -> -1; 40 < HP <= 60 -> 0;
+  //     HP <= 40 -> Flail3 roll
+  //   Flail3 roll (:1831-1834): +1 with p 156/256 (if_random_less_than 100
+  //   jumps away with p 100/256)
+  EFFECT_FLAIL: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const roll = [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 1 }];
+      const plusOne = roll.map((x) => ({ p: x.p, delta: x.delta + 1 }));
+      if (!ctx.targetFaster) {
+        if (ctx.userHpPct > 33) return -1;
+        if (ctx.userHpPct > 20) return 0;
+        if (ctx.userHpPct < 8) return plusOne;
+        return roll;
+      }
+      if (ctx.userHpPct > 60) return -1;
+      if (ctx.userHpPct > 40) return 0;
+      return roll;
+    },
+  },
+
+  // AI_CV_Revenge (:2444-2454, dispatched :757). No CBM entry for
+  // EFFECT_REVENGE exists in source. Target asleep / infatuated / confused
+  // -> -2 (a disrupted target likely won't have hit first, so Revenge stays
+  // at base power); otherwise -2 with p 180/256, +2 with p 76/256.
+  // ctx.targetInfatuated / ctx.targetConfused are read exactly as every
+  // other handler reads them (both are effectively always false today:
+  // targetInfatuated via the ctx literal's later duplicate key, and
+  // targetConfused hardcoded — preserved engine limitations, not new ones).
+  EFFECT_REVENGE: {
+    checkViability: (ctx) => {
+      if (ctx.targetStatus === "sleep" || ctx.targetInfatuated || ctx.targetConfused) return -2;
+      return [{ p: 180 / 256, delta: -2 }, { p: 76 / 256, delta: 2 }];
+    },
+  },
+
+  // AI_CV_SpeedDownFromChance (:1136-1140, dispatched :706) — the MOVE GATE
+  // is source, ported exactly: only three of the six EFFECT_SPEED_DOWN_HIT
+  // carriers dispatch onward; the rest hit a bare `end` and score ZERO here:
+  //   if_move MOVE_ICY_WIND, AI_CV_SpeedDown    (:1137)
+  //   if_move MOVE_ROCK_TOMB, AI_CV_SpeedDown   (:1138)
+  //   if_move MOVE_MUD_SHOT, AI_CV_SpeedDown    (:1139)
+  //   end                                       (:1140)
+  // The handler therefore keys on MOVE IDENTITY via ctx.moveName (added to
+  // the per-move ctx this batch), not on the effect alone — Bubble Beam/
+  // Bubble/Constrict must stay at zero.
+  // AI_CV_SpeedDown (:1142-1151): user faster-or-tied -> -3 deterministic
+  // (the speed drop is redundant when already faster); target faster -> +2
+  // with p 186/256 (if_random_less_than 70 jumps away with p 70/256).
+  EFFECT_SPEED_DOWN_HIT: {
+    checkViability: (ctx) => {
+      if (ctx.moveName !== "Icy Wind" && ctx.moveName !== "Rock Tomb" && ctx.moveName !== "Mud Shot") return 0;
+      if (!ctx.targetFaster) return -3;
+      return [{ p: 70 / 256, delta: 0 }, { p: 186 / 256, delta: 2 }];
+    },
+  },
+
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
   // needed). If an OPPONENT ever carries one, chooseOpponentMoves will throw
   // naming the exact effect — port its AI_CV_*/AI_CBM_* handler from
@@ -1774,7 +1891,10 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
   // by handlers like EFFECT_PARALYZE that run a real type-chart check against
   // the move actually being scored — ctx itself is built once per opponent
   // moveset in chooseOpponentMoves, so it can't carry a single move's type).
-  const moveCtx = { ...ctx, moveType: move.type };
+  // moveName added in batch 2 for AI_CV_SpeedDownFromChance's if_move gate
+  // (EFFECT_SPEED_DOWN_HIT is the first handler that must key on move
+  // identity, not effect — see its handler comment).
+  const moveCtx = { ...ctx, moveType: move.type, moveName };
 
   if (handler?.checkBadMove) {
     // Almost every checkBadMove is a plain scalar (AI_CheckBadMove has no
