@@ -1623,6 +1623,265 @@ const AI_HANDLERS = {
     },
   },
 
+  // ── LOCKSTEP PORT CAMPAIGN, BATCH 3 (2026-08-04) ──────────────────────
+  // Same class, same lockstep rules as batches 1-2 above — the tier-2
+  // conditionals from the 2026-08-03 dispatch-table audit. BUGFIX is
+  // commented out in this repo (pokeemerald config.h:48), so every #ifdef
+  // encountered below ports the #else (vanilla, shipped-cartridge) branch —
+  // same standard as the Counter6 note above: reproduce, don't correct.
+
+  // AI_CV_BrickBreak (:2457-2464, dispatched :758): if_side_affecting
+  // AI_TARGET, SIDE_STATUS_REFLECT -> +1, else 0. Deterministic. The gate
+  // is the player's LIVE Reflect screen (ctx.targetHasReflect, added this
+  // batch — the same modeled side-status calcDamage's screenActive halving
+  // already consumes), not the mere presence of Reflect in the moveset.
+  EFFECT_BRICK_BREAK: {
+    checkViability: (ctx) => (ctx.targetHasReflect ? 1 : 0),
+  },
+
+  // AI_CV_ChargeUpMove (:2184-2195) — ONE routine dispatched for three live
+  // effects: EFFECT_RAZOR_WIND (:683), EFFECT_SKY_ATTACK (:707),
+  // EFFECT_SOLAR_BEAM (:740). (EFFECT_SKULL_BASH :739 shares it too — zero
+  // carriers in both pools, stays in KNOWN_AI_DISPATCH_GAPS' academic tier,
+  // deliberately NOT ported.) Branch walk:
+  //   if_type_effectiveness x0_25 / x0_5 (:2185-2186) -> -2
+  //   if_has_move_with_effect AI_TARGET, EFFECT_PROTECT (:2187) -> -2
+  //     (Cmd_if_has_move_with_effect's AI_TARGET arm reads the target's
+  //     BATTLE_HISTORY revealed moves, with a vanilla loop-guard quirk:
+  //     each slot's guard checks the AI'S OWN move being nonzero, not the
+  //     history entry — src/battle_ai_script_commands.c, the routine's own
+  //     BUG comment. Under this engine's full-knowledge convention for the
+  //     target's moveset (see targetHasDreamEaterOrNightmare) and 4-move
+  //     frontier sets, both quirks collapse to "the target owns a
+  //     Protect/Detect-effect move": ctx.targetHasProtectEffectMove,
+  //     added this batch.)
+  //   if_hp_more_than AI_USER, 38 (:2188) -> end (0); else -1.
+  // Deterministic. The checkViability text is duplicated verbatim across
+  // the three entries below (same convention as batch 2's triplicated
+  // AI_CBM_HighRiskForDamage text) — keep them byte-identical.
+  EFFECT_SOLAR_BEAM: {
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -2;
+      if (ctx.targetHasProtectEffectMove) return -2;
+      return ctx.userHpPct > 38 ? 0 : -1;
+    },
+  },
+
+  // EFFECT_RAZOR_WIND: AI_CV_ChargeUpMove (see EFFECT_SOLAR_BEAM above)
+  // PLUS AI_CBM_HighRiskForDamage (:368-376, dispatched :128 — the only
+  // ChargeUpMove effect with a CheckBadMove entry; SOLAR_BEAM and
+  // SKY_ATTACK have none, so checkBadMove lives on this entry alone).
+  EFFECT_RAZOR_WIND: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -2;
+      if (ctx.targetHasProtectEffectMove) return -2;
+      return ctx.userHpPct > 38 ? 0 : -1;
+    },
+  },
+
+  // EFFECT_SKY_ATTACK: AI_CV_ChargeUpMove only (see EFFECT_SOLAR_BEAM
+  // above for the full walk and the duplication convention).
+  EFFECT_SKY_ATTACK: {
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -2;
+      if (ctx.targetHasProtectEffectMove) return -2;
+      return ctx.userHpPct > 38 ? 0 : -1;
+    },
+  },
+
+  // AI_CV_SemiInvulnerable (:2197-2241 + AI_CV_SandstormResistantTypes
+  // :2243-2247, dispatched :741). No CheckBadMove entry. Branch walk:
+  //   Target owns a Protect-effect move (:2198 —
+  //   if_doesnt_have_move_with_effect's AI_TARGET arm reads BATTLE_HISTORY
+  //   cleanly, no loop-guard quirk this time; same full-knowledge collapse
+  //   as ChargeUpMove above: ctx.targetHasProtectEffectMove) -> -1 flat.
+  //   Else (:2205-2207): target toxic'd / cursed / leech-seeded ->
+  //   TryEncourage.
+  //   Else get_weather — VANILLA SWAPPED-WEATHER BUG PRESERVED: source
+  //   carries its own comment ("@ BUG: The scripts for checking type-
+  //   resistance to weather for semi-invulnerable moves are swapped",
+  //   :2201-2202) and an #ifdef BUGFIX (:2208-2215); config.h:48 ships the
+  //   #else branch, which is what is ported here:
+  //     HAIL (:2213) -> checks the USER against the SANDSTORM-resistant
+  //       type list (Ground/Rock/Steel, :2243-2247) -> TryEncourage on hit;
+  //     SANDSTORM (:2214) -> checks the USER for TYPE_ICE -> TryEncourage.
+  //   (Net effect, per the source comment: the AI is encouraged to stall
+  //   in weather it is actually taking chip damage from. Do NOT "fix".)
+  //   Miss/no-weather paths fall to AI_CV_SemiInvulnerable5 (:2230-2235):
+  //   target faster -> end (0); target's last used move was Lock On
+  //   (gLastMoves — ctx.targetLastMoveWasLockOn, the same battle-wide
+  //   tracker AI_CV_Counter/MirrorCoat read) -> end (0); else TryEncourage.
+  //   TryEncourage (:2237-2239): if_random_less_than 80 -> end, else +1 —
+  //   ONE roll, +1 @ 176/256, never stacked across the entry paths.
+  EFFECT_SEMI_INVULNERABLE: {
+    checkViability: (ctx) => {
+      if (ctx.targetHasProtectEffectMove) return -1;
+      const tryEncourage = [{ p: 80 / 256, delta: 0 }, { p: 176 / 256, delta: 1 }];
+      if (ctx.targetToxicPoisoned || ctx.targetCursed || ctx.targetLeechSeeded) return tryEncourage;
+      if (ctx.currentWeather === "hail") {
+        if (ctx.userTypes.some((t) => t === "Ground" || t === "Rock" || t === "Steel")) return tryEncourage;
+      } else if (ctx.currentWeather === "sandstorm") {
+        if (ctx.userTypes.includes("Ice")) return tryEncourage;
+      }
+      if (ctx.targetFaster) return 0;
+      return ctx.targetLastMoveWasLockOn ? 0 : tryEncourage;
+    },
+  },
+
+  // AI_CV_Facade (:2279-2287, dispatched :749) — VANILLA (non-BUGFIX) form
+  // PRESERVED, cited: #ifdef BUGFIX (:2280-2281) checks AI_USER's status
+  // (the form matching Facade's actual damage doubling); the shipped #else
+  // (:2283) checks AI_TARGET instead — the AI encourages Facade when the
+  // TARGET is in the STATUS1_POISON | STATUS1_BURN | STATUS1_PARALYSIS |
+  // STATUS1_TOXIC_POISON mask, a real vanilla bug (config.h:48). +1 when
+  // the player's status is poison/burn/paralysis, else 0 (sleep and freeze
+  // are outside the mask). This engine's status model does not distinguish
+  // badly-poisoned from poisoned ("poison" covers both) — exact here,
+  // since source fires on regular AND toxic poison alike.
+  EFFECT_FACADE: {
+    checkViability: (ctx) =>
+      ctx.targetStatus === "poison" || ctx.targetStatus === "burn" || ctx.targetStatus === "paralysis" ? 1 : 0,
+  },
+
+  // AI_CV_Overheat (:2572-2584, dispatched :768 — Psycho Boost carries
+  // EFFECT_OVERHEAT too and scores identically). No CheckBadMove entry.
+  //   if_type_effectiveness x0_25 / x0_5 (:2573-2574) -> -1
+  //   target faster (:2578-2579): user HP > 80 -> 0, else -1
+  //   user faster-or-tied (:2575-2577): user HP > 60 -> 0, else -1
+  // Deterministic — the self-nerfing nuke is penalized once the USER is
+  // already weakened (note the keying: own HP, vs Eruption's target-HP
+  // keying just below).
+  EFFECT_OVERHEAT: {
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -1;
+      if (ctx.targetFaster) return ctx.userHpPct > 80 ? 0 : -1;
+      return ctx.userHpPct > 60 ? 0 : -1;
+    },
+  },
+
+  // AI_CV_Eruption (:2492-2504, dispatched :761 — Water Spout carries
+  // EFFECT_ERUPTION too). No CheckBadMove entry.
+  //   if_type_effectiveness x0_25 / x0_5 (:2493-2494) -> -1
+  //   user faster-or-tied (:2495-2497): TARGET HP > 50 -> 0, else -1
+  //   target faster (:2499-2500): TARGET HP > 70 -> 0, else -1
+  // Deterministic — keyed on the TARGET's remaining HP (the family's power
+  // scales with the user's own HP; the AI just avoids spending it on a
+  // nearly-KO'd target), unlike Overheat's own-HP keying above.
+  EFFECT_ERUPTION: {
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -1;
+      if (ctx.targetFaster) return ctx.targetHpPct > 70 ? 0 : -1;
+      return ctx.targetHpPct > 50 ? 0 : -1;
+    },
+  },
+
+  // AI_CV_SmellingSalt (:2313-2320, dispatched :751): target paralyzed ->
+  // +1, else 0. Deterministic. Scoring side only — the damage-doubling and
+  // paralysis-curing execution mechanics are not this handler's concern.
+  EFFECT_SMELLINGSALT: {
+    checkViability: (ctx) => (ctx.targetStatus === "paralysis" ? 1 : 0),
+  },
+
+  // AI_CV_FocusPunch (:2289-2311, dispatched :750) + AI_CBM_HighRiskForDamage
+  // (:368-376, dispatched :196 — same shared routine as batch 2's
+  // SUPERPOWER/RECHARGE/FLAIL, mirrored verbatim). ALL branches ported:
+  //   if_type_effectiveness x0_25 / x0_5 (:2290-2291) -> -1 flat
+  //   target asleep (:2292) -> +1 flat
+  //   target infatuated or confused (:2293-2294) -> AI_CV_FocusPunch3
+  //     (:2305-2307): if_random_less_than 100 -> end (0); else user behind
+  //     a Substitute -> +5 (Score_Plus5, :644-646), no Substitute -> +1
+  //     (falls into ScoreUp1) — ONE 156/256 roll picking the payout size.
+  //   else (:2295-2298): is_first_turn_for(AI_USER) != 0 -> end (0);
+  //     NOT first turn -> +1 @ 156/256 (if_random_less_than 100 -> end).
+  // PARTIAL — that last branch keys on ctx.userPastFirstTurn (added this
+  // batch, default false = conservative/inert; see the ctx comment and
+  // KNOWN_AI_DISPATCH_GAPS' partial entry). Every other branch is live.
+  EFFECT_FOCUS_PUNCH: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+      return 0;
+    },
+    checkViability: (ctx) => {
+      const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
+      if (eff === 0.25 || eff === 0.5) return -1;
+      if (ctx.targetStatus === "sleep") return 1;
+      if (ctx.targetInfatuated || ctx.targetConfused) {
+        return [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: ctx.userHasSubstitute ? 5 : 1 }];
+      }
+      if (!ctx.userPastFirstTurn) return 0;
+      return [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 1 }];
+    },
+  },
+
+  // AI_CV_KnockOff (:2466-2473, dispatched :759) + AI_CBM_TrickAndKnockOff
+  // (:545-548, dispatched :202): target's ability Sticky Hold -> -10.
+  //   if_hp_less_than AI_TARGET, 30 (:2467) -> end (0)
+  //   is_first_turn_for(AI_USER) > 0 (:2468-2469) -> end (0)
+  //   else +1 @ 76/256 (:2470-2471, if_random_less_than 180 -> end).
+  // PARTIAL — the encouragement keys on ctx.userPastFirstTurn (default
+  // false = inert), same treatment as FOCUS_PUNCH above; the Sticky Hold
+  // discouragement and the target-HP gate are live.
+  EFFECT_KNOCK_OFF: {
+    checkBadMove: (ctx) => (ctx.targetAbility === "Sticky Hold" ? -10 : 0),
+    checkViability: (ctx) => {
+      if (ctx.targetHpPct < 30) return 0;
+      if (!ctx.userPastFirstTurn) return 0;
+      return [{ p: 180 / 256, delta: 0 }, { p: 76 / 256, delta: 1 }];
+    },
+  },
+
+  // AI_CV_Pursuit (:2018-2035, dispatched :730). No CheckBadMove entry.
+  //   is_first_turn_for(AI_USER) != 0 (:2019-2020) -> end (0) — NOTE the
+  //   polarity: the encouragement fires on turns AFTER the user's first
+  //   turn out, never on the first turn itself (same gate direction as
+  //   FocusPunch/KnockOff above).
+  //   NOT first turn + target type1 or type2 Ghost or Psychic (:2021-2028)
+  //   -> +1 @ 128/256 (:2031-2033, if_random_less_than 128 -> end).
+  // PARTIAL — the WHOLE routine sits behind ctx.userPastFirstTurn (default
+  // false = inert): ported fully, scoring 0 in every reachable state until
+  // a per-mon first-turn input exists in the state model.
+  EFFECT_PURSUIT: {
+    checkViability: (ctx) => {
+      if (!ctx.userPastFirstTurn) return 0;
+      if (ctx.targetTypes.includes("Ghost") || ctx.targetTypes.includes("Psychic")) {
+        return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
+      }
+      return 0;
+    },
+  },
+
+  // AI_CV_Trap (:1436-1447, dispatched :685 — EFFECT_MEAN_LOOK :723 runs
+  // the SAME routine; this checkViability mirrors EFFECT_MEAN_LOOK's entry
+  // above exactly, keep the two in lockstep). Target already badly
+  // poisoned / cursed / perish-songed / infatuated -> +1 @ 128/256
+  // (if_random_less_than 128 -> end), else 0. Gate liveness (same honest-
+  // default convention as everywhere else in this file):
+  // targetPerishSonged is REAL state (Perish Song's resolution sets it);
+  // targetToxicPoisoned (badly-poisoned not distinguished from poisoned),
+  // targetCursed (Ghost-Curse not modeled) and targetInfatuated (the ctx
+  // literal's later duplicate key pins it false) are honest always-false
+  // defaults today — those branches activate the moment the inputs get
+  // built, same pattern as EFFECT_FUTURE_SIGHT's queued-state flags.
+  EFFECT_TRAP: {
+    checkViability: (ctx) => {
+      if (ctx.targetToxicPoisoned || ctx.targetCursed || ctx.targetPerishSonged || ctx.targetInfatuated) {
+        return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
+      }
+      return 0;
+    },
+  },
+
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
   // needed). If an OPPONENT ever carries one, chooseOpponentMoves will throw
   // naming the exact effect — port its AI_CV_*/AI_CBM_* handler from
@@ -2158,6 +2417,30 @@ function chooseOpponentMoves(opp, you, state) {
     // convention as targetCantEscape above).
     userStatus: state.oppStatus,
     futureSightQueuedOnUserSide: false, futureSightQueuedOnTargetSide: false,
+    // Batch-3 lockstep additions:
+    // if_side_affecting AI_TARGET, SIDE_STATUS_REFLECT (AI_CV_BrickBreak) —
+    // the player's own LIVE Reflect screen, the same modeled side-status
+    // calcDamage's screenActive halving consumes.
+    targetHasReflect: state.youReflectTurns != null,
+    // if_has_move_with_effect / if_doesnt_have_move_with_effect AI_TARGET,
+    // EFFECT_PROTECT (AI_CV_ChargeUpMove / AI_CV_SemiInvulnerable) — the
+    // player's KNOWN moveset, same full-knowledge convention as
+    // targetHasDreamEaterOrNightmare above (see the EFFECT_SOLAR_BEAM
+    // handler comment for the vanilla revealed-moves quirks this collapses).
+    targetHasProtectEffectMove: you.moves.some((m) => MOVES[m]?.effect === "EFFECT_PROTECT"),
+    // is_first_turn_for(AI_USER) — PER-MON first-turn-out state
+    // (gDisableStructs.isFirstTurn: set to 2 at switch-in, decremented at
+    // each turn end, so nonzero exactly through the mon's first action
+    // turn). Derivable from NEITHER engine's state model — see the batch-1
+    // STOP note on KNOWN_AI_DISPATCH_GAPS' EFFECT_FAKE_OUT entry: Arena's
+    // state.turn is the ROUND turn, the Palace predictor's one-turn state
+    // has no switch-in input, and the global-turn proxy is explicitly
+    // forbidden as an approximation. false = "not known to be past its
+    // first turn", the CONSERVATIVE value: every first-turn-gated
+    // encouragement branch (FocusPunch/KnockOff/Pursuit, all registered
+    // partial) stays inert rather than firing on a guess. Flip to true
+    // only via a real per-mon state input.
+    userPastFirstTurn: false,
   };
 
   const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, ctx) }));
