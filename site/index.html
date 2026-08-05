@@ -404,6 +404,21 @@
       </select>
     </div>
 
+    <!-- Batch 4: the per-mon first-turn state input (state.oppMonFirstTurn).
+         Default CHECKED — a fresh 1v1's opponent was just sent out. Drives
+         the AI-scoring first-turn branches (Fake Out's +2/-10, Focus Punch/
+         Knock Off/Pursuit's encouragements); the search's lookahead decays
+         it automatically for simulated turns 2+. Reset restores CHECKED. -->
+    <div class="field-row">
+      <label>First turn</label>
+      <!-- Deliberately NOT class="calc-trigger": checkboxes fire BOTH input
+           and change, and the two delegated calc-trigger listeners would
+           re-solve twice per toggle. An explicit change-only listener in
+           app.js keeps it to exactly one recompute per toggle. -->
+      <input type="checkbox" id="oppFirstTurn" checked title="The opponent was just sent out / switched in this turn (its first turn on the field). Drives the AI's first-turn move preferences — e.g. Fake Out is strongly preferred on the first turn and heavily discouraged after it." />
+      <label for="oppFirstTurn" class="btn btn-field" title="The opponent was just sent out / switched in this turn.">First turn on field</label>
+    </div>
+
     <!-- Opponent-side confusion/attraction are NOT modeled — the engine's
          own turn-resolution hardcodes both to "actor === 'you' ? ... :
          false" (logic.js), i.e. it structurally cannot apply these to the

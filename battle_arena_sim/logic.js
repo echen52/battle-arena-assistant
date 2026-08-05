@@ -1803,9 +1803,9 @@ const AI_HANDLERS = {
   //     (falls into ScoreUp1) — ONE 156/256 roll picking the payout size.
   //   else (:2295-2298): is_first_turn_for(AI_USER) != 0 -> end (0);
   //     NOT first turn -> +1 @ 156/256 (if_random_less_than 100 -> end).
-  // PARTIAL — that last branch keys on ctx.userPastFirstTurn (added this
-  // batch, default false = conservative/inert; see the ctx comment and
-  // KNOWN_AI_DISPATCH_GAPS' partial entry). Every other branch is live.
+  // That last branch keys on ctx.userPastFirstTurn — a REAL state input
+  // since batch 4 (state.oppMonFirstTurn + the search's decay); the
+  // batch-3 partial registry entry is retired. Every branch is live.
   EFFECT_FOCUS_PUNCH: {
     checkBadMove: (ctx) => {
       if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
@@ -1829,9 +1829,9 @@ const AI_HANDLERS = {
   //   if_hp_less_than AI_TARGET, 30 (:2467) -> end (0)
   //   is_first_turn_for(AI_USER) > 0 (:2468-2469) -> end (0)
   //   else +1 @ 76/256 (:2470-2471, if_random_less_than 180 -> end).
-  // PARTIAL — the encouragement keys on ctx.userPastFirstTurn (default
-  // false = inert), same treatment as FOCUS_PUNCH above; the Sticky Hold
-  // discouragement and the target-HP gate are live.
+  // The encouragement keys on ctx.userPastFirstTurn — a real state input
+  // since batch 4, same as FOCUS_PUNCH above (partial entry retired); the
+  // Sticky Hold discouragement and the target-HP gate were always live.
   EFFECT_KNOCK_OFF: {
     checkBadMove: (ctx) => (ctx.targetAbility === "Sticky Hold" ? -10 : 0),
     checkViability: (ctx) => {
@@ -1848,9 +1848,9 @@ const AI_HANDLERS = {
   //   FocusPunch/KnockOff above).
   //   NOT first turn + target type1 or type2 Ghost or Psychic (:2021-2028)
   //   -> +1 @ 128/256 (:2031-2033, if_random_less_than 128 -> end).
-  // PARTIAL — the WHOLE routine sits behind ctx.userPastFirstTurn (default
-  // false = inert): ported fully, scoring 0 in every reachable state until
-  // a per-mon first-turn input exists in the state model.
+  // The WHOLE routine sits behind ctx.userPastFirstTurn — a real state
+  // input since batch 4 (partial entry retired): scores 0 on the mon's
+  // first turn out, rolls on every later simulated turn.
   EFFECT_PURSUIT: {
     checkViability: (ctx) => {
       if (!ctx.userPastFirstTurn) return 0;
@@ -1880,6 +1880,24 @@ const AI_HANDLERS = {
       }
       return 0;
     },
+  },
+
+  // ── LOCKSTEP PORT CAMPAIGN, BATCH 4 (2026-08-04) — CAMPAIGN FINAL ─────
+  // The per-mon first-turn state input exists now (state.oppMonFirstTurn ->
+  // ctx.userPastFirstTurn, decayed by the Arena search's turn advance —
+  // see the ctx comment in chooseOpponentMoves), so the batch-1 STOP is
+  // lifted: Fake Out ports, and the batch-3 partials' first-turn branches
+  // (FOCUS_PUNCH/KNOCK_OFF/PURSUIT above) run live off the real flag.
+
+  // AI_CV_FakeOut (:2249-2251, dispatched :743): unconditional score +2 —
+  // the CV routine itself has NO gate. The first-turn discipline lives
+  // entirely in AI_CBM_FakeOut (:506-509, dispatched :187):
+  // is_first_turn_for(AI_USER) == FALSE -> Score_Minus10. Net effect:
+  // +2 on the user's first turn out, -10 + 2 = -8 net on every later turn
+  // (the CV +2 still runs — CBM and CV are separate phases, both fire).
+  EFFECT_FAKE_OUT: {
+    checkBadMove: (ctx) => (ctx.userPastFirstTurn ? -10 : 0),
+    checkViability: () => 2,
   },
 
   // Every other effect: no handler yet. Fine for YOUR moves (no AI scoring
@@ -2431,16 +2449,18 @@ function chooseOpponentMoves(opp, you, state) {
     // is_first_turn_for(AI_USER) — PER-MON first-turn-out state
     // (gDisableStructs.isFirstTurn: set to 2 at switch-in, decremented at
     // each turn end, so nonzero exactly through the mon's first action
-    // turn). Derivable from NEITHER engine's state model — see the batch-1
-    // STOP note on KNOWN_AI_DISPATCH_GAPS' EFFECT_FAKE_OUT entry: Arena's
-    // state.turn is the ROUND turn, the Palace predictor's one-turn state
-    // has no switch-in input, and the global-turn proxy is explicitly
-    // forbidden as an approximation. false = "not known to be past its
-    // first turn", the CONSERVATIVE value: every first-turn-gated
-    // encouragement branch (FocusPunch/KnockOff/Pursuit, all registered
-    // partial) stays inert rather than firing on a guess. Flip to true
-    // only via a real per-mon state input.
-    userPastFirstTurn: false,
+    // turn). BATCH 4: now a REAL state input (state.oppMonFirstTurn,
+    // default true = just sent out, UI-settable in both tools) replacing
+    // batch 3's conservative always-false placeholder. NOT derived from
+    // state.turn (the ROUND turn — the forbidden global-turn proxy); the
+    // Arena search's lookahead decays it instead: resolveTurn clears
+    // oppMonFirstTurn on every simulated turn advance, so this derivation
+    // yields past-first for lookahead turns 2+ automatically. The Palace
+    // predictor's single-turn call maps the input straight through.
+    // Consumers: EFFECT_FAKE_OUT (batch 4) and the batch-3 ex-partials
+    // FOCUS_PUNCH/KNOCK_OFF/PURSUIT, whose first-turn branches are live
+    // off this flag now.
+    userPastFirstTurn: !state.oppMonFirstTurn,
   };
 
   const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, ctx) }));
@@ -2637,6 +2657,14 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // EFFECT_EXECUTORS.EFFECT_PERISH_SONG for why no countdown/faint field
     // is needed here at all).
     youPerishSonged: false, oppPerishSonged: false,
+    // Batch 4: the opponent mon's PER-MON first-turn-out state
+    // (gDisableStructs.isFirstTurn, the input the batch-1 STOP was blocked
+    // on). true = the mon was just sent out / switched in this turn —
+    // matches a fresh 1v1's reality, hence the default. Consumed ONLY by
+    // the AI-scoring ctx (userPastFirstTurn) — no execution mechanic reads
+    // it. DECAY: resolveTurn clears it at every simulated turn advance, so
+    // lookahead turns 2+ always score as past-first regardless of input.
+    oppMonFirstTurn: true,
     mindYou: 0, mindOpp: 0,
     skillYou: 0, skillOpp: 0,
     // Per-turn damage received, for Counter/Mirror Coat. Reset at the start
@@ -4589,6 +4617,7 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
     if (firstActorHp <= 0 || secondActorHp <= 0) {
       s.turn += 1;
+      s.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
       results.push({ p: fo.p, state: s, label: `${firstLabel} (opp never acts — KO)` });
       continue;
     }
@@ -4604,6 +4633,7 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
       const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
+      s2.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
       results.push({ p: fo.p * so.p, state: s2, label: `${firstLabel}; ${secondLabel}` });
     }
   }

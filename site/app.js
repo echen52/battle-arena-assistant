@@ -308,6 +308,10 @@ function buildMatchState() {
   s.oppStages = readStages(".opp-stage-select");
   s.youStatus = $("youStatus").value || null;
   s.oppStatus = $("oppStatus").value || null;
+  // Batch 4: the opponent's per-mon first-turn-out state — flows through the
+  // denylist into buildStartState like every other base key; the engine's
+  // search decays it for lookahead turns 2+ on its own (logic.js resolveTurn).
+  s.oppMonFirstTurn = $("oppFirstTurn").checked;
   // Confusion/Attraction: independent volatile toggles, stackable with the
   // primary status above and with each other — real, You-side-only engine
   // fields (see HANDOFF.md). Opponent-side toggles are disabled in the
@@ -360,6 +364,9 @@ function updateAttractedGate(youSpecies, oppSpecies) {
 }
 
 function recalculate() {
+  // Instrumentation only (Palace convention, window.__recomputeCount): lets
+  // the headless verification assert exactly-one-recompute per interaction.
+  window.__recalcCount = (window.__recalcCount || 0) + 1;
   const errorEl = $("errorDisplay");
   errorEl.textContent = "";
   let youConfig, oppConfig, matchState;
@@ -570,6 +577,9 @@ $("youImport").addEventListener("click", () => {
 // turskain: one listener on a shared class, not per-field handlers) ──────
 document.addEventListener("change", (e) => { if (e.target.classList.contains("calc-trigger")) recalculate(); });
 document.addEventListener("input", (e) => { if (e.target.classList.contains("calc-trigger")) recalculate(); });
+// First-turn toggle: change-only, exactly one recompute per toggle (see the
+// markup comment for why it isn't a calc-trigger).
+$("oppFirstTurn").addEventListener("change", recalculate);
 
 // ── Scorekeeper (Record a turn) ─────────────────────────────────────────────
 // Report one observed turn; drive the engine (via scoreTurn -> the shared
@@ -739,6 +749,9 @@ $("resetBtn").addEventListener("click", () => {
   document.querySelectorAll(".stage-select, .opp-stage-select").forEach((s) => { s.value = "0"; });
   // Primary status -> Healthy, both sides.
   $("youStatus").value = ""; $("oppStatus").value = "";
+  // First turn on field -> back to its default TRUE (a reset board is a fresh
+  // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.
+  $("oppFirstTurn").checked = true;
   // Volatiles (You side only; the Opp toggles are disabled/inert) -> off.
   $("youConfused").checked = false; $("youAttracted").checked = false;
   // Field: Weather None, all screens off both sides (Spikes stay inert).
