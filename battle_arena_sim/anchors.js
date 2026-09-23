@@ -36,7 +36,31 @@ export const LEADS = {
     ability: "Natural Cure", item: "Leftovers", moves: ["Surf", "Ice Beam", "Thunderbolt", "Recover"] },
   Gengar: { species: "Gengar", level: 50, nature: "Timid", evs: { spa: 252, spe: 252 },
     ability: "Levitate", item: "Leftovers", moves: ["Shadow Ball", "Thunderbolt", "Ice Punch", "Psychic"] },
+  // PANEL v2 addition. The first five leads cannot inflict a major status on
+  // the opponent at all, which made a whole CLASS of mechanic structurally
+  // unsweepable: Guts, Marvel Scale and anything else gated on `status1` could
+  // never fire in any measurement, so B7a landed all three with zero movers and
+  // no anchor could guard them. Arcanine carries Will-O-Wisp, so burn -- and
+  // therefore that whole class -- is reachable.
+  //
+  // Flash Fire, NOT Intimidate, deliberately: Arcanine's other ability would
+  // have put a second Intimidate in the panel and confounded every future
+  // measurement with the one the panel already has on Salamence.
+  // ExtremeSpeed and Crunch give it real PHYSICAL damage, which is what Marvel
+  // Scale and the burn-halving path need in order to show up at all.
+  Arcanine: { species: "Arcanine", level: 50, nature: "Adamant", evs: { atk: 252, spe: 252 },
+    ability: "Flash Fire", item: "Leftovers", moves: ["Will-O-Wisp", "ExtremeSpeed", "Flamethrower", "Crunch"] },
 };
+
+// PANEL VERSION. Bumped whenever the lead set changes, so a sweep taken before
+// and after a change is never silently compared cell-for-cell -- the cell COUNT
+// changes (5 leads x 552 = 2,760 at v1, 6 x 552 = 3,312 at v2) and a diff that
+// does not know that will report the whole new column as "gained".
+//
+// v1: Metagross, Salamence, Snorlax, Starmie, Gengar. Every per-class number in
+//     phase-b-log.md up to and including Intimidate was measured on v1.
+// v2: + Arcanine, for the reason on its entry above.
+export const PANEL_VERSION = 2;
 
 // ── the canonical anchor ───────────────────────────────────────────────────
 // Metagross vs Umbreon 4, fresh 100/100. A STABILITY anchor (CLAUDE.md
@@ -255,12 +279,27 @@ export const B2A = {
 // Fat. "A modifier is present" and "that modifier moved the number" are
 // different claims, and only the second one is recorded here.
 //
-// KNOWN BLIND SPOT, named rather than left implicit: Guts, Hustle, Huge Power
-// and Marvel Scale are implemented by B7a but cause ZERO movers across the
-// 5-lead continuity sweep, so no anchor in this table can guard them. Their
-// only guards are the unit-level probes in test-b7a-damage-modifiers.js. A
-// lead panel that can burn or paralyse its opponent would expose Guts and
-// Marvel Scale; the current panel cannot.
+// KNOWN BLIND SPOT -- and the first version of this note OVERSTATED IT. It said
+// Guts, Hustle, Huge Power and Marvel Scale were all structurally unsweepable.
+// What was actually true is narrower: none of B7a's 106 movers was ATTRIBUTED to
+// those four. That is a different claim from "the panel cannot see them", and
+// generalising it from a single lead was wrong.
+//
+// The right probe is ability-present vs ability-neutralised, per lead. Measured
+// over the whole Lv50 pool:
+//
+//   ability        panel v1   panel v2   where
+//   Guts                  2         22   Gengar 2, and Arcanine 20 once burn exists
+//   Hustle               13         16   visible on EVERY lead, always was
+//   Huge Power            5          7   visible on 4 of 6 leads, always was
+//   Marvel Scale          0          0   GENUINELY unsweepable -- see below
+//
+// So the panel-v2 bump is what made GUTS properly visible (2 -> 22); Hustle and
+// Huge Power were never blind. MARVEL SCALE remains at zero on every lead: all
+// five carriers are Milotic, and no line the search reaches burns a Milotic and
+// then hits it physically inside three turns. It is proven live at the unit
+// level instead -- calcDamage gives 49 clean and 33 burned against Milotic 1 --
+// and that probe is its only guard.
 //
 // `pre` is the pre-B7a value and is HISTORY, never asserted. `move`/`winProb`
 // are current and ARE asserted. `ability` is the one the sweep resolved

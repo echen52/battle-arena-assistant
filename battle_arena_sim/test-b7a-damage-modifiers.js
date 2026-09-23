@@ -291,11 +291,15 @@ console.log("-- PART 7: MODIFIER_ANCHORS -- one per CAUSAL mechanism (amendment 
   console.log(`   ${Object.keys(MODIFIER_ANCHORS).length} anchors asserted, covering ${mechanisms.size} distinct causal mechanisms`);
   // The blind spot, asserted so it cannot be forgotten: these four are
   // implemented but move nothing in the sweep, so nothing here guards them.
+  // These four have no ANCHOR. That is all this asserts -- an earlier version of
+  // this note also claimed they were invisible to the panel, which was wrong for
+  // three of them (see anchors.js's MODIFIER_ANCHORS header for the measured
+  // per-lead visibility).
   for (const blind of ["Guts", "Hustle", "Huge Power", "Marvel Scale"]) {
     ok(![...mechanisms].some((m) => m.includes(blind) && !m.startsWith("item AND ability")),
       `${blind} is recorded as unguarded by an anchor, but a MODIFIER_ANCHORS row now claims it -- update the blind-spot note`);
   }
-  console.log("   blind spot held: Guts, Hustle, Huge Power and Marvel Scale still have no anchor, only PART 2's probes");
+  console.log("   no MODIFIER_ANCHORS row guards Guts, Hustle, Huge Power or Marvel Scale; PART 2's probes do");
 }
 
 console.log();
