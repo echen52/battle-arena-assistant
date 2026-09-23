@@ -2,8 +2,9 @@
 // B7c part 2: the hold effects that enumerate as WEIGHTED BRANCHES, and the
 // collapse rule that keeps them from doubling the whole tree.
 //
-//   Quick Claw   src/battle_main.c:4653, :4687   one shared draw per TURN
-//   Focus Band   src/battle_script_commands.c:1677  one roll per HIT
+//   Quick Claw   src/battle_main.c:4653, :4687      one shared draw per TURN
+//   Focus Band   src/battle_script_commands.c:1677   one roll per HIT
+//   Speed ties   src/battle_main.c:4728, :4749       Random() & 1, a clean 50/50
 //
 // THE COLLAPSE RULE, applied identically to both: branch ONLY where the proc
 // and the no-proc outcome actually differ. Quick Claw that would not change who
@@ -132,6 +133,42 @@ console.log("-- PART 3: Focus Band is Substitute-gated, and power-0 moves never 
   const withFB = resolveTurn({ you: hitter, opp }, statusState, "Shadow Ball", "Rest");
   ok(withFB.length > 0, "sanity: a damaging move still resolves");
   console.log("   Substitute suppresses the branch; only damaging moves can branch at all");
+}
+
+console.log();
+console.log("-- PART 4: an EXACT speed tie is a 0.5 / 0.5 branch --");
+{
+  // Source: `if (speedBattler1 == speedBattler2 && Random() & 1) strikesFirst = 2`
+  // (src/battle_main.c:4728, repeated verbatim at :4749 for the priority-zero
+  // arm). Callers test GetWhoStrikesFirst truthily, so 2 means "battler 2 goes
+  // first" -- the tie is a clean coin flip. This engine used to hand every tie
+  // to the player.
+  const mk = (spe) => buildMon({ species: "Ditto", level: 50, nature: "Hardy",
+    evs: { spe }, ability: "Limber", item: null, moves: ["Body Slam", "Rest", "Protect", "Swagger"] });
+  const a = mk(252), b = mk(252), slower = mk(0);
+  ok(a.stats.spe === b.stats.spe, "probe mons must tie on Speed");
+  ok(slower.stats.spe !== a.stats.spe, "and the control must not");
+
+  const firstActors = (br) => new Set(br.map((r) => r.label.split(" ")[0]));
+  const tied = resolveTurn({ you: a, opp: b }, buildStartState({ you: a, opp: b }), "Body Slam", "Body Slam");
+  ok(Math.abs(sum(tied) - 1) < 1e-12, `tie branches must still sum to 1 (got ${sum(tied)})`);
+  ok(firstActors(tied).size === 2, "on an exact tie BOTH sides must appear as the first actor");
+
+  const notTied = resolveTurn({ you: a, opp: slower }, buildStartState({ you: a, opp: slower }), "Body Slam", "Body Slam");
+  ok(firstActors(notTied).size === 1, "with any speed difference, only one side ever moves first");
+
+  // The weight is exactly half, checked by summing the branches in which the
+  // opponent acted first.
+  const oppFirst = tied.filter((r) => r.label.startsWith("Opp")).reduce((s2, r) => s2 + r.p, 0);
+  ok(Math.abs(oppFirst - 0.5) < 1e-9, `the opponent must go first exactly half the time (got ${oppFirst})`);
+  console.log(`   tie: ${tied.length} branches, opponent-first weight ${oppFirst.toFixed(6)}; no-tie: ${notTied.length} branches, one order`);
+
+  // COLLAPSE: a priority gap decides the order outright, so even an exact speed
+  // tie must not branch when the moves differ in priority.
+  const prioritised = resolveTurn({ you: a, opp: b }, buildStartState({ you: a, opp: b }), "Protect", "Body Slam");
+  ok(firstActors(prioritised).size === 1,
+    "a priority gap must decide the order outright, with no tie branch");
+  console.log("   priority gap on a tied pair: one order, no branch");
 }
 
 console.log();

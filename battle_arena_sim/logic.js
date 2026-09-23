@@ -6071,37 +6071,64 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
   const oppEffSpeed = effSpeed(opp, state.oppStatus, state.oppStages.spe, weatherForSpeed);
   const yourPriority = yourMoveData.priority;
   const oppPriority = oppMoveData.priority;
-  const orderFor = (ySpeed, oSpeed) => (yourPriority !== oppPriority
-    ? (yourPriority > oppPriority ? ["you", "opp"] : ["opp", "you"])
-    : (ySpeed >= oSpeed ? ["you", "opp"] : ["opp", "you"]));
-  const baseOrder = orderFor(yourEffSpeed, oppEffSpeed);
+  // B7c-3: an EXACT speed tie is broken by `Random() & 1` in source
+  // (src/battle_main.c:4728 and :4749 -- the same expression appears in both the
+  // priority-nonzero and priority-zero arms). Callers test GetWhoStrikesFirst
+  // truthily, so its `strikesFirst = 2` means battler 2 goes first: the tie is a
+  // clean 0.5 / 0.5. This engine used to resolve ties deterministically in the
+  // player's favour (`ySpeed >= oSpeed`), which is a real divergence and is why
+  // ties now enumerate as two weighted branches.
+  //
+  // Same collapse rule as Quick Claw and Focus Band: only an EXACT tie under
+  // EQUAL priority branches. A priority gap, or any speed difference at all,
+  // stays a single branch.
+  const orderBranches = (ySpeed, oSpeed) => {
+    if (yourPriority !== oppPriority) {
+      return [{ p: 1, order: yourPriority > oppPriority ? ["you", "opp"] : ["opp", "you"] }];
+    }
+    if (ySpeed === oSpeed) {
+      return [{ p: 0.5, order: ["you", "opp"] }, { p: 0.5, order: ["opp", "you"] }];
+    }
+    return [{ p: 1, order: ySpeed > oSpeed ? ["you", "opp"] : ["opp", "you"] }];
+  };
+  const runBranches = (branches) => {
+    if (branches.length === 1) return resolveTurnWithOrder(ctx, state, yourMove, oppMove, branches[0].order);
+    const acc = [];
+    for (const b of branches) {
+      for (const r of resolveTurnWithOrder(ctx, state, yourMove, oppMove, b.order)) {
+        acc.push({ ...r, p: r.p * b.p });
+      }
+    }
+    return acc;
+  };
+  const baseBranches = orderBranches(yourEffSpeed, oppEffSpeed);
 
   const youItem = itemData(you.item);
   const oppItem = itemData(opp.item);
   const youQC = youItem && youItem.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? youItem : null;
   const oppQC = oppItem && oppItem.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? oppItem : null;
-  if (!youQC && !oppQC) return resolveTurnWithOrder(ctx, state, yourMove, oppMove, baseOrder);
+  if (!youQC && !oppQC) return runBranches(baseBranches);
 
   // A successful draw sets the holder's speed to UINT_MAX. If BOTH sides hold
   // one, the single shared draw sets BOTH, so the speeds tie again and the
   // existing tie rule decides -- which is why this is computed through the same
   // orderFor() rather than special-cased.
   const INF = Number.MAX_SAFE_INTEGER;
-  const firedOrder = orderFor(youQC ? INF : yourEffSpeed, oppQC ? INF : oppEffSpeed);
+  const firedBranches = orderBranches(youQC ? INF : yourEffSpeed, oppQC ? INF : oppEffSpeed);
 
   // EXACT collapse, not an approximation: when the draw would not change who
   // moves first, both branches are the same subtree, so enumerating them
   // separately would only duplicate work and split probabilities that re-sum to
   // the same thing. Priority differences land here too -- Quick Claw cannot beat
   // priority, so a priority gap makes firedOrder === baseOrder automatically.
-  if (firedOrder[0] === baseOrder[0]) return resolveTurnWithOrder(ctx, state, yourMove, oppMove, baseOrder);
+  const sameShape = firedBranches.length === baseBranches.length
+    && firedBranches.every((b, i) => b.order[0] === baseBranches[i].order[0] && b.p === baseBranches[i].p);
+  if (sameShape) return runBranches(baseBranches);
 
   const pFire = quickClawThreshold((youQC || oppQC).param) / QUICK_CLAW_RANDOM_SPACE;
   const out = [];
-  for (const [p, order] of [[pFire, firedOrder], [1 - pFire, baseOrder]]) {
-    for (const r of resolveTurnWithOrder(ctx, state, yourMove, oppMove, order)) {
-      out.push({ ...r, p: r.p * p });
-    }
+  for (const [p, branches] of [[pFire, firedBranches], [1 - pFire, baseBranches]]) {
+    for (const r of runBranches(branches)) out.push({ ...r, p: r.p * p });
   }
   return out;
 }
