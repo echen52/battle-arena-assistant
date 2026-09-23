@@ -30,7 +30,7 @@ import {
   buildMon, calcDamage, applyStatStage, analyzeMatchup, chooseOpponentMoves,
   buildStartState,
 } from "./logic.js";
-import { ITEM_DATA } from "./item-data.js";
+import { ITEM_DATA, itemData } from "./item-data.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { FRONTIER_POOL } from "./frontier-pool.js";
 import { LEADS, METAGROSS, CURRENT, CURRENT_CELLS, CURRENT_DIST, B2B1, B7A_PRE, MODIFIER_ANCHORS } from "./anchors.js";
@@ -52,7 +52,7 @@ console.log("-- PART 1: the item table covers the pool with no gaps --");
 {
   const poolItems = new Set();
   for (const e of Object.values(FRONTIER_POOL)) if (e.lv50Legal && e.item) poolItems.add(e.item);
-  const missing = [...poolItems].filter((i) => !ITEM_DATA[i]);
+  const missing = [...poolItems].filter((i) => !itemData(i));
   ok(missing.length === 0, `every pool item must be in ITEM_DATA (missing: ${missing.join(", ")})`);
   ok(poolItems.size === 29, `the pool should carry 29 distinct items (got ${poolItems.size})`);
   for (const [name, d] of Object.entries(ITEM_DATA)) {
@@ -92,7 +92,7 @@ console.log("-- PART 2: every multiplier, measured both ways --");
   // Type-boost items: 1.1x, and only for the matching type.
   const charcoal = buildMon({ species: "Rapidash", level: 50, nature: "Naughty", evs: { atk: 170, spa: 170, spe: 170 },
     ability: "Run Away", item: "Charcoal", moves: ["Flamethrower", "Body Slam", "Solar Beam", "Toxic"] });
-  ok(ITEM_DATA["Charcoal"].param === 10, "Charcoal's holdEffectParam must be 10");
+  ok(itemData("Charcoal").param === 10, "Charcoal's holdEffectParam must be 10");
   const fireUp = calcDamage(charcoal, plain, "Flamethrower", {});
   const fireBase = calcDamage(clone(charcoal, { item: null }), plain, "Flamethrower", {});
   ok(fireUp === calcDamage(clone(charcoal, { item: null, stats: { ...charcoal.stats, spa: f((charcoal.stats.spa * 110) / 100) } }), plain, "Flamethrower", {}),

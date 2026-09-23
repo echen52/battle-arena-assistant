@@ -14,7 +14,7 @@
 
 import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
-import { ITEM_DATA } from "./item-data.js";
+import { ITEM_DATA, itemData } from "./item-data.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
@@ -2289,7 +2289,8 @@ function calcDamage(attacker, defender, moveName, {
   // why the 106 cells this class moved are exactly the cells carrying a modelled
   // item or ability and not one cell more.
   const physical = move.category === "physical";
-  const atkItem = ITEM_DATA[attacker.item] || null;
+  const atkItem = itemData(attacker.item) || null;
+  const defItem = itemData(defender.item) || null;
   let attack = attacker.stats[atkStatKey];
   let defense = defender.stats[defStatKey];
   let power = effectivePower;
@@ -2312,6 +2313,31 @@ function calcDamage(attacker, defender, moveName, {
   if (physical && atkItem && atkItem.holdEffect === "HOLD_EFFECT_THICK_CLUB"
       && (attacker.species === "Cubone" || attacker.species === "Marowak")) {
     attack *= 2;
+  }
+  // :3187-3190 Soul Dew is EXPLICITLY DISABLED in the Frontier -- source gates
+  // it on `!(gBattleTypeFlags & BATTLE_TYPE_FRONTIER)`, and BATTLE_TYPE_ARENA
+  // sits inside that composite mask (include/constants/battle.h:91). So it is
+  // inert here BY SOURCE, not by omission: it is the one modifier in this block
+  // that must NOT be ported, and porting it would be the bug.
+  // :3191-3192 Deep Sea Tooth -- 2x SpAttack, Clamperl only.
+  if (!physical && atkItem && atkItem.holdEffect === "HOLD_EFFECT_DEEP_SEA_TOOTH"
+      && attacker.species === "Clamperl") {
+    attack *= 2;
+  }
+  // :3195-3196 Light Ball -- 2x SpAttack, Pikachu only.
+  if (!physical && atkItem && atkItem.holdEffect === "HOLD_EFFECT_LIGHT_BALL"
+      && attacker.species === "Pikachu") {
+    attack *= 2;
+  }
+  // :3193-3194 Deep Sea Scale -- 2x SpDefense, Clamperl only.
+  if (!physical && defItem && defItem.holdEffect === "HOLD_EFFECT_DEEP_SEA_SCALE"
+      && defender.species === "Clamperl") {
+    defense *= 2;
+  }
+  // :3197-3198 Metal Powder -- 2x Defense, Ditto only.
+  if (physical && defItem && defItem.holdEffect === "HOLD_EFFECT_METAL_POWDER"
+      && defender.species === "Ditto") {
+    defense *= 2;
   }
   // :3203-3204 Thick Fat -- halves the attacker's SpAttack against Fire/Ice.
   // Source touches spAttack only; every Fire and Ice move is special in Gen III,
@@ -3574,6 +3600,187 @@ function tryCureWithBerry(s, side, mon) {
   }
   if (used) s[consumedKey] = true;
 }
+
+// B7: EVERY battle hold effect in the ROM, each in EXACTLY ONE bucket. There
+// are 66 of them (src/data/items.h at a3c551fe); the Lv50 opponent pool uses 29
+// and the player side can hold any of the rest, so a table that only covered
+// the pool is how a player-held Pecha Berry ended up tripping the end-of-turn
+// exhaustiveness throw during B7b.
+//
+// Buckets:
+//   damage-chain   applied inside calcDamage (B7a)
+//   end-of-turn    applied by tryEndOfTurnItem below (B7b)
+//   cure-berry     applied by tryCureWithBerry (pre-existing)
+//   leftovers      applied inline in applyEndOfTurnEffects (pre-existing)
+//   deferred       real in battle, PORTED IN A NAMED LATER PHASE, counted not hidden
+//   inert          genuinely does nothing in an Arena battle, with the reason
+//   unmodelled     real in battle, NOT ported -> tryEndOfTurnItem THROWS on it
+//
+// The test asserts this table covers all 66 with no effect in two buckets and
+// none missing, so a new item can never quietly do nothing.
+const HOLD_EFFECT_DISPOSITION = new Map([
+  // -- damage-chain (B7a) -------------------------------------------------
+  ["HOLD_EFFECT_CHOICE_BAND", ["damage-chain", "1.5x Attack"]],
+  ["HOLD_EFFECT_THICK_CLUB", ["damage-chain", "2x Attack, Cubone/Marowak"]],
+  ["HOLD_EFFECT_DEEP_SEA_TOOTH", ["damage-chain", "2x SpAttack, Clamperl"]],
+  ["HOLD_EFFECT_DEEP_SEA_SCALE", ["damage-chain", "2x SpDefense, Clamperl"]],
+  ["HOLD_EFFECT_LIGHT_BALL", ["damage-chain", "2x SpAttack, Pikachu"]],
+  ["HOLD_EFFECT_METAL_POWDER", ["damage-chain", "2x Defense, Ditto"]],
+  // -- end-of-turn (B7b) --------------------------------------------------
+  ["HOLD_EFFECT_RESTORE_HP", ["end-of-turn", "Sitrus/Oran/Berry Juice"]],
+  ["HOLD_EFFECT_RESTORE_STATS", ["end-of-turn", "White Herb"]],
+  ["HOLD_EFFECT_ATTACK_UP", ["end-of-turn", "Liechi"]],
+  ["HOLD_EFFECT_DEFENSE_UP", ["end-of-turn", "Ganlon"]],
+  ["HOLD_EFFECT_SPEED_UP", ["end-of-turn", "Salac"]],
+  ["HOLD_EFFECT_SP_ATTACK_UP", ["end-of-turn", "Petaya"]],
+  ["HOLD_EFFECT_SP_DEFENSE_UP", ["end-of-turn", "Apicot"]],
+  ["HOLD_EFFECT_CRITICAL_UP", ["end-of-turn", "Lansat — sets STATUS2_FOCUS_ENERGY"]],
+  ["HOLD_EFFECT_CURE_ATTRACT", ["end-of-turn", "Mental Herb"]],
+  ["HOLD_EFFECT_SHELL_BELL", ["end-of-turn", "applied at damage time in applyMove, not here"]],
+  // -- cure berries (pre-existing) ----------------------------------------
+  ["HOLD_EFFECT_CURE_STATUS", ["cure-berry", "Lum"]],
+  ["HOLD_EFFECT_CURE_PAR", ["cure-berry", "Cheri"]],
+  ["HOLD_EFFECT_CURE_SLP", ["cure-berry", "Chesto"]],
+  ["HOLD_EFFECT_CURE_PSN", ["cure-berry", "Pecha"]],
+  ["HOLD_EFFECT_CURE_BRN", ["cure-berry", "Rawst"]],
+  ["HOLD_EFFECT_CURE_FRZ", ["cure-berry", "Aspear"]],
+  ["HOLD_EFFECT_CURE_CONFUSION", ["cure-berry", "Persim"]],
+  ["HOLD_EFFECT_LEFTOVERS", ["leftovers", "applied inline just above the cure berries"]],
+  // -- deferred to a named phase ------------------------------------------
+  ["HOLD_EFFECT_SCOPE_LENS", ["deferred", "B6 — crit rate; crits are not enumerated yet"]],
+  ["HOLD_EFFECT_LUCKY_PUNCH", ["deferred", "B6 — Chansey crit rate"]],
+  ["HOLD_EFFECT_STICK", ["deferred", "B6 — Farfetch'd crit rate"]],
+  ["HOLD_EFFECT_FLINCH", ["deferred", "B4 — King's Rock; flinch has no model yet"]],
+  ["HOLD_EFFECT_QUICK_CLAW", ["deferred", "B7c — turn order"]],
+  ["HOLD_EFFECT_EVASION_UP", ["deferred", "B7c — BrightPowder, the accuracy path"]],
+  ["HOLD_EFFECT_FOCUS_BAND", ["deferred", "B7c — a per-hit survival roll"]],
+  // -- inert in an Arena battle, each with its reason ----------------------
+  ["HOLD_EFFECT_SOUL_DEW", ["inert", "source DISABLES it under BATTLE_TYPE_FRONTIER (src/pokemon.c:3187) and BATTLE_TYPE_ARENA is inside that mask"]],
+  ["HOLD_EFFECT_RESTORE_PP", ["inert", "Leppa — PP is not modelled and 3 turns cannot exhaust it"]],
+  ["HOLD_EFFECT_MACHO_BRACE", ["inert", "EV training, not a battle effect"]],
+  ["HOLD_EFFECT_EXP_SHARE", ["inert", "experience, not a battle effect"]],
+  ["HOLD_EFFECT_LUCKY_EGG", ["inert", "experience, not a battle effect"]],
+  ["HOLD_EFFECT_FRIENDSHIP_UP", ["inert", "friendship growth, not a battle effect"]],
+  ["HOLD_EFFECT_DOUBLE_PRIZE", ["inert", "prize money, not a battle effect"]],
+  ["HOLD_EFFECT_REPEL", ["inert", "overworld encounters"]],
+  ["HOLD_EFFECT_PREVENT_EVOLVE", ["inert", "evolution, not a battle effect"]],
+  ["HOLD_EFFECT_CAN_ALWAYS_RUN", ["inert", "fleeing, which the Arena forbids anyway"]],
+  ["HOLD_EFFECT_DRAGON_SCALE", ["inert", "trade evolution, not a battle effect"]],
+  ["HOLD_EFFECT_UP_GRADE", ["inert", "trade evolution, not a battle effect"]],
+  // -- unmodelled: real in battle, NOT ported, THROWS ----------------------
+  ["HOLD_EFFECT_CONFUSE_SPICY", ["unmodelled", "Figy — pinch heal + nature-flavour confusion"]],
+  ["HOLD_EFFECT_CONFUSE_DRY", ["unmodelled", "Wiki — pinch heal + nature-flavour confusion"]],
+  ["HOLD_EFFECT_CONFUSE_SWEET", ["unmodelled", "Mago — pinch heal + nature-flavour confusion"]],
+  ["HOLD_EFFECT_CONFUSE_BITTER", ["unmodelled", "Aguav — pinch heal + nature-flavour confusion"]],
+  ["HOLD_EFFECT_CONFUSE_SOUR", ["unmodelled", "Iapapa — pinch heal + nature-flavour confusion"]],
+  ["HOLD_EFFECT_RANDOM_STAT_UP", ["unmodelled", "Starf — +2 to a RANDOM stat, needs its own weighted branches"]],
+]);
+// The 17 type-boost effects are damage-chain too, and are listed by
+// HOLD_EFFECT_BOOSTED_TYPE rather than repeated here.
+for (const eff of Object.keys(HOLD_EFFECT_BOOSTED_TYPE)) {
+  HOLD_EFFECT_DISPOSITION.set(eff, ["damage-chain", `1.1x ${HOLD_EFFECT_BOOSTED_TYPE[eff]} damage`]);
+}
+
+// B7b: the ITEMEFFECT_NORMAL end-of-turn cases that are NOT status cures (those
+// are tryCureWithBerry) — src/battle_util.c:3336-3455. A mon holds exactly one
+// item, so every case here is mutually exclusive with every other AND with the
+// cure berries, which is why they share one single-use flag.
+function tryEndOfTurnItem(s, side, mon) {
+  // itemData() returns null for "no item" (null, "" or the literal "None") and
+  // undefined for a name the ROM data does not have -- which is a real error,
+  // not an absent item, so the two cases are kept apart deliberately.
+  const d = itemData(mon.item);
+  if (d === null) return;
+  if (d === undefined) {
+    throw new Error(`Held item "${mon.item}" is not in item-data.js — regenerate it with ` +
+      `arena-solver/tools/gen-item-table.mjs, or fix the spelling, before this position can be solved.`);
+  }
+  const consumedKey = side === "you" ? "youBerryConsumed" : "oppBerryConsumed";
+  const hpKey = side === "you" ? "yourHpPct" : "oppHpPct";
+  const stages = side === "you" ? s.youStages : s.oppStages;
+  const maxHp = mon.stats.hp;
+  const curHp = Math.round((s[hpKey] / 100) * maxHp);
+
+  switch (d.holdEffect) {
+    // Sitrus Berry. At hp <= maxHP/2, restore a FLAT `param` HP (30) capped at
+    // max — a flat number, NOT a fraction of max HP (:3336-3345).
+    case "HOLD_EFFECT_RESTORE_HP": {
+      if (s[consumedKey] || curHp > Math.floor(maxHp / 2)) return;
+      s[hpKey] = Math.min(100, s[hpKey] + (d.param / maxHp) * 100);
+      s[consumedKey] = true;
+      return;
+    }
+    // White Herb. Every stage BELOW default goes back to default; stages ABOVE
+    // it are untouched, so a mon that is +2/-1 keeps the +2. Consumed only if it
+    // actually restored something — source sets `effect` inside the loop and
+    // only runs the script when `effect != 0` (:3383-3397).
+    case "HOLD_EFFECT_RESTORE_STATS": {
+      if (s[consumedKey]) return;
+      let restored = false;
+      for (const k of Object.keys(stages)) {
+        if (stages[k] < 0) { stages[k] = 0; restored = true; }
+      }
+      if (restored) s[consumedKey] = true;
+      return;
+    }
+    // Liechi / Salac / Petaya. At hp <= maxHP/param (param is 4, so a quarter),
+    // +1 to their own stat, and only while that stat is below MAX_STAT_STAGE
+    // (:3429-3455). Note the threshold divisor is the PARAM, not a constant.
+    case "HOLD_EFFECT_ATTACK_UP":
+    case "HOLD_EFFECT_DEFENSE_UP":
+    case "HOLD_EFFECT_SPEED_UP":
+    case "HOLD_EFFECT_SP_ATTACK_UP":
+    case "HOLD_EFFECT_SP_DEFENSE_UP": {
+      if (s[consumedKey]) return;
+      const stat = PINCH_BERRY_STAT[d.holdEffect];
+      if (curHp > Math.floor(maxHp / d.param)) return;
+      if (stages[stat] >= 6) return;
+      bumpStage(stages, stat, 1);
+      s[consumedKey] = true;
+      return;
+    }
+    // Lansat Berry. At the same quarter-HP threshold, sets STATUS2_FOCUS_ENERGY
+    // instead of a stat stage, and only if it is not already set (:3457-3465).
+    // The flag itself is real state from B2b batch 1; its damage consumer is B6.
+    case "HOLD_EFFECT_CRITICAL_UP": {
+      if (s[consumedKey]) return;
+      const feKey = side === "you" ? "youFocusEnergy" : "oppFocusEnergy";
+      if (curHp > Math.floor(maxHp / d.param) || s[feKey]) return;
+      s[feKey] = true;
+      s[consumedKey] = true;
+      return;
+    }
+    // Mental Herb. Clears infatuation; no HP threshold (src/battle_util.c:3312).
+    // Reachable since A5 made either side infatuable.
+    case "HOLD_EFFECT_CURE_ATTRACT": {
+      if (s[consumedKey]) return;
+      const attKey = side === "you" ? "youAttracted" : "oppAttracted";
+      if (!s[attKey]) return;
+      s[attKey] = false;
+      s[consumedKey] = true;
+      return;
+    }
+    default: {
+      const disp = HOLD_EFFECT_DISPOSITION.get(d.holdEffect);
+      if (disp && disp[0] !== "unmodelled") return; // handled elsewhere, deferred with a name, or inert with a reason
+      if (disp) {
+        throw new Error(`"${mon.item}" carries ${d.holdEffect} (${disp[1]}), which is real in battle and ` +
+          `NOT ported. It is on the unmodelled list deliberately -- port it before this position can be solved.`);
+      }
+      throw new Error(`"${mon.item}" carries ${d.holdEffect}, which is in NO bucket of ` +
+        `HOLD_EFFECT_DISPOSITION at all — classify it there before this position can be solved. ` +
+        `Silently doing nothing is the exact failure B7 exists to remove.`);
+    }
+  }
+}
+
+const PINCH_BERRY_STAT = {
+  HOLD_EFFECT_ATTACK_UP: "atk",       // Liechi
+  HOLD_EFFECT_DEFENSE_UP: "def",      // Ganlon
+  HOLD_EFFECT_SPEED_UP: "spe",        // Salac
+  HOLD_EFFECT_SP_ATTACK_UP: "spa",    // Petaya
+  HOLD_EFFECT_SP_DEFENSE_UP: "spd",   // Apicot
+};
 
 function inflictStatus(s, targetSide, statusType, targetTypes, targetAbility = null) {
   const statusKey = targetSide === "you" ? "youStatus" : "oppStatus";
@@ -4948,6 +5155,12 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // branch), for the drain heal below. Kept SEPARATE from recoilBasis on
       // purpose — see the non-substitute branch note where they diverge.
       let drainBasis = 0;
+      // B7b: Shell Bell heals off gSpecialStatuses[target].shellBellDmg, which
+      // source assigns ONLY WHILE IT IS STILL ZERO (src/battle_script_commands.c:
+      // 1870-1871 substitute, :1932-1933 real HP). It is therefore the FIRST
+      // damaging hit of the move, never the total -- a multi-hit move heals off
+      // hit one alone. Preserved as the quirk it is, not "fixed" to a sum.
+      let shellBellBasis = 0;
       for (let i = 0; i < hits; i++) {
         if (s[foeHpKey] <= 0) break; // already fainted from an earlier hit this sequence (src: jumpifhasnohp BS_TARGET)
 
@@ -4968,6 +5181,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           if (s[foeSubKey] <= 0) s[foeSubKey] = null; // sub breaks, fully absorbed regardless of excess
           recoilBasis = absorbed;
           drainBasis = absorbed; // = source gHpDealt (:1880); already capped at sub HP, so identical to recoilBasis here
+          if (shellBellBasis === 0) shellBellBasis = absorbed; // source also sets shellBellDmg off the SUB's damage (:1878-1879)
           // NOTE: foeDamageTakenKey deliberately NOT set — the real mon took no
           // direct damage, so Counter/Mirror Coat have nothing to reflect (this
           // specific interaction wasn't chased further in source, but matches
@@ -4994,6 +5208,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           // rather than the (smaller) HP removed — a latent overstatement. The drain
           // heal below must NOT inherit this, so it uses the capped drainBasis:
           drainBasis = Math.min(hitDmg, foeAbsHpBefore); // = source gHpDealt (:1927)
+          if (shellBellBasis === 0) shellBellBasis = drainBasis;
           // Overwritten each hit, not accumulated — matches source, where
           // gProtectStructs[target].physicalDmg/specialDmg is a plain
           // assignment per hit (Cmd_datahpupdate), so Counter/Mirror Coat
@@ -5049,6 +5264,16 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // so a drain never targets a Liquid Ooze holder.
       if (DRAIN_EFFECTS.has(moveData.effect) && eff !== 0) {
         const heal = Math.max(1, Math.floor(drainBasis / 2));
+        s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
+      }
+      // B7b: Shell Bell (src/battle_util.c:3787-3806). Heals the ATTACKER
+      // floor(dmg / param) with param 8, min 1, but ONLY when the move had an
+      // effect, the attacker is alive and NOT already at full HP, and attacker
+      // is not its own target. Never consumed.
+      const selfItemData = itemData(selfMon.item);
+      if (selfItemData && selfItemData.holdEffect === "HOLD_EFFECT_SHELL_BELL"
+          && eff !== 0 && shellBellBasis > 0 && s[selfHpKey] > 0 && s[selfHpKey] < 100) {
+        const heal = Math.max(1, Math.floor(shellBellBasis / selfItemData.param));
         s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
       }
     }
@@ -5211,6 +5436,12 @@ function applyEndOfTurnEffects(ctx, s) {
   // comment for why that ordering specifically matters).
   if (s.yourHpPct > 0) tryCureWithBerry(s, "you", you);
   if (s.oppHpPct > 0) tryCureWithBerry(s, "opp", opp);
+
+  // B7b: the rest of the ITEMEFFECT_NORMAL switch -- Sitrus, White Herb and the
+  // Liechi/Salac/Petaya pinch berries. Same checkpoint as the cure berries
+  // because they are literally cases of the same switch (src/battle_util.c:3331).
+  if (s.yourHpPct > 0) tryEndOfTurnItem(s, "you", you);
+  if (s.oppHpPct > 0) tryEndOfTurnItem(s, "opp", opp);
 
   // Leech Seed: comes right after Leftovers (ITEMS1) and before poison/burn
   // in the real ENDTURN_* order (src/battle_util.c:1440-1462 — INGRAIN,
@@ -5931,4 +6162,7 @@ export {
   // A7: the two Arena Skill mechanisms, surfaced so tests assert on the source
   // structure rather than on hand-netted constants.
   arenaSkillDelta, ARENA_DEDUCT_STRINGS, ARENA_ADD_SKILL, ABILITY_BLOCK_SOURCE, ABILITY_BLOCK_SKILL_DELTA,
+  // B7: the hold-effect classification, surfaced so the test can assert that
+  // every battle hold effect in the ROM sits in exactly one bucket.
+  HOLD_EFFECT_DISPOSITION,
 };

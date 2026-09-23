@@ -304,9 +304,14 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Earthquake", winProb: 0.0625 },
     causedBy: "item: Charcoal" },
   "Blastoise 1": { lead: "Metagross", ability: null,
-    move: "Earthquake", winProb: 0.8179444444444444,
+    move: "Earthquake", winProb: 0.7523888888888889,
     pre: { move: "Earthquake", winProb: 0.8666666666666667 },
-    causedBy: "opponent ability: Torrent" },
+    // B7a moved this to 0.8179444444444444 via Torrent (causally verified).
+    // B7b then moved it AGAIN, to the value above, because Blastoise 1 also
+    // holds a Shell Bell. Kept as the Torrent anchor because Torrent is what
+    // B7a's probe isolated; the second movement is named here rather than
+    // hidden by swapping in a cleaner set.
+    causedBy: "opponent ability: Torrent (B7a), then its Shell Bell (B7b)" },
   "Muk 1": { lead: "Snorlax", ability: "Stench",
     move: "Earthquake", winProb: 0.9618722223090354,
     pre: { move: "Earthquake", winProb: 0.9816982673274147 },
@@ -319,4 +324,25 @@ export const MODIFIER_ANCHORS = {
     move: "Thunderbolt", winProb: 0.424140625,
     pre: { move: "Thunderbolt", winProb: 0.42414062500000005 },
     causedBy: "opponent ability: Blaze" },
+};
+
+// -- B7B_ANCHORS -- the ItemBattleEffects group ----------------------------
+// Three anchors, one per item that produces a REAL mover in the 5-lead sweep.
+// `pre` is the post-B7a / pre-B7b value and is HISTORY, never asserted.
+//
+// NAMED BLIND SPOT. B7b implements five effects but only three of them move
+// anything here: Petaya Berry, Liechi Berry and White Herb produce ZERO real
+// movers across the sweep. That is not a bug and it was checked rather than
+// assumed -- test-b7b-item-effects.js probes all five directly and all five
+// behave. The panel simply never reaches the states they need: no lead in it
+// lowers an opponent's stats (so White Herb has nothing to restore), and no
+// Petaya or Liechi carrier survives to a quarter HP against it. Their only
+// guards are those unit probes.
+export const B7B_ANCHORS = {
+  "Metagross 7": { lead: "Starmie", item: "Shell Bell", move: "Ice Beam", winProb: 0.10944000000000002,
+    pre: { move: "Surf", winProb: 1 } },
+  "Noland Gold† Metang": { lead: "Gengar", item: "Sitrus Berry", move: "Thunderbolt", winProb: 0.5435139236450196,
+    pre: { move: "Thunderbolt", winProb: 0.9999999999999999 } },
+  "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.828125,
+    pre: { move: "Earthquake", winProb: 1 } },
 };
