@@ -205,3 +205,16 @@ export const B2B1 = {
   "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
   "Caterpie 1":            { tier:  3, lead: "Snorlax", effect: "EFFECT_SPEED_DOWN",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
 };
+
+// ── B2A — the sets B2a made solvable ───────────────────────────────────────
+// RECORDED LATE. B2a (commit 5e13e2b) landed without a characterization test,
+// so these are first recordings taken afterwards, not the values as they stood
+// at that commit. See test-b2a-no-dispatch.js's header for the full note.
+// Every one of these five was a recorded throw before B2a.
+export const B2A = {
+  "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.025 },
+  "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.74333125 },
+  "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch",   winProb: 0.9215071402559959 },
+  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Thunderbolt", winProb: 0.00625 },
+};
