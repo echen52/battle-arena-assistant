@@ -3439,6 +3439,11 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // first, since there's nothing to reflect yet).
     youDamageTaken: null, oppDamageTaken: null, // { amount, category } | null
   };
+  // Intimidate fires at SWITCH-IN, which in a 1v1 Arena match is turn 0 of
+  // every battle -- before the state this function returns. So it is applied to
+  // `base` here, BEFORE overrides are spread, which leaves an explicit
+  // caller-supplied stage free to win as it always has.
+  applyIntimidateOnSwitchIn(base, you, opp);
   if (!overrides) return base; // unchanged path — byte-identical to before overrides existed
   return {
     ...base,
@@ -3446,6 +3451,35 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     youStages: { ...base.youStages, ...(overrides.youStages || {}) },
     oppStages: { ...base.oppStages, ...(overrides.oppStages || {}) },
   };
+}
+
+// Intimidate. ABILITYEFFECT_ON_SWITCHIN sets STATUS3_INTIMIDATE_POKES
+// (src/battle_util.c:2559-2564); ABILITYEFFECT_INTIMIDATE1 (:3003-3016) then
+// runs BattleScript_IntimidateActivates (data/battle_scripts_1.s:4024-4048),
+// which is `setstatchanger STAT_ATK, 1, TRUE` against the opposing side.
+//
+// Blocked by, in the script's own order: Substitute (:4029), Clear Body
+// (:4030), Hyper Cutter (:4031), White Smoke (:4032). NOT blocked by Protect --
+// the stat change carries STAT_CHANGE_NOT_PROTECT_AFFECTED (:4033).
+//
+// BOTH sides fire if both carry it: each mon is sent out at battle start, so
+// each intimidates the other, and the two drops are independent.
+//
+// The Substitute check is unreachable at turn 0 (a fresh state has no
+// substitute up) and is kept anyway rather than dropped, so that the guard
+// reads the same as source if this is ever called from a later position.
+function intimidateBlocked(mon, state, side) {
+  if (mon.ability === "Clear Body" || mon.ability === "Hyper Cutter" || mon.ability === "White Smoke") return true;
+  return state[side === "you" ? "youSubstituteHP" : "oppSubstituteHP"] != null;
+}
+function applyIntimidateOnSwitchIn(base, you, opp) {
+  if (!you || !opp) return; // stateless callers (some tests) build without mons
+  if (you.ability === "Intimidate" && !intimidateBlocked(opp, base, "opp")) {
+    bumpStage(base.oppStages, "atk", -1);
+  }
+  if (opp.ability === "Intimidate" && !intimidateBlocked(you, base, "you")) {
+    bumpStage(base.youStages, "atk", -1);
+  }
 }
 
 function freshTurnDamageTracking(s) {
@@ -6169,6 +6203,11 @@ export {
   // B7a: surfaced so the test can pin the stage arithmetic to source's integer
   // form directly, instead of inferring it through damage.
   applyStatStage,
+  // Intimidate: surfaced so its Substitute guard can be unit-tested directly.
+  // That branch is UNREACHABLE from buildStartState (Intimidate is applied to
+  // the base state before overrides, and a fresh state has no substitute), so
+  // asserting it through the integration path would be asserting nothing.
+  intimidateBlocked,
   // B7c: the accuracy chain, surfaced so the test can pin each multiplier and
   // the UNCAPPED ordering directly rather than inferring them from hit rates.
   accuracyCalc,

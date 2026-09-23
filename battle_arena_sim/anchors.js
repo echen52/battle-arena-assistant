@@ -364,8 +364,41 @@ export const B7B_ANCHORS = {
 export const B7C_ANCHORS = {
   "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.8099999999999999,
     pre: { move: "Earthquake", winProb: 1 } },
-  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.7479850977404471,
-    pre: { move: "Dragon Claw", winProb: 0.9301677280002171 } },
+  // B7c moved this Dragon Claw 0.9301677280002171 -> Earthquake 0.7479850977404471
+  // via its BrightPowder. Intimidate then moved it AGAIN -- it is a Salamence
+  // cell and the Salamence lead carries Intimidate -- and the recommended move
+  // flipped BACK to Dragon Claw. Both movements named rather than one hidden.
+  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Dragon Claw", winProb: 0.8507291838563511,
+    pre: { move: "Dragon Claw", winProb: 0.9301677280002171 },
+    b7cWas: { move: "Earthquake", winProb: 0.7479850977404471 } },
   "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.8231904000000001,
     pre: { move: "Surf", winProb: 1 } },
+};
+
+// -- INTIMIDATE_ANCHORS -----------------------------------------------------
+// Intimidate was pulled ahead of the rest of the ability work because it
+// corrupts the measuring instrument: the Salamence lead HAS Intimidate, so
+// every Salamence absolute recorded before this commit was missing a turn-0
+// -1 Attack on the opponent. The deltas in phase-b-log.md survive (the same
+// omission sat on both sides of each before/after); the Salamence ABSOLUTES
+// did not, and are re-baselined here.
+//
+// Per-lead movers tell the mechanic's own story: Salamence 115 (its own
+// Intimidate), Snorlax 13 (Intimidate-carrying OPPONENTS dropping a physical
+// lead's Attack), Metagross / Starmie / Gengar 0 -- Metagross because Clear
+// Body blocks it outright, the other two because they attack specially and a
+// -1 Attack changes nothing for them.
+export const INTIMIDATE_ANCHORS = {
+  "Granbull 2": { lead: "Salamence", move: "Earthquake", winProb: 0,
+    pre: { move: "Earthquake", winProb: 1 },
+    why: "the LEAD's own Intimidate -- a complete reversal" },
+  "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0,
+    pre: { move: "Body Slam", winProb: 1 },
+    why: "an Intimidate OPPONENT dropping a physical lead's Attack" },
+  "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.9,
+    pre: { move: "Rock Slide", winProb: 0 },
+    why: "moves in the PLAYER's favour -- the drop is on the opponent" },
+  "Granbull 1": { lead: "Metagross", move: "Earthquake", winProb: 1,
+    pre: { move: "Earthquake", winProb: 1 },
+    why: "IMMUNITY ANCHOR: Granbull 1 has Intimidate and Metagross has Clear Body, so this cell must NOT move" },
 };
