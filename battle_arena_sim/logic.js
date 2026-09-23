@@ -2922,13 +2922,13 @@ function permanentWeatherFromAbility(mon) {
 // to pass yourHpPctAtStart/oppHpPctAtStart explicitly whenever yourHpPct/
 // oppHpPct instead represents an OBSERVED MID-ROUND value (HP already past
 // the round's true start) — this function has no way to distinguish the two
-// cases from a bare number. KNOWN GAP: the live coaching UI (site/app.js,
-// site/ui-logic.js) has exactly one HP input per side ("Current HP"), reused
-// for both a fresh-round start AND a mid-round live re-solve, and currently
-// has no field to supply a true round-start reference separate from
-// whatever's currently observed — so a mid-turn coaching session will
-// silently inherit this default today. Not yet fixed; flagged here so a
-// future reader finds it rather than assumes it's covered.
+// cases from a bare number. RESOLVED (was a KNOWN GAP): the live coaching UI
+// now HAS a dedicated round-start HP input per side -- site/index.html:73-74
+// and :391-392, wired at site/app.js:342/:344 -- and
+// test-ui-state-reachability.js PART 2 asserts the baseline reaches the engine.
+// Corrected at Phase A exit under CLAUDE.md amendment 6 (phase-exit docs
+// hygiene); the old text described the pre-fix state and had been stale for
+// several sessions.
 function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, you = null, opp = null, overrides = null } = {}) {
   const freshStages = () => ({ atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 });
   // weatherType: null | "rain" | "sun" | "sandstorm" | "hail" — a single
