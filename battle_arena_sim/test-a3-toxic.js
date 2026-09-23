@@ -23,34 +23,18 @@
 import { analyzeMatchup, buildMon, buildStartState, resolveTurn } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { LEADS, ANCHOR, A3_PRE, CURRENT_CELLS } from "./anchors.js";
 
-const LEADS = {
-  Metagross: { species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 },
-    ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] },
-  Salamence: { species: "Salamence", level: 50, nature: "Adamant", evs: { atk: 252, spe: 252 },
-    ability: "Intimidate", item: "Leftovers", moves: ["Dragon Claw", "Earthquake", "Rock Slide", "Aerial Ace"] },
-  Snorlax: { species: "Snorlax", level: 50, nature: "Adamant", evs: { hp: 252, atk: 252 },
-    ability: "Thick Fat", item: "Leftovers", moves: ["Body Slam", "Earthquake", "Shadow Ball", "Rest"] },
-  Starmie: { species: "Starmie", level: 50, nature: "Timid", evs: { spa: 252, spe: 252 },
-    ability: "Natural Cure", item: "Leftovers", moves: ["Surf", "Ice Beam", "Thunderbolt", "Recover"] },
-};
+const PRE_A3 = A3_PRE;
+const POST_A3 = CURRENT_CELLS;
+
+
 
 // Pre-A3 (branch phase-a-fidelity @ fd33392). HISTORY, never asserted.
-const PRE_A3 = {
-  "Snorlax|Articuno 2": { move: "Shadow Ball", winProb: 0.9847862521419303 },
-  "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.9737529153511181 },
-  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.9084137530859424 },
-  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.971062978108724 },
-};
+
 // Post-A3. ASSERTED.
-const POST_A3 = {
-  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9810316569313972 },
-  "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
-  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
-  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 }, // re-recorded by A4, then A6
-  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 }, // re-recorded by A4, then A6
-  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9443710298449904 },
-};
+
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };
@@ -152,7 +136,7 @@ console.log("-- PART 5: recorded cross-lead behaviour --");
   // the Metagross blindness is itself an assertion
   const mg = analyzeMatchup(LEADS.Metagross, cfgOf("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(mg.winProb === 0.9067329423180334, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
+  ok(mg.winProb === ANCHOR.winProb, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
   console.log(`   ${Object.keys(POST_A3).length} poisonable-lead cells asserted; Metagross anchor unchanged at ${mg.winProb}`);
   let flips = 0;
   for (const [c, pre] of Object.entries(PRE_A3)) if (pre.move !== POST_A3[c].move) flips++;

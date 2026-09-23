@@ -25,11 +25,14 @@
 import { analyzeMatchup, buildMon, buildStartState, resolveTurn } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { METAGROSS as ANCHOR_LEAD, A4_PRE, CURRENT } from "./anchors.js";
 
-const METAGROSS = {
-  species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 },
-  ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"],
-};
+const PRE_A4 = A4_PRE;
+const A4_KEYS = ["Gengar 1", "Greta Gold Umbreon", "Greta Silver Umbreon", "Lapras 1", "Cradily 1", "Starmie 6"];
+const POST_A4 = Object.fromEntries(A4_KEYS.map((n) => [n, CURRENT[n]]));
+
+const METAGROSS = ANCHOR_LEAD;
 // Own Tempo is not on any Arena-legal Metagross, so the ability check needs a
 // different lead; Lickitung is a real Own Tempo holder in species-data.js.
 const LICKITUNG = { species: "Lickitung", level: 50, nature: "Serious", evs: {}, ability: "Own Tempo",
@@ -37,24 +40,9 @@ const LICKITUNG = { species: "Lickitung", level: 50, nature: "Serious", evs: {},
 const LICKITUNG_NO_OT = { ...LICKITUNG, ability: "Cute Charm" };
 
 // Pre-A4 (branch phase-a-fidelity @ 654df57). HISTORY, never asserted.
-const PRE_A4 = {
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.7309375 },
-  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.8769799391764942 },
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.6648082338686341 },
-  "Cradily 1": { move: "Meteor Mash", winProb: 0.9833385824019526 },
-};
+
 // Post-A4. ASSERTED.
-const POST_A4 = {
-  // Re-recorded by A6 (targetConfused went live; these sets all involve
-  // confusion scoring). The A4 values are preserved in PRE_A6 in
-  // test-a6-dead-context.js and in the fidelity log.
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.5800000000000001 },
-  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9783547376864591 },
-  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8143718750000001 },
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.589053488498264 },
-  "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
-  "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
-};
+
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };

@@ -30,30 +30,20 @@ import { analyzeMatchup, buildMon, buildStartState, chooseOpponentMoves,
          calcDamage, enumerateAiRollOutcomes, buildAiDamageState } from "./logic.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { METAGROSS as ANCHOR_LEAD, A9_PRE, CURRENT } from "./anchors.js";
 
-const METAGROSS = {
-  species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 },
-  ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"],
-};
+const PRE_A9 = A9_PRE;
+const A9_KEYS = ["Quagsire 3", "Swampert 1", "Snorlax 2", "Ludicolo 1", "Snorlax 7", "Marowak 2", "Suicune 1"];
+const POST_A9 = Object.fromEntries(A9_KEYS.map((n) => [n, CURRENT[n]]));
+
+const METAGROSS = ANCHOR_LEAD;
 
 // Pre-A9 (branch phase-a-fidelity @ ea666e4, i.e. A2 + memo). HISTORY, never asserted.
-const PRE_A9 = {
-  "Quagsire 3": { move: "Earthquake", winProb: 0.8516 },
-  "Swampert 1": { move: "Shadow Ball", winProb: 0.7728 },
-  "Snorlax 2": { move: "Earthquake", winProb: 0.8949 },
-  "Ludicolo 1": { move: "Shadow Ball", winProb: 0.5703 },
-};
+
 
 // Post-A9. ASSERTED.
-const POST_A9 = {
-  "Quagsire 3": { move: "Meteor Mash", winProb: 0.5053125 },
-  "Swampert 1": { move: "Meteor Mash", winProb: 0.5000737108290196 },
-  "Snorlax 2": { move: "Meteor Mash", winProb: 0.8027441776394845 },
-  "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
-  "Snorlax 7": { move: "Meteor Mash", winProb: 0.8081748046875002 },
-  "Marowak 2": { move: "Meteor Mash", winProb: 0.9494408927112818 },
-  "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 }, // re-recorded by A1
-};
+
 
 let failures = 0;
 const ok = (cond, msg) => { if (!cond) { failures++; console.log("  FAIL " + msg); } };

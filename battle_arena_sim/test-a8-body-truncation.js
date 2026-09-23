@@ -24,6 +24,8 @@
 // thing that can actually demonstrate the change.
 import { evaluateTerminal, analyzeMatchup } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { ANCHOR, METAGROSS as ANCHOR_LEAD } from "./anchors.js";
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };
@@ -94,7 +96,7 @@ console.log("-- PART 4: no behaviour changed on the pool --");
     ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] };
   const r = analyzeMatchup(METAGROSS, getOpponentConfig("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(r.winProb === 0.9067329423180334, `anchor should be the post-A1 value, got ${r.winProb}`);
+  ok(r.winProb === ANCHOR.winProb, `anchor should be the post-A1 value, got ${r.winProb}`);
   console.log(`   anchor ${r.winProb}; the full 523-set sweep is byte-identical across A8`);
 }
 

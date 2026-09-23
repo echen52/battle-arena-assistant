@@ -24,142 +24,26 @@ import { analyzeMatchup, buildMon, buildStartState, chooseOpponentMoves,
          scoreOpponentMoveDist, enumerateAiRollOutcomes, AI_SIM_ROLLS,
          buildAiDamageState } from "./logic.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { METAGROSS as ANCHOR_LEAD, A2_PRE, CURRENT, CURRENT_DIST } from "./anchors.js";
+
+// This test owns the A2 slice of the recorded tables.
+const A2_SETS = Object.keys(A2_PRE);
+const PRE_A2 = A2_PRE;
+const POST_A2 = Object.fromEntries(Object.keys(CURRENT_DIST).map((n) =>
+  [n, { move: CURRENT[n].move, winProb: CURRENT[n].winProb, dist: CURRENT_DIST[n] }]));
+void A2_SETS;
 import { getOpponentConfig } from "./opponent-adapter.js";
 
-const METAGROSS = {
-  species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 },
-  ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"],
-};
+const METAGROSS = ANCHOR_LEAD;
 
 // Pre-fix behaviour, recorded 2026-09-22 on main @ 8591b80. HISTORY -- never
 // deleted, never asserted. Note how many distributions are degenerate ([x, 1]):
 // that is the collapse, visible. The AI was certain because it always saw the KO.
-const PRE_A2 = {
-  "Entei 1": {
-    move: "Explosion", winProb: 0,
-    dist: [["Flamethrower", 1]],
-  },
-  "Rhydon 1": {
-    move: "Meteor Mash", winProb: 0,
-    dist: [["Earthquake", 1]],
-  },
-  "Rhydon 3": {
-    move: "Meteor Mash", winProb: 0,
-    dist: [["Earthquake", 1]],
-  },
-  "Rhydon 4": {
-    move: "Meteor Mash", winProb: 0,
-    dist: [["Earthquake", 1]],
-  },
-  "Houndoom 1": {
-    move: "Explosion", winProb: 0,
-    dist: [["Flamethrower", 1]],
-  },
-  "Rapidash 1": {
-    move: "Explosion", winProb: 0,
-    dist: [["Flamethrower", 1]],
-  },
-  "Anabel Silver Entei": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Fire Blast", 1]],
-  },
-  "Exploud 3": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Overheat", 1]],
-  },
-  "Donphan 1": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Earthquake", 1]],
-  },
-  "Heracross 2": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Bulk Up", 0.666259765625], ["Earthquake", 0.333740234375]],
-  },
-  "Venusaur 3": {
-    move: "Meteor Mash", winProb: 0.5915653076171875,
-    dist: [["Earthquake", 0.5], ["Sleep Powder", 0.5]],
-  },
-  "Lucy Silver Milotic": {
-    move: "Shadow Ball", winProb: 0.9718475341796875,
-    dist: [["Mirror Coat", 0.5], ["Surf", 0.5]],
-  },
-  "Tucker Gold Swampert": {
-    move: "Earthquake", winProb: 0.5425,
-    dist: [["Earthquake", 0.5], ["Mirror Coat", 0.5]],
-  },
-  "Regirock 2": {
-    move: "Meteor Mash", winProb: 0.48691360935437045,
-    dist: [["Earthquake", 0.4674479166666667], ["Counter", 0.4674479166666667], ["Explosion", 0.06510416666666667]],
-  },
-  "Golem 1": {
-    move: "Shadow Ball", winProb: 1,
-    dist: [["Rock Tomb", 0.7265625], ["Earthquake", 0.13671875], ["Counter", 0.13671875]],
-  },
-};
+
 
 // Post-fix behaviour, recorded on branch phase-a-fidelity. ASSERTED.
-const POST_A2 = {
-  "Entei 1": {
-    move: "Explosion", winProb: 0.046614478031794235,
-    dist: [["Flamethrower", 0.8851824601491293], ["Double Team", 0.08635433514912924], ["Calm Mind", 0.02846320470174154]],
-  },
-  "Rhydon 1": {
-    move: "Earthquake", winProb: 0.31787109375,
-    dist: [["Earthquake", 0.68212890625], ["Rock Tomb", 0.31787109375]],
-  },
-  "Rhydon 3": {
-    move: "Earthquake", winProb: 0.044375,
-    dist: [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
-  },
-  "Rhydon 4": {
-    move: "Earthquake", winProb: 0.044375,
-    dist: [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
-  },
-  "Houndoom 1": {
-    move: "Earthquake", winProb: 0.13020833333333334,
-    dist: [["Flamethrower", 0.7916666666666666], ["Counter", 0.10416666666666667], ["Will-O-Wisp", 0.10416666666666667]],
-  },
-  "Rapidash 1": {
-    move: "Earthquake", winProb: 0.0625,
-    dist: [["Protect", 0.5], ["Flamethrower", 0.5]],
-  },
-  "Anabel Silver Entei": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Fire Blast", 0.7917938232421875], ["Calm Mind", 0.2082061767578125]],
-  },
-  "Exploud 3": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Overheat", 0.90625], ["ThunderPunch", 0.09375]],
-  },
-  "Donphan 1": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Earthquake", 0.671875], ["Swagger", 0.328125]],
-  },
-  "Heracross 2": {
-    move: "Explosion", winProb: 0.5,
-    dist: [["Bulk Up", 0.6639811197916666], ["Earthquake", 0.3094579378763835], ["Megahorn", 0.02656094233194987]],
-  },
-  "Venusaur 3": {
-    move: "Meteor Mash", winProb: 0.5964432373046875,
-    dist: [["Earthquake", 0.5], ["Sleep Powder", 0.5]],
-  },
-  "Lucy Silver Milotic": {
-    move: "Shadow Ball", winProb: 0.9859237670898438,
-    dist: [["Mirror Coat", 0.5], ["Surf", 0.5]],
-  },
-  "Tucker Gold Swampert": {
-    move: "Earthquake", winProb: 0.52921875,
-    dist: [["Earthquake", 0.65625], ["Mirror Coat", 0.34375]],
-  },
-  "Regirock 2": {
-    move: "Meteor Mash", winProb: 0.4809887721538164,
-    dist: [["Earthquake", 0.4674479166666667], ["Counter", 0.4674479166666667], ["Explosion", 0.06510416666666667]],
-  },
-  "Golem 1": {
-    move: "Shadow Ball", winProb: 1,
-    dist: [["Rock Tomb", 0.49951171875], ["Earthquake", 0.406494140625], ["Counter", 0.093994140625]],
-  },
-};
+
 
 let failures = 0;
 const ok = (cond, msg) => { if (!cond) { failures++; console.log("  FAIL " + msg); } };

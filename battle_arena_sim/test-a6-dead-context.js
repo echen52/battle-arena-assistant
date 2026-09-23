@@ -25,27 +25,19 @@
 import { analyzeMatchup, buildMon, buildStartState, chooseOpponentMoves } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
+// Recorded behaviour lives in anchors.js -- ONE file (see its header).
+import { METAGROSS as ANCHOR_LEAD, A6_PRE, CURRENT } from "./anchors.js";
 
-const METAGROSS = { species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 },
-  ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] };
+const PRE_A6 = A6_PRE;
+const A6_KEYS = ["Gengar 1", "Lapras 1", "Greta Silver Umbreon", "Tauros 1", "Articuno 5", "Cradily 1", "Spenser Silver Slaking"];
+const POST_A6 = Object.fromEntries(A6_KEYS.map((n) => [n, CURRENT[n]]));
+
+const METAGROSS = ANCHOR_LEAD;
 
 // Pre-A6 (branch phase-a-fidelity @ 82b82e3). HISTORY, never asserted.
-const PRE_A6 = {
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.9184375 },
-  "Lapras 1": { move: "Earthquake", winProb: 0.6896961805555555 },
-  "Articuno 5": { move: "Shadow Ball", winProb: 0.9851259223620097 },
-  "Spenser Silver Slaking": { move: "Earthquake", winProb: 0.46563486328125003 },
-};
+
 // Post-A6. ASSERTED.
-const POST_A6 = {
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.5800000000000001 },
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.589053488498264 },
-  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8143718750000001 },
-  "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
-  "Articuno 5": { move: "Meteor Mash", winProb: 0.9694799148701366 },
-  "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
-  "Spenser Silver Slaking": { move: "Explosion", winProb: 0.415625 },
-};
+
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };

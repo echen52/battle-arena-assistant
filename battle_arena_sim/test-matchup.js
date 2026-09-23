@@ -1,4 +1,7 @@
 import { analyzeMatchup, printTree } from "./logic.js";
+// Recorded behaviour lives in anchors.js -- ONE file, so a fix class that moves
+// it is a one-file re-record. See that file's header for why.
+import { ANCHOR, ANCHOR_HISTORY } from "./anchors.js";
 
 const metagrossConfig = {
   species: "Metagross",
@@ -54,15 +57,16 @@ console.log(`Recommended: ${fresh.result.move} (P(win)=${fresh.result.winProb.to
 //                         (BattleScript_AlreadyConfused) instead of silently
 //                         re-landing for +1 Skill. Direction matches every
 //                         other A4 mover: the player does better.
-const EXPECTED_MOVE = "Meteor Mash";
+const EXPECTED_MOVE = ANCHOR.move;
 //   0.9069423628063115    MOVED by A6: targetConfused went live, so this
 //                         opponent's Confuse Ray is now correctly scored as
 //                         bad against an already-confused target.
-const EXPECTED_WINPROB = 0.9069;
+const EXPECTED_WINPROB = ANCHOR.winProb;
 const pass = fresh.result.move === EXPECTED_MOVE &&
-  Math.abs(fresh.result.winProb - EXPECTED_WINPROB) < 0.001;
+  fresh.result.winProb === EXPECTED_WINPROB; // exact: the value is recorded, not approximated
 console.log();
 console.log(pass ? "✅ PASS — matches prior validated result" : "❌ FAIL — refactor changed the answer, investigate");
+const matchupPass = pass; // captured before the second scenario prints
 
 console.log();
 console.log("── New capability: same matchup, but Metagross already at 60% HP ──");
@@ -73,3 +77,6 @@ for (const opt of carried.result.allOptions) {
   console.log(`  ${opt.move.padEnd(14)} P(win) = ${opt.winProb.toFixed(3)}`);
 }
 console.log(`Recommended: ${carried.result.move} (P(win)=${carried.result.winProb.toFixed(3)})`);
+
+// A test that prints a failure and exits 0 lies to every exit-code consumer.
+process.exit(matchupPass ? 0 : 1);

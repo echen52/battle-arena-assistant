@@ -1,4 +1,7 @@
 import { getOpponentConfig } from "./opponent-adapter.js";
+// Recorded behaviour lives in anchors.js -- ONE file, so a fix class that moves
+// it is a one-file re-record. See that file's header for why.
+import { ANCHOR } from "./anchors.js";
 import { analyzeMatchup } from "./logic.js";
 
 const metagrossConfig = {
@@ -33,8 +36,9 @@ console.log(`Recommended: ${result.result.move} (P(win)=${result.result.winProb.
 // reverified 0.919 anchor.
 // Anchor re-recorded 0.919 -> 0.9325 (A4) -> 0.9069 (A6) (Confuse Ray no longer re-lands on
 // an already-confused target). See test-matchup.js for the full history.
-const pass = result.result.move === "Meteor Mash" && Math.abs(result.result.winProb - 0.9069) < 0.001;
+const pass = result.result.move === ANCHOR.move && result.result.winProb === ANCHOR.winProb;
 console.log(pass ? "✅ PASS — adapter output matches the hand-typed-config result exactly" : "❌ FAIL");
+let adapterOk = pass;
 
 console.log();
 console.log("── Error handling checks ──");
@@ -43,6 +47,7 @@ function expectError(label, fn) {
   try {
     fn();
     console.log(`❌ ${label}: expected an error, got none`);
+    adapterOk = false;
   } catch (e) {
     console.log(`✅ ${label}:`);
     console.log(`   "${e.message}"`);
@@ -76,3 +81,6 @@ console.log();
 console.log("── Second cross-checked entry (Umbreon 1, different EV spread) ──");
 const umbreon1 = getOpponentConfig("Umbreon 1");
 console.log("✅ Umbreon 1 config built and passed stat cross-check:", umbreon1);
+
+// A test that prints a failure and exits 0 lies to every exit-code consumer.
+process.exit(adapterOk ? 0 : 1);

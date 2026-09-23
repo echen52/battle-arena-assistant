@@ -53,3 +53,5 @@ const ok7 = runN("Change #4-affected (Metagross carried at 81.94%% vs fresh Jolt
 
 const allOk = ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && ok7;
 console.log(allOk ? "\n✅ ALL DETERMINISM CHECKS PASS" : "\n❌ DETERMINISM FAILURE");
+// A test that prints a failure and exits 0 lies to every exit-code consumer.
+process.exit(allOk ? 0 : 1);

@@ -166,3 +166,5 @@ console.log();
 console.log(allPass
   ? "✅ ALL PARTS MATCH pokeemerald — the fix is live and correct."
   : "❌ DIVERGENCE PRESENT — this is expected before the fix lands, and is a failure once it has.");
+// A test that prints a failure and exits 0 lies to every exit-code consumer.
+process.exit(allPass ? 0 : 1);
