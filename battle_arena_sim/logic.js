@@ -128,10 +128,21 @@ function buildMon(config) {
 // 2. TYPE CHART (imported from type-data.js — see that file for provenance)
 // ─────────────────────────────────────────────────────────────────────────
 
-function typeEffectiveness(moveType, defTypes) {
+// B2b: `foresighted` is the DEFENDER's STATUS2_FORESIGHT. Foresight removes
+// EXACTLY the two type-chart rows that sit AFTER the TYPE_FORESIGHT separator
+// in gTypeEffectiveness (src/battle_main.c:445-447): NORMAL vs GHOST and
+// FIGHTING vs GHOST, both TYPE_MUL_NO_EFFECT. The scan `break`s at the
+// separator when the defender is foresighted (src/battle_script_commands.c:
+// 1388-1394, :1447-1453, :1562-1568), so every row BEFORE it -- all of Ghost's
+// other interactions -- still applies. Nothing else about the chart changes.
+function typeEffectiveness(moveType, defTypes, foresighted = false) {
   const chart = TYPE_CHART[moveType] || {};
+  const piercesGhost = foresighted && (moveType === "Normal" || moveType === "Fighting");
   let mult = 1;
-  for (const t of defTypes) mult *= (chart[t] !== undefined ? chart[t] : 1);
+  for (const t of defTypes) {
+    if (piercesGhost && t === "Ghost") continue; // the skipped no-effect row
+    mult *= (chart[t] !== undefined ? chart[t] : 1);
+  }
   return mult;
 }
 
@@ -539,7 +550,158 @@ const AI_NO_DISPATCH_EFFECTS = new Set([
   "EFFECT_TRANSFORM", "EFFECT_WISH",
 ]);
 
+// CheckIfAbilityBlocksStatChange (data/battle_ai_scripts.s:308-312) -- the
+// shared tail every single-stat-lowering AI_CBM_* `goto`s into.
+const abilityBlocksStatChange = (ctx) =>
+  (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") ? -10 : 0;
+
+// AI_CV_DefenseDown (data/battle_ai_scripts.s:1124-1135), shared by
+// EFFECT_DEFENSE_DOWN and EFFECT_TICKLE (both if_effect rows name this label).
+// Control flow, with the fallthroughs the labels hide: the entry block goes to
+// _2 when the user is below 70% HP, to _3 when the target's Defense is above
+// -3 stages, and otherwise FALLS THROUGH into _2 (:1127). _2 is a 50/256 skip
+// around a -2 and then falls through into _3 (:1130). _3 adds a second -2
+// unless the target is above 70% HP.
+function defenseDownViability(ctx) {
+  const block3 = (d) => (ctx.targetHpPct > 70 ? d : combineDist(d, [{ p: 1, delta: -2 }]));
+  if (ctx.userHpPct >= 70 && ctx.targetStages.def > -3) return block3([{ p: 1, delta: 0 }]);
+  return block3(combineDist([{ p: 1, delta: 0 }],
+    [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -2 }]));
+}
+
 const AI_HANDLERS = {
+  // -- B2b batch 1: the stat-stage family -------------------------------
+  // Nine effects whose if_effect rows exist in AI_CheckBadMove and/or
+  // AI_CheckViability (data/battle_ai_scripts.s:51-214 / :652-776) but had no
+  // port here, so every set carrying one threw at the ai-scoring guard.
+  //
+  // Stage convention: source stores statStages 0..12 with DEFAULT_STAT_STAGE 6,
+  // MIN 0, MAX 12; this engine stores -6..+6. So `if_stat_level_more_than X, 8`
+  // reads as `stage > 2` and `if_stat_level_less_than X, 4` as `stage < -2`.
+  // `if_random_less_than N` is `Random() % 256 < N` (Cmd_if_random_less_than,
+  // src/battle_ai_script_commands.c:663-671), i.e. probability N/256 --
+  // enumerated as weighted branches, never sampled (hard constraint 3).
+  EFFECT_DEFENSE_CURL: {
+    // AI_CBM_DefenseUp (:253-256), shared with the already-ported
+    // EFFECT_DEFENSE_UP family. EFFECT_DEFENSE_CURL has NO row in the
+    // viability chain at all, so viability leaves the score untouched.
+    checkBadMove: (ctx) => (ctx.userDefStage >= 6 ? -10 : 0),
+  },
+  EFFECT_DEFENSE_DOWN: {
+    // AI_CBM_DefenseDown (:283-286) -> CheckIfAbilityBlocksStatChange (:308-312).
+    checkBadMove: (ctx) => (ctx.targetStages.def <= -6 ? -10 : abilityBlocksStatChange(ctx)),
+    checkViability: defenseDownViability,
+  },
+  EFFECT_SPEED_DOWN: {
+    // AI_CBM_SpeedDown (:287-291): min stage, then Speed Boost, then the
+    // shared Clear Body / White Smoke tail.
+    checkBadMove: (ctx) => {
+      if (ctx.targetStages.spe <= -6) return -10;
+      if (ctx.targetAbility === "Speed Boost") return -10;
+      return abilityBlocksStatChange(ctx);
+    },
+    // AI_CV_SpeedDown (:1142-1152): if the target already outspeeds the user,
+    // 186/256 chance of +2; otherwise a flat -3. `if_target_faster` is
+    // `if_user_goes 1` (asm/macros/battle_ai_script.inc:595-597) ->
+    // GetWhoStrikesFirst(AI, target, TRUE) == 1, which is ctx.targetFaster.
+    checkViability: (ctx) => (ctx.targetFaster
+      ? [{ p: 70 / 256, delta: 0 }, { p: 186 / 256, delta: 2 }]
+      : [{ p: 1, delta: -3 }]),
+  },
+  EFFECT_TICKLE: {
+    // AI_CBM_Tickle (:571-575) -- note it does NOT fall through to
+    // CheckIfAbilityBlocksStatChange the way the single-stat droppers do; it
+    // ends on its own `end`, so Clear Body costs Tickle nothing in scoring.
+    checkBadMove: (ctx) => {
+      if (ctx.targetStages.atk <= -6) return -10;
+      if (ctx.targetStages.def <= -6) return -8;
+      return 0;
+    },
+    // Tickle's viability row points at AI_CV_DefenseDown -- literally the same
+    // label EFFECT_DEFENSE_DOWN uses, so the two share one function.
+    checkViability: defenseDownViability,
+  },
+  // EFFECT_MINIMIZE's rows in BOTH chains point at the SAME labels as
+  // EFFECT_EVASION_UP (AI_CBM_EvasionUp :273-276 / AI_CV_EvasionUp :1037-1073),
+  // so the scoring is shared outright rather than duplicated. Resolved at call
+  // time because both entries live in this one object literal.
+  EFFECT_MINIMIZE: {
+    checkBadMove: (ctx) => AI_HANDLERS.EFFECT_EVASION_UP.checkBadMove(ctx),
+    checkViability: (ctx) => AI_HANDLERS.EFFECT_EVASION_UP.checkViability(ctx),
+  },
+  EFFECT_FOCUS_ENERGY: {
+    // AI_CBM_FocusEnergy (:382-385). No viability row.
+    checkBadMove: (ctx) => (ctx.userFocusEnergy ? -10 : 0),
+  },
+  EFFECT_BELLY_DRUM: {
+    // AI_CBM_BellyDrum (:247-248) and AI_CV_BellyDrum (:2077-2085). Both are
+    // pure HP-percentage gates; note the thresholds differ (51 vs 90), so
+    // between 51% and 89% the move is not "bad" but is scored -2.
+    checkBadMove: (ctx) => (ctx.userHpPct < 51 ? -10 : 0),
+    checkViability: (ctx) => [{ p: 1, delta: ctx.userHpPct < 90 ? -2 : 0 }],
+  },
+  EFFECT_HAZE: {
+    // AI_CBM_Haze (:314-330): fourteen if_stat_level checks, each jumping to
+    // AI_CBM_Haze_End (score unchanged). Only if ALL fourteen fall through --
+    // none of the user's seven stats below default AND none of the target's
+    // seven above it -- does it reach `goto Score_Minus10`. So Haze is "bad"
+    // exactly when it would undo nothing.
+    checkBadMove: (ctx) => {
+      const u = [ctx.userAtkStage, ctx.userDefStage, ctx.userSpeStage,
+        ctx.userSpAtkStage, ctx.userSpDefStage, ctx.userAccStage, ctx.userEvasionStage];
+      if (u.some((v) => v < 0)) return 0;
+      const t = ctx.targetStages;
+      if ([t.atk, t.def, t.spe, t.spa, t.spd, t.accuracy, t.evasion].some((v) => v > 0)) return 0;
+      return -10;
+    },
+    // AI_CV_Haze (:1247-1283). TWO sequential blocks, and the first FALLS
+    // THROUGH into the second (AI_CV_Haze2 ends at :1262, AI_CV_Haze3 begins
+    // at :1263), so a -3 and a +3 can both land in one evaluation.
+    // Block 1 asks "would Haze throw away MY advantage" -> 206/256 of -3.
+    // Block 2 asks the mirror question and is ALWAYS evaluated: either
+    // 206/256 of +3 (Haze helps) or 206/256 of -1 (it does nothing either way).
+    // The two blocks read DIFFERENT five-stat lists -- the user-side scan
+    // includes EVASION and excludes ACC, the target-side scan the reverse --
+    // preserved exactly as written.
+    checkViability: (ctx) => {
+      const t = ctx.targetStages;
+      const uBoosted = [ctx.userAtkStage, ctx.userDefStage, ctx.userSpAtkStage,
+        ctx.userSpDefStage, ctx.userEvasionStage].some((v) => v > 2);
+      const tLowered = [t.atk, t.def, t.spa, t.spd, t.accuracy].some((v) => v < -2);
+      const tBoosted = [t.atk, t.def, t.spa, t.spd, t.evasion].some((v) => v > 2);
+      const uLowered = [ctx.userAtkStage, ctx.userDefStage, ctx.userSpAtkStage,
+        ctx.userSpDefStage, ctx.userAccStage].some((v) => v < -2);
+      let dist = [{ p: 1, delta: 0 }];
+      if (uBoosted || tLowered) {
+        dist = combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -3 }]);
+      }
+      return combineDist(dist, (tBoosted || uLowered)
+        ? [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 3 }]
+        : [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -1 }]);
+    },
+  },
+  EFFECT_FORESIGHT: {
+    // AI_CBM_Foresight (:443-446): -10 if the target is already identified.
+    checkBadMove: (ctx) => (ctx.targetForesighted ? -10 : 0),
+    // AI_CV_Foresight (:1940-1964). VANILLA BUG PRESERVED, NOT CORRECTED: the
+    // #ifdef BUGFIX arm checks AI_TARGET's types and evasion -- the side
+    // Foresight actually affects -- but the shipped build does not define
+    // BUGFIX (include/config.h:48 is a commented-out `#define BUGFIX`, and
+    // MODERN is off for the agbcc build), so the live script checks the USER's
+    // OWN type1/type2 and the USER's OWN evasion stage. Porting the fixed arm
+    // would make this engine disagree with the ROM, which is exactly what
+    // Phase D measures. Control flow: AI_CV_Foresight2 (:1957-1958) falls
+    // THROUGH into AI_CV_Foresight3 (:1959-1961), so the Ghost path passes two
+    // independent 80/256 gates before the +2.
+    checkViability: (ctx) => {
+      if (ctx.userTypes.includes("Ghost")) {
+        const pPlus2 = (176 / 256) * (176 / 256);
+        return [{ p: 1 - pPlus2, delta: 0 }, { p: pPlus2, delta: 2 }];
+      }
+      if (ctx.userEvasionStage > 2) return [{ p: 80 / 256, delta: 0 }, { p: 176 / 256, delta: 2 }];
+      return [{ p: 1, delta: -2 }];
+    },
+  },
   EFFECT_TOXIC: {
     // AI_CBM_Toxic (data/battle_ai_scripts.s:341-352) — completing this now
     // (batch 4) since the Immunity-ability/already-statused/Safeguard ctx
@@ -2044,7 +2206,7 @@ function getFriendshipPower(effect, friendship) {
 function calcDamage(attacker, defender, moveName, {
   rollFrac = 0.925, rollPercent = null, crit = false, atkStage = 0, defStage = 0,
   attackerBurned = false, attackerFlashFireActive = false, attackerHpPct = 100,
-  screenActive = false, weather = null,
+  screenActive = false, weather = null, defenderForesighted = false,
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
@@ -2058,7 +2220,7 @@ function calcDamage(attacker, defender, moveName, {
   // handling further down even runs. Normal resist/weak (0.5x/2x) is
   // deliberately NOT applied — only the binary immune/not-immune gate.
   if (move.effect === "EFFECT_LEVEL_DAMAGE") {
-    return typeEffectiveness(move.type, defender.types) === 0 ? 0 : attacker.level;
+    return typeEffectiveness(move.type, defender.types, defenderForesighted) === 0 ? 0 : attacker.level;
   }
   const effectivePower = moveName === "Flail" || moveName === "Reversal" ? getFlailPower(attackerHpPct)
     : (move.effect === "EFFECT_RETURN" || move.effect === "EFFECT_FRUSTRATION") ? getFriendshipPower(move.effect, attacker.friendship)
@@ -2121,7 +2283,7 @@ function calcDamage(attacker, defender, moveName, {
   let base = preFinal + 2;
 
   const stab = attacker.types.includes(move.type) ? 1.5 : 1;
-  const eff = typeEffectiveness(move.type, defender.types);
+  const eff = typeEffectiveness(move.type, defender.types, defenderForesighted);
   const critMult = crit ? 2 : 1;
 
   let dmg = Math.floor(base * stab);
@@ -2474,6 +2636,7 @@ function buildAiDamageState(state, opp, you) {
     attackerHpPct: state.oppHpPct,
     targetReflect: state.youReflectTurns != null,
     targetLightScreen: state.youLightScreenTurns != null,
+    targetForesighted: state.youForesighted, // B2b: the AI's own damage estimate sees it too (A9 defect class)
     weather: effectiveWeather(state, you, opp),
   };
 }
@@ -2492,6 +2655,7 @@ function aiCalcDamage(user, target, moveName, st, rollPercent) {
     attackerHpPct: st.attackerHpPct,
     screenActive: physical ? st.targetReflect : st.targetLightScreen,
     weather: st.weather,
+    defenderForesighted: st.targetForesighted,
   });
 }
 
@@ -2650,6 +2814,13 @@ function chooseOpponentMoves(opp, you, state) {
     // B2: targetCursed is real now that Ghost-Curse is implemented. It was
     // hardcoded false because no reachable state could set it.
     targetCursed: state.youCursed,
+    // B2b batch 1. targetForesighted feeds AI_CBM_Foresight's already-identified
+    // check; userForesighted is here for symmetry with the executor's two-sided
+    // flag (AI_CV_Foresight reads the USER's TYPES and EVASION, not this -- see
+    // the vanilla bug preserved in that handler).
+    targetForesighted: state.youForesighted,
+    userForesighted: state.oppForesighted,
+    userFocusEnergy: state.oppFocusEnergy, // AI_CBM_FocusEnergy's STATUS2_FOCUS_ENERGY check
     userIngrained: state.oppIngrained,
     targetLeechSeeded: state.youSeeded,
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
@@ -3005,6 +3176,23 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     youTauntTurns: null, oppTauntTurns: null,
     youWishTurns: null, oppWishTurns: null,
     youCursed: false, oppCursed: false,
+    // B2b batch 1 -- the stat-stage family's persistent bits.
+    // Foresight (STATUS2_FORESIGHT, Cmd_setforesight src/battle_script_commands.c:
+    // 8502-8506): the side that HAS been identified. Two live consequences,
+    // both wired: its evasion stage drops out of the accuracy calc (:1127-1131)
+    // and Normal/Fighting stop being no-effect against its Ghost typing.
+    youForesighted: false, oppForesighted: false,
+    // STATUS2_FOCUS_ENERGY -- raises the crit stage by 2. Crits are enumerated
+    // in B6, so this is recorded state whose damage consumer arrives there; it
+    // already has a live consumer in AI_CBM_FocusEnergy's already-set check.
+    youFocusEnergy: false, oppFocusEnergy: false,
+    // STATUS2_MINIMIZE -- doubles EFFECT_FLINCH_MINIMIZE_HIT (Stomp/
+    // Extrasensory), a CHANCE_SECONDARY effect not rolled until B4.
+    youMinimized: false, oppMinimized: false,
+    // STATUS2_DEFENSE_CURL -- doubles EFFECT_ROLLOUT's power; Rollout is still
+    // in ACCEPTED_UNMODELED (B3). Tracked so porting Rollout does not have to
+    // rediscover it, and so nothing here fails silently.
+    youDefenseCurled: false, oppDefenseCurled: false,
     youAttracted: false, oppAttracted: false,
     youStages: freshStages(), oppStages: freshStages(),
     youStatus: null, oppStatus: null, // null | "paralysis" | "freeze" | "burn" | "poison" | "sleep"
@@ -3328,10 +3516,12 @@ const SOUND_MOVES = new Set([
 // type contributed a super-effective or not-very-effective component —
 // needed for Wonder Guard's "both SE and NVE simultaneously still blocks"
 // rule on dual-typed defenders, which the single combined multiplier loses.
-function typeEffectivenessBreakdown(moveType, defTypes) {
+function typeEffectivenessBreakdown(moveType, defTypes, foresighted = false) {
   const chart = TYPE_CHART[moveType] || {};
+  const piercesGhost = foresighted && (moveType === "Normal" || moveType === "Fighting");
   let hadSuper = false, hadNVE = false;
   for (const t of defTypes) {
+    if (piercesGhost && t === "Ghost") continue; // same skipped row as typeEffectiveness
     const m = chart[t] !== undefined ? chart[t] : 1;
     if (m > 1) hadSuper = true;
     if (m < 1 && m > 0) hadNVE = true;
@@ -3492,7 +3682,7 @@ const ABILITY_BLOCK_SKILL_DELTA = Object.fromEntries(
 //   { type: "blocked", skillDelta }                              — ability/item block (see ABILITY_BLOCK_SKILL_DELTA above)
 //   { type: "absorb", healFraction: 0.25, skillDelta }           — Volt/Water Absorb: heal defender instead
 //   { type: "flashFireTrigger", skillDelta }                     — Flash Fire: no damage, sets standing boost flag
-function resolveAbilityInteraction(moveName, moveData, attacker, defender) {
+function resolveAbilityInteraction(moveName, moveData, attacker, defender, defenderForesighted = false) {
   if (defender.ability === "Soundproof" && SOUND_MOVES.has(moveName)) {
     return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Soundproof"] };
   }
@@ -3511,7 +3701,7 @@ function resolveAbilityInteraction(moveName, moveData, attacker, defender) {
     return { type: "flashFireTrigger", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Flash Fire"] };
   }
   if (defender.ability === "Wonder Guard") {
-    const { hadSuper, hadNVE } = typeEffectivenessBreakdown(moveData.type, defender.types);
+    const { hadSuper, hadNVE } = typeEffectivenessBreakdown(moveData.type, defender.types, defenderForesighted);
     if (!(hadSuper && !hadNVE)) return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Wonder Guard"] }; // only a CLEAN super-effective hit gets through
   }
   return { type: "normal" };
@@ -4065,6 +4255,96 @@ const EFFECT_EXECUTORS = {
   EFFECT_SPEED_DOWN_2: statDownExecutor("spe", 2, null),
   EFFECT_ATTACK_DOWN_2: statDownExecutor("atk", 2, "Hyper Cutter"),
   EFFECT_SPECIAL_DEFENSE_DOWN_2: statDownExecutor("spd", 2, null),
+  // -- B2b batch 1 executors: the stat-stage family ---------------------
+  EFFECT_DEFENSE_CURL: (s, actor) => {
+    // BattleScript_EffectDefenseCurl (data/battle_scripts_1.s:2014-2025):
+    // setdefensecurlbit, then STAT_DEF +1 on the USER. Cannot fail -- at +6 it
+    // takes the B_MSG_STAT_WONT_INCREASE branch, which still ends the move
+    // normally (no MOVE_RESULT_FAILED), which is what bumpStage's silent clamp
+    // already reproduces. The curl bit only feeds EFFECT_ROLLOUT's power
+    // doubling, still in ACCEPTED_UNMODELED (B3) -- tracked, not dropped.
+    s[actor === "you" ? "youDefenseCurled" : "oppDefenseCurled"] = true;
+    bumpStage(actor === "you" ? s.youStages : s.oppStages, "def", 1);
+  },
+  EFFECT_DEFENSE_DOWN: statDownExecutor("def", 1, null),
+  EFFECT_SPEED_DOWN: statDownExecutor("spe", 1, null),
+  EFFECT_TICKLE: (s, actor, ctx) => {
+    // BattleScript_EffectTickle (data/battle_scripts_1.s:2652-2677): Atk -1
+    // then Def -1, both on the TARGET, as two separate statbuffchange calls.
+    // The move fails outright ONLY when Atk is already at MIN_STAT_STAGE AND
+    // Def is too -- the jumpifstat pair at :2656-2657 routes exactly that case
+    // to BattleScript_CantLowerMultipleStats. Because the two drops are
+    // independent statbuffchanges, Hyper Cutter blocks the Atk half ALONE and
+    // the Def half still lands -- which is why this cannot reuse
+    // statDownExecutor, whose blockingAbility fails the whole move.
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"]) return "failed";
+    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
+    const foeStages = isYou ? s.oppStages : s.youStages;
+    if (foeStages.atk <= -6 && foeStages.def <= -6) return "failed";
+    if (foeMon.ability !== "Hyper Cutter") bumpStage(foeStages, "atk", -1);
+    bumpStage(foeStages, "def", -1);
+  },
+  EFFECT_MINIMIZE: (s, actor) => {
+    // BattleScript_EffectMinimize (data/battle_scripts_1.s:1476-1480):
+    // setminimize, then STAT_EVASION +1 -- Gen III raises it by ONE, not the
+    // two of later generations. The minimize bit only doubles
+    // EFFECT_FLINCH_MINIMIZE_HIT (Stomp/Extrasensory), a CHANCE_SECONDARY
+    // effect not rolled until B4 -- tracked, no consumer yet.
+    s[actor === "you" ? "youMinimized" : "oppMinimized"] = true;
+    bumpStage(actor === "you" ? s.youStages : s.oppStages, "evasion", 1);
+  },
+  EFFECT_FOCUS_ENERGY: (s, actor) => {
+    // BattleScript_EffectFocusEnergy (data/battle_scripts_1.s:885-895): fails
+    // outright (jumpifstatus2 -> ButItFailed) when STATUS2_FOCUS_ENERGY is
+    // already set, else setfocusenergy. The flag raises the crit stage by 2;
+    // crits are enumerated in B6, so the damage consumer arrives there. It
+    // already has a LIVE consumer today in AI_CBM_FocusEnergy's own check,
+    // which is why the flag is real state and not a stub.
+    const key = actor === "you" ? "youFocusEnergy" : "oppFocusEnergy";
+    if (s[key]) return "failed";
+    s[key] = true;
+  },
+  EFFECT_BELLY_DRUM: (s, actor, ctx) => {
+    // Cmd_maxattackhalvehp (src/battle_script_commands.c): halfHp =
+    // floor(maxHP/2), floored to 1. Succeeds only when the user's Atk stage is
+    // BELOW MAX_STAT_STAGE and its current HP is STRICTLY GREATER than halfHp;
+    // otherwise it branches to ButItFailed. On success Atk is ASSIGNED
+    // MAX_STAT_STAGE outright (not incremented) and the user pays halfHp.
+    const isYou = actor === "you";
+    const selfMon = isYou ? ctx.you : ctx.opp;
+    const selfHpKey = isYou ? "yourHpPct" : "oppHpPct";
+    const stages = isYou ? s.youStages : s.oppStages;
+    const halfHp = Math.max(1, Math.floor(selfMon.stats.hp / 2));
+    const currentHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
+    if (stages.atk >= 6 || currentHp <= halfHp) return "failed";
+    stages.atk = 6;
+    s[selfHpKey] = Math.max(0, s[selfHpKey] - (halfHp / selfMon.stats.hp) * 100);
+  },
+  EFFECT_HAZE: (s) => {
+    // Cmd_normalisebuffs (src/battle_script_commands.c): loops over EVERY
+    // battler and every one of NUM_BATTLE_STATS, writing DEFAULT_STAT_STAGE --
+    // so it resets BOTH sides, not just the foe, and it is side-agnostic
+    // (hence no `actor` parameter). It cannot fail: the script
+    // (data/battle_scripts_1.s:562-571) has no ButItFailed branch at all,
+    // so Haze into a completely unmodified board still scores as landed.
+    for (const k of ["atk", "def", "spa", "spd", "spe", "evasion", "accuracy"]) {
+      s.youStages[k] = 0;
+      s.oppStages[k] = 0;
+    }
+  },
+  EFFECT_FORESIGHT: (s, actor) => {
+    // Cmd_setforesight (src/battle_script_commands.c:8502-8506) sets
+    // STATUS2_FORESIGHT on the TARGET unconditionally -- no substitute check,
+    // no already-set check, and BattleScript_EffectForesight
+    // (data/battle_scripts_1.s:1555-1565) has no ButItFailed path, so the only
+    // way it misses is the accuracycheck the caller already resolved.
+    // Both consequences are wired live: the target's evasion stage drops out
+    // of the accuracy calc, and Normal/Fighting stop being no-effect against
+    // its Ghost typing.
+    s[actor === "you" ? "oppForesighted" : "youForesighted"] = true;
+  },
   EFFECT_EVASION_DOWN: statDownExecutor("evasion", 1, null),
   // Other effects (e.g. EFFECT_SPECIAL_DEFENSE_DOWN_HIT on Shadow Ball):
   // no executor yet. For power>0 moves this just means the secondary effect
@@ -4224,6 +4504,10 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
   const foeMon = isYou ? opp : you;
+  // B2b: the DEFENDER'''s STATUS2_FORESIGHT, read once and threaded into every
+  // type-chart and damage call below (Normal/Fighting stop being no-effect
+  // against its Ghost typing -- see typeEffectiveness).
+  const foeForesighted = isYou ? s.oppForesighted : s.youForesighted;
   const moveData = MOVES[moveName];
   const mindKey = isYou ? "mindYou" : "mindOpp";
   const skillKey = isYou ? "skillYou" : "skillOpp";
@@ -4320,7 +4604,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // call here (Lesson 1). Type immunity still applies normally: typecalc
     // runs BEFORE Cmd_tryKO in real BattleScript_EffectOHKO, so an immune
     // target never even reaches the roll.
-    const eff = typeEffectiveness(moveData.type, foeMon.types);
+    const eff = typeEffectiveness(moveData.type, foeMon.types, foeForesighted);
     if (eff === 0) {
       s[skillKey] += skillDelta("noEffect");
       return;
@@ -4436,7 +4720,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // Fire) checked before normal resolution — Soundproof applies to status
   // moves too, so this check runs regardless of moveData.power.
   if (hit || moveData.power === 0) {
-    const interaction = resolveAbilityInteraction(moveName, moveData, selfMon, foeMon);
+    const interaction = resolveAbilityInteraction(moveName, moveData, selfMon, foeMon, foeForesighted);
     if (interaction.type === "blocked") {
       s[skillKey] += interaction.skillDelta;
       return;
@@ -4480,7 +4764,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     }
     const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
     const defStatKey = moveData.category === "physical" ? "def" : "spd";
-    const eff = typeEffectiveness(moveData.type, foeMon.types);
+    const eff = typeEffectiveness(moveData.type, foeMon.types, foeForesighted);
     const foeEndureKey = isYou ? "oppEndureActive" : "youEndureActive";
     if (hit) {
       // Reflect/Light Screen: halves damage of the matching category, gated
@@ -4492,6 +4776,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       const foeLightScreenKey = isYou ? "oppLightScreenTurns" : "youLightScreenTurns";
       const screenActive = moveData.category === "physical" ? s[foeReflectKey] != null : s[foeLightScreenKey] != null;
       let dmg = calcDamage(selfMon, foeMon, moveName, {
+        defenderForesighted: foeForesighted,
         atkStage: selfStages[atkStatKey], defStage: foeStages[defStatKey],
         attackerBurned: s[selfStatusKey] === "burn",
         attackerFlashFireActive: s[selfFlashFireKey],
@@ -5112,7 +5397,13 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
 
       const attackerAccStage = (actor === "you" ? state.youStages : state.oppStages).accuracy;
-      const targetEvasionStage = (actor === "you" ? state.oppStages : state.youStages).evasion;
+      // B2b: Foresight (src/battle_script_commands.c:1127-1131) -- when the
+      // TARGET is foresighted the accuracy calc uses the attacker's accuracy
+      // stage ALONE; the target's evasion stage is dropped from the comparison
+      // entirely (source literally assigns buff = acc in that branch).
+      const targetForesightedForAcc = actor === "you" ? state.oppForesighted : state.youForesighted;
+      const targetEvasionStage = targetForesightedForAcc
+        ? 0 : (actor === "you" ? state.oppStages : state.youStages).evasion;
       const foeMonForAcc = actor === "you" ? ctx.opp : ctx.you;
       const selfMonForAcc = actor === "you" ? ctx.you : ctx.opp;
       const weatherForAcc = effectiveWeather(state, ctx.you, ctx.opp);
@@ -5380,6 +5671,7 @@ function moveTiebreakScore(ctx, state, moveName) {
     attackerHpPct: state.yourHpPct,
     screenActive,
     weather: effectiveWeather(state, ctx.you, ctx.opp),
+    defenderForesighted: state.oppForesighted,
   });
 }
 

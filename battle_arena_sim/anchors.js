@@ -183,3 +183,25 @@ export const CURRENT_DIST = {
   "Regirock 2": [["Earthquake", 0.4674479166666667], ["Counter", 0.4674479166666667], ["Explosion", 0.06510416666666667]],
   "Golem 1": [["Rock Tomb", 0.49951171875], ["Earthquake", 0.406494140625], ["Counter", 0.093994140625]],
 };
+
+// ── B2B1 — the sets B2b batch 1 (the stat-stage family) made solvable ──────
+// Recorded 2026-09-23. Every one of these cells was a RECORDED THROW before
+// the batch (cause named in `wasThrowing`), so none of them is a re-recording:
+// the pre-values are "no value existed", which is why they carry no PRE table.
+//
+// The lead on each row is chosen so the number DISCRIMINATES. Against the
+// canonical Metagross lead most of these sets evaluate to a flat 1.0, which
+// locks nothing; the panel leads separate them.
+export const B2B1 = {
+  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.04666666666666666 },
+  "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.03202128648757935 },
+  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.07542444229125977 },
+  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49859460108585935 },
+  "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9934374999999999 },
+  "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.3474999999999999 },
+  "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0 },
+  "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.5142531394958496 },
+  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.99658203125 },
+  "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
+  "Caterpie 1":            { tier:  3, lead: "Snorlax", effect: "EFFECT_SPEED_DOWN",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
+};
