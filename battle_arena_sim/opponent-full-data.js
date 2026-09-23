@@ -1,3 +1,19 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// RETIRED (B1, 2026-09-23). This file is LINEAGE, not the pool.
+//
+// The engine's opponent pool is now frontier-pool.js -- 928 entries (882
+// gBattleFrontierMons + 46 Frontier Brain sets), keyed by (mon, IV tier).
+// opponent-adapter.js no longer reads this file.
+//
+// This pool was 506 of the 882 source entries -- indices 372-881 only, missing
+// the entire low/mid range, i.e. every mon the first ~200 trainers can bring --
+// and it had no representation of the IV tier at all, which is a per-TRAINER
+// property (GetFrontierTrainerFixedIvs, src/battle_tower.c:3288-3309).
+//
+// Kept because every anchor and figure recorded before B1 was produced against
+// it. Provenance, the equivalence gate (552/552 reproduced) and the full
+// lineage: arena-solver/docs/pool-provenance.md
+// ═══════════════════════════════════════════════════════════════════════════
 // ── opponent-full-data.js ───────────────────────────────────────────────────
 // Full opponent set database, converted from EmeraldBattleFrontierComplete.xlsx
 // ("Pokémon" sheet). Supersedes the old data.js + opponent-ev-data.js pairing —
