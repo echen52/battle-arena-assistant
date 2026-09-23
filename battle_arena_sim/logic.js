@@ -5954,6 +5954,20 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
   return results;
 }
 
+// B7c: Quick Claw draws ONE gRandomTurnNumber PER TURN (src/battle_main.c:3140,
+// :3923, :4013) and BOTH battlers compare against that SAME value (:4653 and
+// :4687): `gRandomTurnNumber < (0xFFFF * holdEffectParam) / 100`.
+//
+// With param 20 the threshold is floor(0xFFFF * 20 / 100) = floor(1310700/100)
+// = 13107. gRandomTurnNumber is a u16 uniform over 0..65535, i.e. 65536 values,
+// so the probability is EXACTLY 13107 / 65536 = 0.1999969482421875 -- NOT 20%,
+// and NOT 13107/65535 either. The threshold divides by 0xFFFF (65535) while the
+// draw ranges over 65536 values, and that off-by-one is the whole difference.
+// The source-exact constant is kept rather than rounded to 0.2, because Phase D
+// compares against the ROM turn by turn.
+const QUICK_CLAW_RANDOM_SPACE = 65536; // gRandomTurnNumber is a u16
+const quickClawThreshold = (param) => Math.floor((0xFFFF * param) / 100);
+
 function resolveTurn(ctx, state, yourMove, oppMove) {
   const { you, opp } = ctx;
   const yourMoveData = MOVES[yourMove];
@@ -5968,9 +5982,45 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
   const oppEffSpeed = effSpeed(opp, state.oppStatus, state.oppStages.spe, weatherForSpeed);
   const yourPriority = yourMoveData.priority;
   const oppPriority = oppMoveData.priority;
-  const order = yourPriority !== oppPriority
+  const orderFor = (ySpeed, oSpeed) => (yourPriority !== oppPriority
     ? (yourPriority > oppPriority ? ["you", "opp"] : ["opp", "you"])
-    : (yourEffSpeed >= oppEffSpeed ? ["you", "opp"] : ["opp", "you"]);
+    : (ySpeed >= oSpeed ? ["you", "opp"] : ["opp", "you"]));
+  const baseOrder = orderFor(yourEffSpeed, oppEffSpeed);
+
+  const youItem = itemData(you.item);
+  const oppItem = itemData(opp.item);
+  const youQC = youItem && youItem.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? youItem : null;
+  const oppQC = oppItem && oppItem.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? oppItem : null;
+  if (!youQC && !oppQC) return resolveTurnWithOrder(ctx, state, yourMove, oppMove, baseOrder);
+
+  // A successful draw sets the holder's speed to UINT_MAX. If BOTH sides hold
+  // one, the single shared draw sets BOTH, so the speeds tie again and the
+  // existing tie rule decides -- which is why this is computed through the same
+  // orderFor() rather than special-cased.
+  const INF = Number.MAX_SAFE_INTEGER;
+  const firedOrder = orderFor(youQC ? INF : yourEffSpeed, oppQC ? INF : oppEffSpeed);
+
+  // EXACT collapse, not an approximation: when the draw would not change who
+  // moves first, both branches are the same subtree, so enumerating them
+  // separately would only duplicate work and split probabilities that re-sum to
+  // the same thing. Priority differences land here too -- Quick Claw cannot beat
+  // priority, so a priority gap makes firedOrder === baseOrder automatically.
+  if (firedOrder[0] === baseOrder[0]) return resolveTurnWithOrder(ctx, state, yourMove, oppMove, baseOrder);
+
+  const pFire = quickClawThreshold((youQC || oppQC).param) / QUICK_CLAW_RANDOM_SPACE;
+  const out = [];
+  for (const [p, order] of [[pFire, firedOrder], [1 - pFire, baseOrder]]) {
+    for (const r of resolveTurnWithOrder(ctx, state, yourMove, oppMove, order)) {
+      out.push({ ...r, p: r.p * p });
+    }
+  }
+  return out;
+}
+
+function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
+  const { you, opp } = ctx;
+  const yourMoveData = MOVES[yourMove];
+  const oppMoveData = MOVES[oppMove];
   const results = [];
   state = freshTurnDamageTracking(state);
 

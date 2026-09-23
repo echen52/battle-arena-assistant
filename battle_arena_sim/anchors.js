@@ -154,20 +154,20 @@ export const A6_PRE = {
 export const CURRENT = {
   // A2's roll-sensitive set
   "Entei 1": { move: "Explosion", winProb: 0.046614478031794235 },
-  "Rhydon 1": { move: "Earthquake", winProb: 0.31787109375 },
-  "Rhydon 3": { move: "Earthquake", winProb: 0.044375 },
-  "Rhydon 4": { move: "Earthquake", winProb: 0.044375 },
+  "Rhydon 1": { move: "Earthquake", winProb: 0.2583394646841043 }, // B7c: holds Quick Claw
+  "Rhydon 3": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
+  "Rhydon 4": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
   "Houndoom 1": { move: "Earthquake", winProb: 0.13020833333333334 },
   "Rapidash 1": { move: "Earthquake", winProb: 0.0009765625 }, // B7a: Charcoal
   "Anabel Silver Entei": { move: "Explosion", winProb: 0.5 },
   "Exploud 3": { move: "Explosion", winProb: 0.5 },
   "Donphan 1": { move: "Explosion", winProb: 0.5 },
   // A9's state-sensitive set
-  "Quagsire 3": { move: "Meteor Mash", winProb: 0.5053125 },
+  "Quagsire 3": { move: "Explosion", winProb: 0.5 }, // B7c: holds Quick Claw -- and the advice FLIPS
   "Swampert 1": { move: "Meteor Mash", winProb: 0.5000737108290196 },
   "Snorlax 2": { move: "Meteor Mash", winProb: 0.8027441776394845 },
   "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
-  "Snorlax 7": { move: "Meteor Mash", winProb: 0.8081748046875002 },
+  "Snorlax 7": { move: "Meteor Mash", winProb: 0.6360831557907413 }, // B7c: holds Quick Claw
   "Marowak 2": { move: "Explosion", winProb: 0.5 }, // B7a: Thick Club doubles its Attack
   "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 },
   // A4/A6's confusion-sensitive set
@@ -185,8 +185,8 @@ export const CURRENT = {
   "Venusaur 3": { move: "Meteor Mash", winProb: 0.5964432373046875 },
   "Lucy Silver Milotic": { move: "Shadow Ball", winProb: 0.9859237670898438 },
   "Tucker Gold Swampert": { move: "Earthquake", winProb: 0.52921875 },
-  "Regirock 2": { move: "Meteor Mash", winProb: 0.4809887721538164 },
-  "Golem 1": { move: "Shadow Ball", winProb: 1 },
+  "Regirock 2": { move: "Meteor Mash", winProb: 0.40152383887764 }, // B7c: holds Quick Claw
+  "Golem 1": { move: "Meteor Mash", winProb: 0.9630743324033422 }, // B7c: holds Quick Claw -- and the advice FLIPS
 };
 
 // Cross-lead cells, keyed "Lead|Set". A3's poison-sensitive set.
@@ -234,7 +234,7 @@ export const CURRENT_DIST = {
 export const B2B1 = {
   "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.04666666666666666 },
   "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.03202128648757935 },
-  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.07542444229125977 },
+  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.0713143221859218 }, // B7c: holds Quick Claw
   "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49061960451908687 }, // B7a: Poison Barb
   "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9934374999999999 },
   "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.3474999999999999 },
