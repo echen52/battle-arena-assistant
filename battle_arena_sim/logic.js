@@ -518,6 +518,27 @@ function mirrorCoatViability(ctx) {
   });
 }
 
+// B2: effects source's AI has NO OPINION about. Both dispatch chains --
+// AI_CheckBadMove (data/battle_ai_scripts.s, the `if_effect` list ending in a
+// bare `end`) and AI_CheckViability -- are searched linearly and fall through
+// to that `end` when no entry matches, leaving the move's score at its 100
+// baseline. These ten effects appear in NEITHER chain, verified by parsing both
+// lists at a3c551fe, so scoring them at baseline IS the faithful port.
+//
+// This is NOT the same as "not yet ported": the 31 other unhandled status
+// effects in the Lv50 universe DO have dispatch entries and still throw until
+// their handlers land. Keeping the two apart is the whole point -- a silent
+// baseline for an effect that should have been scored is the defect class
+// hard constraint 4 exists to prevent.
+//
+// Scoring is only half of usability: each still needs an EFFECT_EXECUTORS entry
+// or applyMove throws by name, which is the intended loud failure.
+const AI_NO_DISPATCH_EFFECTS = new Set([
+  "EFFECT_ASSIST", "EFFECT_FOLLOW_ME", "EFFECT_GRUDGE", "EFFECT_METRONOME",
+  "EFFECT_MIMIC", "EFFECT_SPITE", "EFFECT_TAUNT", "EFFECT_TEETER_DANCE",
+  "EFFECT_TRANSFORM", "EFFECT_WISH",
+]);
+
 const AI_HANDLERS = {
   EFFECT_TOXIC: {
     // AI_CBM_Toxic (data/battle_ai_scripts.s:341-352) — completing this now
@@ -2181,7 +2202,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
   if (!move) throw new Error(`Move "${moveName}" not in MOVES — add its data before using it.`);
   const handler = AI_HANDLERS[move.effect];
 
-  if (move.power === 0 && !handler) {
+  if (move.power === 0 && !handler && !AI_NO_DISPATCH_EFFECTS.has(move.effect)) {
     throw new Error(`"${moveName}" (effect: ${move.effect}) is a status move with no AI handler — port its ` +
       `AI_CBM_*/AI_CV_* logic from battle_ai_scripts.s before an opponent can use it.`);
   }
@@ -2497,6 +2518,23 @@ function aiRollCacheKey(st, targetHp, hpRelevant) {
 
 const HP_DEPENDENT_POWER_MOVES = new Set(["Flail", "Reversal"]); // getFlailPower's only readers
 
+// B2: Taunt removes status moves from the SELECTION set for its duration
+// (CheckMoveLimitations' MOVE_LIMITATION_TAUNT, consulted by
+// BattleAI_SetupAIData at src/battle_ai_script_commands.c:334-340 and by the
+// player's own move menu). A battler with nothing legal left uses Struggle,
+// which this engine does not model at all -- so that case throws by name rather
+// than silently letting a taunted mon keep using status moves.
+function tauntLegalMoves(moves, tauntTurns, who) {
+  if (tauntTurns == null) return moves;
+  const legal = moves.filter((m) => MOVES[m] && MOVES[m].power > 0);
+  if (legal.length === 0) {
+    throw new Error(`Taunt left ${who} with no legal move (its whole set is status moves). ` +
+      `Source falls back to Struggle, which this engine does not model — port it before this ` +
+      `position can be solved.`);
+  }
+  return legal;
+}
+
 function enumerateAiRollOutcomes(opp, you, ctx) {
   const st = requireAiDamageState(ctx, "enumerateAiRollOutcomes");
   const targetHp = Math.round((ctx.targetHpPct / 100) * you.stats.hp);
@@ -2608,7 +2646,10 @@ function chooseOpponentMoves(opp, you, state) {
     // mechanic would be the A9 defect class again: a model that applies an
     // effect its own AI cannot see. targetCursed stays false -- Ghost-Curse is
     // still unmodelled and throws, so no reachable state sets it.
-    targetToxicPoisoned: state.youToxicCounter != null, targetCursed: false,
+    targetToxicPoisoned: state.youToxicCounter != null,
+    // B2: targetCursed is real now that Ghost-Curse is implemented. It was
+    // hardcoded false because no reachable state could set it.
+    targetCursed: state.youCursed,
     userIngrained: state.oppIngrained,
     targetLeechSeeded: state.youSeeded,
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
@@ -2710,7 +2751,7 @@ function chooseOpponentMoves(opp, you, state) {
     userToxicPoisoned: state.oppToxicCounter != null, // A3: mirrored for the opponent's own side
     // A6: userInfatuated is the opponent's OWN infatuation. It was false
     // because only the player could be infatuated; A5 made oppAttracted real.
-    userCursed: false, userPerishSonged: false, userInfatuated: state.oppAttracted,
+    userCursed: state.oppCursed, userPerishSonged: false, userInfatuated: state.oppAttracted,
     userSeeded: state.oppSeeded, // real — the opponent itself currently seeded by Leech Seed
     userYawnPending: false, targetYawnPending: false,
     targetHasRestoreHpOrDefenseCurlMove: you.moves.some((m) => ["EFFECT_RESTORE_HP", "EFFECT_DEFENSE_CURL"].includes(MOVES[m]?.effect)),
@@ -2779,7 +2820,8 @@ function chooseOpponentMoves(opp, you, state) {
   const outcomeProb = new Map();
   for (const { p: rollP, rolls } of rollOutcomes) {
     const rollCtx = { ...ctx, aiRolls: rolls };
-    const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, rollCtx) }));
+      const legal = tauntLegalMoves(opp.moves, state.oppTauntTurns, "the opponent");
+    const perMoveDist = legal.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, rollCtx) }));
 
     // Cartesian product across all moves' distributions — each combination is
     // one "what if these specific dice all landed this way" world.
@@ -2956,6 +2998,13 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // or Double Team at all — four effects that appear on 127 of the 552
     // opponent sets. A two-sided simulator cannot have one-directional status.
     youConfused: false, oppConfused: false,
+    // B2: Taunt (2-turn status-move lock, Cmd_settaunt sets tauntTimer = 2),
+    // Wish (heals maxHP/2 when the counter ticks to 0 -- Cmd_trywish sets 2,
+    // ENDTURN_WISH decrements, src/battle_util.c:1319-1338), and Ghost-Curse
+    // (STATUS2_CURSED, maxHP/4 per end-of-turn, src/battle_util.c:1581-1590).
+    youTauntTurns: null, oppTauntTurns: null,
+    youWishTurns: null, oppWishTurns: null,
+    youCursed: false, oppCursed: false,
     youAttracted: false, oppAttracted: false,
     youStages: freshStages(), oppStages: freshStages(),
     youStatus: null, oppStatus: null, // null | "paralysis" | "freeze" | "burn" | "poison" | "sleep"
@@ -3643,12 +3692,25 @@ const EFFECT_EXECUTORS = {
     // if Speed is at -6 AND Atk at +6 AND Def at +6 simultaneously, which
     // bumpStage's clamping already reproduces for free).
     // Ghost branch (HP-sacrifice self-damage + persistent per-turn curse
-    // status on the target, :1511-1530) is NOT modeled — throws clearly
-    // rather than silently running the non-Ghost mechanic on a Ghost user.
+    // status on the target, :1511-1530) is implemented below as of B2.
     const isYou = actor === "you";
     const selfMon = isYou ? ctx.you : ctx.opp;
     if (selfMon.types.includes("Ghost")) {
-      throw new Error("Ghost-type Curse (HP-sacrifice + persistent curse status) not yet modeled — only the non-Ghost Atk/Def/Speed version is implemented. Port data/battle_scripts_1.s:1511-1530 before using Curse on a Ghost-type opponent.");
+      // B2: Ghost-Curse. BattleScript_GhostCurse (data/battle_scripts_1.s:
+      // 1511-1530): fails through a Substitute, then cursetarget
+      // (Cmd_cursetarget) fails if the target is ALREADY cursed, else sets
+      // STATUS2_CURSED and costs the USER maxHP/2 (min 1) -- which can faint it,
+      // hence the tryfaintmon that follows. The residual is maxHP/4 per
+      // end-of-turn on the cursed side (src/battle_util.c:1581-1590).
+      const foeSubKey = isYou ? "oppSubstituteHP" : "youSubstituteHP";
+      const foeCursedKey = isYou ? "oppCursed" : "youCursed";
+      if (s[foeSubKey] != null) return "failed";
+      if (s[foeCursedKey]) return "failed";
+      s[foeCursedKey] = true;
+      const selfHp = isYou ? "yourHpPct" : "oppHpPct";
+      const cost = Math.max(1, Math.floor(selfMon.stats.hp / 2));
+      s[selfHp] = Math.max(0, s[selfHp] - (cost / selfMon.stats.hp) * 100);
+      return;
     }
     const stages = isYou ? s.youStages : s.oppStages;
     bumpStage(stages, "spe", -1);
@@ -3861,6 +3923,57 @@ const EFFECT_EXECUTORS = {
     if (!inflictStatus(s, foeSide, "poison", foeMon.types, foeMon.ability)) return "failed";
     s[foeSide === "you" ? "youToxicCounter" : "oppToxicCounter"] = 0;
   },
+  // ── B2: the no-dispatch class ────────────────────────────────────────────
+  // Three of these are MECHANICALLY INERT in this ruleset, for reasons that are
+  // properties of the Arena rather than shortcuts. Each returns undefined
+  // ("landed"), not "failed", because source's script succeeds -- it is the
+  // consequence that cannot materialise here.
+  //
+  // Grudge (Cmd_trysetgrudge): strips all PP from the move that KOs the user.
+  // PP is not modelled and a 3-turn match cannot exhaust it, so the flag would
+  // never be read. Sets nothing.
+  EFFECT_GRUDGE: () => {},
+  // Follow Me: redirects the opponents' attacks to the user. It is a
+  // double-battle mechanic (MOVE_TARGET_BOTH redirection); the Arena is
+  // singles, so there is nothing to redirect.
+  EFFECT_FOLLOW_ME: () => {},
+  // Spite (Cmd_trysetspite): removes 2-5 PP from the target's last move. Same
+  // reason as Grudge -- no PP model, and 3 turns cannot run a move dry.
+  EFFECT_SPITE: () => {},
+
+  // Taunt: Cmd_settaunt (src/battle_script_commands.c) sets tauntTimer = 2 on
+  // the TARGET, and fails outright if a taunt is already running
+  // (BattleScript_EffectTaunt -> ButItFailed, data/battle_scripts_1.s:2308-2318).
+  // While it runs the target cannot select a status move.
+  EFFECT_TAUNT: (s, actor) => {
+    const key = actor === "you" ? "oppTauntTurns" : "youTauntTurns";
+    if (s[key] != null) return "failed"; // already taunted -- no restack
+    s[key] = 2;
+  },
+
+  // Teeter Dance (data/battle_scripts_1.s:2571-2583): confuses EVERY battler
+  // except the user, looping over targets. In singles that is exactly the foe,
+  // gated on Own Tempo, Substitute and already-confused -- the same three
+  // checks EFFECT_CONFUSE uses (A4), so it shares confusionTarget.
+  EFFECT_TEETER_DANCE: (s, actor, ctx) => {
+    const t = confusionTarget(s, actor, ctx);
+    if (t.mon.ability === "Own Tempo") return "failed";
+    if (s[t.subKey] != null) return "failed";
+    if (s[t.confKey]) return "failed";
+    s[t.confKey] = true;
+  },
+
+  // Wish: Cmd_trywish case 0 sets wishCounter = 2 and fails if one is already
+  // pending. ENDTURN_WISH decrements it and heals maxHP/2 when it reaches 0
+  // (src/battle_util.c:1319-1338), i.e. at the END OF THE FOLLOWING TURN.
+  // In a 3-turn Arena round a Wish cast on turn 3 can never resolve; that falls
+  // out of the counter rather than being special-cased.
+  EFFECT_WISH: (s, actor) => {
+    const key = actor === "you" ? "youWishTurns" : "oppWishTurns";
+    if (s[key] != null) return "failed";
+    s[key] = 2;
+  },
+
   EFFECT_ROAR: () => "failed", // Arena has no reserve party to switch into (see AI_HANDLERS.EFFECT_ROAR comment for why the AI's SCORING doesn't know this) — always a no-op, Skill scores noEffect.
   EFFECT_REST: (s, actor) => {
     // Cmd_trysetrest (src/battle_script_commands.c:6762-6784): fails outright
@@ -4750,6 +4863,40 @@ function applyEndOfTurnEffects(ctx, s) {
     }
   }
 
+  // B2: Ghost-Curse residual — maxHP/4, min 1, on the cursed side
+  // (src/battle_util.c:1581-1590). ENDTURN_CURSE sits after poison/burn in the
+  // per-battler chain (:1450), which is where this block already is.
+  if (s.yourHpPct > 0 && s.youCursed) {
+    const d = Math.max(1, Math.floor(you.stats.hp / 4));
+    s.yourHpPct = Math.max(0, s.yourHpPct - (d / you.stats.hp) * 100);
+  }
+  if (s.oppHpPct > 0 && s.oppCursed) {
+    const d = Math.max(1, Math.floor(opp.stats.hp / 4));
+    s.oppHpPct = Math.max(0, s.oppHpPct - (d / opp.stats.hp) * 100);
+  }
+
+  // B2: Taunt decay. Cmd_settaunt sets 2; the timer decrements per end-of-turn
+  // (ENDTURN_TAUNT, src/battle_util.c:1187) and the lock lifts at 0.
+  for (const k of ["youTauntTurns", "oppTauntTurns"]) {
+    if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
+  }
+
+  // B2: Wish. ENDTURN_WISH (src/battle_util.c:1319-1338) decrements the counter
+  // and, when it reaches 0, heals the wisher maxHP/2 (min 1). Set to 2 on use,
+  // so it lands at the end of the FOLLOWING turn — a Wish cast on turn 3 of a
+  // 3-turn round never resolves, which falls out of the counter rather than
+  // being special-cased.
+  for (const [k, hpKey, mon] of [["youWishTurns", "yourHpPct", you], ["oppWishTurns", "oppHpPct", opp]]) {
+    if (s[k] == null) continue;
+    s[k] -= 1;
+    if (s[k] > 0) continue;
+    s[k] = null;
+    if (s[hpKey] > 0) {
+      const heal = Math.max(1, Math.floor(mon.stats.hp / 2));
+      s[hpKey] = Math.min(100, s[hpKey] + (heal / mon.stats.hp) * 100);
+    }
+  }
+
   // Reflect/Light Screen duration: a SEPARATE end-of-turn tracker from the
   // per-battler ENDTURN_* one above (src/battle_util.c:1221-1264 —
   // ENDTURN_REFLECT/ENDTURN_LIGHT_SCREEN, ticks once per FULL turn, not per
@@ -5246,7 +5393,8 @@ function search(ctx, state, turnsRemaining) {
   const oppCandidates = state.oppCharging
     ? [{ move: state.oppCharging.move, prob: 1 }]
     : chooseOpponentMoves(ctx.opp, ctx.you, state);
-  const yourMoveChoices = state.youCharging ? [state.youCharging.move] : ctx.you.moves;
+  const yourMoveChoices = state.youCharging ? [state.youCharging.move]
+    : tauntLegalMoves(ctx.you.moves, state.youTauntTurns, "you");
 
   const options = [];
   for (const yourMove of yourMoveChoices) {
