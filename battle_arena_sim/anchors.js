@@ -315,9 +315,12 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Shadow Ball", winProb: 1 },
     causedBy: "opponent ability: Pure Power" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
-    move: "Shadow Ball", winProb: 0.07823631286621092,
+    move: "Shadow Ball", winProb: 0,
     pre: { move: "Shadow Ball", winProb: 1 },
-    causedBy: "item: Choice Band" },
+    // B7a moved this via Choice Band's 1.5x Attack, to 0.07823631286621092.
+    // B2b batch 2 added Choice Band's MOVE LOCK and moved it again, to 0 --
+    // locking this opponent into its turn-1 pick is, here, strictly good for it.
+    causedBy: "item: Choice Band -- 1.5x Attack (B7a), then its move lock (B2b batch 2)" },
   "Ampharos 1": { lead: "Gengar", ability: null,
     move: "Thunderbolt", winProb: 0.07934632632522814,
     pre: { move: "Psychic", winProb: 0.49334131133415177 },
@@ -327,9 +330,12 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Shadow Ball", winProb: 0.8157545010610819 },
     causedBy: "lead ability: Thick Fat" },
   "Ursaring 5": { lead: "Gengar", ability: null,
-    move: "Psychic", winProb: 0.166375,
+    move: "Psychic", winProb: 0.21024999999999996,
     pre: { move: "Thunderbolt", winProb: 0.314569140625 },
-    causedBy: "item AND ability: Choice Band + Guts" },
+    // Choice Band's lock (B2b batch 2) moved this back UP from 0.166375 --
+    // the opposite direction to Aerodactyl 2 above, because being locked into
+    // its turn-1 pick costs THIS opponent its follow-up.
+    causedBy: "item AND ability: Choice Band + Guts, then the Choice lock (B2b batch 2)" },
   "Scizor 4": { lead: "Starmie", ability: null,
     move: "Surf", winProb: 0.6736855928174657,
     pre: { move: "Surf", winProb: 0.7852604166666668 },

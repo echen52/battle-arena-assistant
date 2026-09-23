@@ -15,6 +15,7 @@
 import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
+import { ENCORE_ENCOURAGED_EFFECTS } from "./ai-tables.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
@@ -571,6 +572,54 @@ function defenseDownViability(ctx) {
 }
 
 const AI_HANDLERS = {
+  // -- B2b batch 2: the move-restriction family ---------------------------
+  // Four effects whose if_effect rows exist in the dispatch chains but had no
+  // port, so every set carrying one threw at the ai-scoring guard.
+  EFFECT_DISABLE: {
+    // AI_CBM_Disable (data/battle_ai_scripts.s:418-421).
+    checkBadMove: (ctx) => (ctx.targetHasDisabledMove ? -8 : 0),
+    // AI_CV_Disable (:1602-1617). `get_last_used_bank_move AI_TARGET` then
+    // `get_move_power_from_result`: a target whose last move was a STATUS move
+    // (or who has not moved at all, which reads the same on an empty history)
+    // falls to AI_CV_Disable2 and is scored DOWN, because disabling a status
+    // move is worth little. A damaging last move scores +1.
+    checkViability: (ctx) => {
+      if (ctx.targetFaster) return [{ p: 1, delta: 0 }];
+      if (ctx.targetLastMoveHadPower) return [{ p: 1, delta: 1 }];
+      return [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: -1 }];
+    },
+  },
+  EFFECT_ENCORE: {
+    // AI_CBM_Encore (:422-425).
+    checkBadMove: (ctx) => (ctx.targetHasEncoredMove ? -8 : 0),
+    // AI_CV_Encore (:1687-1702). Three ways to reach the +3 block: the target
+    // already has a move disabled, or its last move's EFFECT is in
+    // AI_CV_Encore_EncouragedMovesToEncore (62 effects, extracted into
+    // ai-tables.js rather than transcribed). A faster target, or a last move
+    // whose effect is not in that table, scores -2 instead.
+    checkViability: (ctx) => {
+      const encourage = [{ p: 30 / 256, delta: 0 }, { p: 226 / 256, delta: 3 }];
+      if (ctx.targetHasDisabledMove) return encourage;
+      if (ctx.targetFaster) return [{ p: 1, delta: -2 }];
+      if (!ENCORE_ENCOURAGED_EFFECTS.has(ctx.targetLastMoveEffect)) return [{ p: 1, delta: -2 }];
+      return encourage;
+    },
+  },
+  EFFECT_TORMENT: {
+    // AI_CBM_Torment (:527-530). No viability row.
+    checkBadMove: (ctx) => (ctx.targetTormented ? -10 : 0),
+  },
+  EFFECT_IMPRISON: {
+    // AI_CBM_Imprison (:559-562) -- keyed on the USER's own flag, since
+    // STATUS3_IMPRISONED_OTHERS sits on the imprisoner.
+    checkBadMove: (ctx) => (ctx.userImprisoning ? -10 : 0),
+    // AI_CV_Imprison (:2506-2513): `is_first_turn_for AI_USER` then
+    // `if_more_than 0, End` -- so the bonus is withheld ON the user's first
+    // turn out and applies afterwards, at 156/256.
+    checkViability: (ctx) => (ctx.userPastFirstTurn
+      ? [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 2 }]
+      : [{ p: 1, delta: 0 }]),
+  },
   // -- B2b batch 1: the stat-stage family -------------------------------
   // Nine effects whose if_effect rows exist in AI_CheckBadMove and/or
   // AI_CheckViability (data/battle_ai_scripts.s:51-214 / :652-776) but had no
@@ -2907,13 +2956,53 @@ const HP_DEPENDENT_POWER_MOVES = new Set(["Flail", "Reversal"]); // getFlailPowe
 // player's own move menu). A battler with nothing legal left uses Struggle,
 // which this engine does not model at all -- so that case throws by name rather
 // than silently letting a taunted mon keep using status moves.
-function tauntLegalMoves(moves, tauntTurns, who) {
-  if (tauntTurns == null) return moves;
-  const legal = moves.filter((m) => MOVES[m] && MOVES[m].power > 0);
+// B2b batch 2: CheckMoveLimitations (src/battle_util.c:1095-1122), in source's
+// own order. This replaces tauntLegalMoves, which was one clause of it.
+//
+// Source checks, in this order, and a move failing ANY of them is unselectable:
+//   PP == 0                     NOT modelled -- PP is not tracked and 3 turns
+//                               cannot exhaust it (stated, not silently skipped)
+//   :1104 Disable               moves[i] == disabledMove
+//   :1107 Torment               moves[i] == gLastMoves[battler] && STATUS2_TORMENT
+//   :1110 Taunt                 tauntTimer && power == 0
+//   :1113 Imprison              GetImprisonedMovesCount -- the OPPOSING side has
+//                               STATUS3_IMPRISONED_OTHERS and knows this move
+//   :1116 Encore                encoreTimer && encoredMove != moves[i]
+//   :1119 Choice Band           choicedMove set && != moves[i]
+//
+// If everything is unusable source falls back to Struggle (AreAllMovesUnusable,
+// :1125-1140). Struggle is not modelled, so that throws with the CAUSE named --
+// silently returning an empty list would make the position quietly unsolvable.
+function selectableMoves(moves, s, side, foeMon, who) {
+  const isYou = side === "you";
+  const disabled = isYou ? s.youDisabledMove : s.oppDisabledMove;
+  const encored = isYou ? s.youEncoredMove : s.oppEncoredMove;
+  const tormented = isYou ? s.youTormented : s.oppTormented;
+  const lastMove = isYou ? s.youLastMove : s.oppLastMove;
+  const tauntTurns = isYou ? s.youTauntTurns : s.oppTauntTurns;
+  const choiceLock = isYou ? s.youChoiceLock : s.oppChoiceLock;
+  // Imprison is asymmetric: the FOE holds the flag and it blocks moves the FOE
+  // knows. GetImprisonedMovesCount walks the other side's moveset, not ours.
+  const foeImprisoning = isYou ? s.oppImprisoning : s.youImprisoning;
+  const foeKnows = foeImprisoning ? new Set(foeMon.moves) : null;
+
+  const reasons = [];
+  const legal = moves.filter((m) => {
+    const md = MOVES[m];
+    if (!md) return false;
+    if (disabled && m === disabled) { reasons.push(`${m}: disabled`); return false; }
+    if (tormented && lastMove && m === lastMove) { reasons.push(`${m}: tormented`); return false; }
+    if (tauntTurns != null && md.power === 0) { reasons.push(`${m}: taunted`); return false; }
+    if (foeKnows && foeKnows.has(m)) { reasons.push(`${m}: imprisoned`); return false; }
+    if (encored && m !== encored) { reasons.push(`${m}: encored into ${encored}`); return false; }
+    if (choiceLock && m !== choiceLock) { reasons.push(`${m}: Choice-locked into ${choiceLock}`); return false; }
+    return true;
+  });
+
   if (legal.length === 0) {
-    throw new Error(`Taunt left ${who} with no legal move (its whole set is status moves). ` +
-      `Source falls back to Struggle, which this engine does not model — port it before this ` +
-      `position can be solved.`);
+    throw new Error(`Every move is unselectable for ${who} (${reasons.join("; ")}). Source falls back ` +
+      `to Struggle (AreAllMovesUnusable, src/battle_util.c:1125-1140), which this engine does not ` +
+      `model — port it before this position can be solved.`);
   }
   return legal;
 }
@@ -3092,6 +3181,13 @@ function chooseOpponentMoves(opp, you, state) {
     targetLastMoveWasSpecial: state.youLastMove != null && MOVES[state.youLastMove].category === "special",
     // AI_CV_Sleep's has_move_with_effect(AI_TARGET, ...) check — the player's
     // ("you") KNOWN moveset, not the current turn's chosen move.
+    // B2b batch 2 -- the move-restriction family's ctx reads.
+    targetHasDisabledMove: (state.youDisabledMove != null),
+    targetHasEncoredMove: (state.youEncoredMove != null),
+    targetTormented: state.youTormented,
+    userImprisoning: state.oppImprisoning,
+    // AI_CV_Encore's `get_move_effect_from_result` on the target's last move.
+    targetLastMoveEffect: state.youLastMove != null ? MOVES[state.youLastMove]?.effect : null,
     targetHasDreamEaterOrNightmare: you.moves.some((m) => ["EFFECT_DREAM_EATER", "EFFECT_NIGHTMARE"].includes(MOVES[m]?.effect)),
     // Added for batch 4 (Dragon Dance/Curse/Leech Seed/Baton Pass):
     userTypes: opp.types, // EFFECT_CURSE's Ghost-type branch check
@@ -3216,7 +3312,7 @@ function chooseOpponentMoves(opp, you, state) {
   const outcomeProb = new Map();
   for (const { p: rollP, rolls } of rollOutcomes) {
     const rollCtx = { ...ctx, aiRolls: rolls };
-      const legal = tauntLegalMoves(opp.moves, state.oppTauntTurns, "the opponent");
+      const legal = selectableMoves(opp.moves, state, "opp", you, "the opponent");
     const perMoveDist = legal.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, rollCtx) }));
 
     // Cartesian product across all moves' distributions — each combination is
@@ -3399,6 +3495,25 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // ENDTURN_WISH decrements, src/battle_util.c:1319-1338), and Ghost-Curse
     // (STATUS2_CURSED, maxHP/4 per end-of-turn, src/battle_util.c:1581-1590).
     youTauntTurns: null, oppTauntTurns: null,
+    // B2b batch 2 -- the rest of CheckMoveLimitations (src/battle_util.c:1095-1122).
+    // Disable: the locked move plus its timer. Cmd_disablelastusedattack sets
+    // (Random() & 3) + 2, enumerated as branches -- see disableTimerBranches.
+    youDisabledMove: null, oppDisabledMove: null,
+    youDisableTurns: null, oppDisableTurns: null,
+    // Encore: Cmd_trysetencore sets (Random() & 3) + 3, i.e. 3..6. PROVEN inert
+    // inside a 3-turn round -- a mon is encored on turn t+j while timer > j, and
+    // j can only reach 2, so every draw in 3..6 behaves identically. No branch.
+    youEncoredMove: null, oppEncoredMove: null,
+    youEncoreTurns: null, oppEncoreTurns: null,
+    youTormented: false, oppTormented: false,
+    // STATUS3_IMPRISONED_OTHERS sits on the USER and blocks the FOE from moves
+    // the user knows -- asymmetric, hence the separate flag rather than a
+    // "cannot use" list on the victim.
+    youImprisoning: false, oppImprisoning: false,
+    // Choice Band locks its holder into the first move it uses (:1119). Its
+    // 1.5x Attack landed in B7a; the LOCK is a selection limitation and belongs
+    // here, in the same source function as the rest of this batch.
+    youChoiceLock: null, oppChoiceLock: null,
     youWishTurns: null, oppWishTurns: null,
     youCursed: false, oppCursed: false,
     // B2b batch 1 -- the stat-stage family's persistent bits.
@@ -4696,6 +4811,62 @@ const EFFECT_EXECUTORS = {
   EFFECT_ATTACK_DOWN_2: statDownExecutor("atk", 2, "Hyper Cutter"),
   EFFECT_SPECIAL_DEFENSE_DOWN_2: statDownExecutor("spd", 2, null),
   // -- B2b batch 1 executors: the stat-stage family ---------------------
+  // -- B2b batch 2 executors: the move-restriction family ----------------
+  EFFECT_DISABLE: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer) => {
+    // Cmd_disablelastusedattack. Fails unless the target's LAST move is still
+    // in its moveset AND it has no disabled move already. On turn 1 gLastMoves
+    // is empty, so Disable simply fails -- which is why Disable is so often a
+    // wasted turn-1 move and why AI_CV_Disable scores it down.
+    // PP != 0 is also required in source; PP is not modelled and three turns
+    // cannot exhaust it, so that clause is inert here (stated, not skipped).
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const foeDisabledKey = isYou ? "oppDisabledMove" : "youDisabledMove";
+    const foeLast = isYou ? s.oppLastMove : s.youLastMove;
+    if (s[foeDisabledKey]) return "failed";
+    if (!foeLast || !foeMon.moves.includes(foeLast)) return "failed";
+    s[foeDisabledKey] = foeLast;
+    s[isYou ? "oppDisableTurns" : "youDisableTurns"] = disableTimer;
+  },
+  EFFECT_ENCORE: (s, actor, ctx) => {
+    // Cmd_trysetencore. Fails if the target is already encored, if its last
+    // move is Struggle / Encore / Mirror Move, or if that move is no longer in
+    // its set (which includes having no last move at all).
+    //
+    // THE TIMER IS PROVEN INERT and is therefore not branched. Source sets
+    // (Random() & 3) + 3, i.e. 3..6. A mon is encored on turn t+j while the
+    // timer exceeds j, the timer decrements once per end-of-turn, and j can
+    // only reach 2 inside a 3-turn round -- so every draw in 3..6 behaves
+    // identically here. The minimum, 3, is stored as the representative.
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const foeEncoredKey = isYou ? "oppEncoredMove" : "youEncoredMove";
+    const foeLast = isYou ? s.oppLastMove : s.youLastMove;
+    if (s[foeEncoredKey]) return "failed";
+    if (!foeLast || !foeMon.moves.includes(foeLast)) return "failed";
+    if (foeLast === "Struggle" || foeLast === "Encore" || foeLast === "Mirror Move") return "failed";
+    s[foeEncoredKey] = foeLast;
+    s[isYou ? "oppEncoreTurns" : "youEncoreTurns"] = 3;
+  },
+  EFFECT_TORMENT: (s, actor) => {
+    // Cmd_settorment: fails outright if STATUS2_TORMENT is already set.
+    const key = actor === "you" ? "oppTormented" : "youTormented";
+    if (s[key]) return "failed";
+    s[key] = true;
+  },
+  EFFECT_IMPRISON: (s, actor, ctx) => {
+    // Cmd_tryimprison: fails if the USER is already imprisoning, and otherwise
+    // requires at least one move shared with the foe -- "In Generation 3 games,
+    // Imprison fails if the user doesn't share any moves with any of the foes",
+    // source's own comment. The flag then sits on the USER and blocks the FOE.
+    const isYou = actor === "you";
+    const selfKey = isYou ? "youImprisoning" : "oppImprisoning";
+    if (s[selfKey]) return "failed";
+    const selfMon = isYou ? ctx.you : ctx.opp;
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    if (!selfMon.moves.some((m) => foeMon.moves.includes(m))) return "failed";
+    s[selfKey] = true;
+  },
   EFFECT_DEFENSE_CURL: (s, actor) => {
     // BattleScript_EffectDefenseCurl (data/battle_scripts_1.s:2014-2025):
     // setdefensecurlbit, then STAT_DEF +1 on the USER. Cannot fail -- at +6 it
@@ -4987,7 +5158,7 @@ function battleDamageOptions(ctx, s, actor, moveData) {
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
@@ -5429,6 +5600,16 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
       }
     }
+    // B2b batch 2: Choice Band locks its holder into the first move it uses
+    // (the `choicedMove` clause of CheckMoveLimitations, src/battle_util.c:1119).
+    // Set here, once the move has actually been used.
+    {
+      const selfItemLock = itemData(selfMon.item);
+      if (selfItemLock && selfItemLock.holdEffect === "HOLD_EFFECT_CHOICE_BAND") {
+        const lockKey = isYou ? "youChoiceLock" : "oppChoiceLock";
+        if (s[lockKey] == null) s[lockKey] = moveName;
+      }
+    }
     s[skillKey] += skillDelta(classifyOutcome(hit, eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
     // now — see the comment above the blockedByProtect check — since it must
@@ -5489,7 +5670,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // Status-move executors can report "failed" (e.g. Rest at full HP,
       // Roar with nothing to switch into, paralysis blocked by type/ability)
       // — those score Skill as noEffect instead of the default landed/+1.
-      const result = executor(s, actor, ctx, moveData, sleepDuration, attractGenderCompatible);
+      const result = executor(s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer);
       if (result === "failed") outcome = "noEffect";
     } else {
       // A3: the EFFECT_TOXIC exemption that used to live on this branch is GONE.
@@ -5673,6 +5854,20 @@ function applyEndOfTurnEffects(ctx, s) {
   // (ENDTURN_TAUNT, src/battle_util.c:1187) and the lock lifts at 0.
   for (const k of ["youTauntTurns", "oppTauntTurns"]) {
     if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
+  }
+
+  // B2b batch 2: Disable and Encore decay, each at its own ENDTURN slot
+  // (ENDTURN_DISABLE src/battle_util.c:1696-1716, ENDTURN_ENCORE :1718-1735).
+  // Both clear the locked move when the timer reaches 0.
+  for (const [timerKey, moveKey] of [["youDisableTurns", "youDisabledMove"], ["oppDisableTurns", "oppDisabledMove"]]) {
+    if (s[timerKey] == null) continue;
+    s[timerKey] -= 1;
+    if (s[timerKey] <= 0) { s[timerKey] = null; s[moveKey] = null; }
+  }
+  for (const [timerKey, moveKey] of [["youEncoreTurns", "youEncoredMove"], ["oppEncoreTurns", "oppEncoredMove"]]) {
+    if (s[timerKey] == null) continue;
+    s[timerKey] -= 1;
+    if (s[timerKey] <= 0) { s[timerKey] = null; s[moveKey] = null; }
   }
 
   // B2: Wish. ENDTURN_WISH (src/battle_util.c:1319-1338) decrements the counter
@@ -6037,7 +6232,49 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
     }
   }
-  return focusBandBranches(ctx, state, actor, moveName, moveData, results);
+  return disableTimerBranches(ctx, state, actor, moveData,
+    focusBandBranches(ctx, state, actor, moveName, moveData, results));
+}
+
+// Disable's timer, enumerated as weighted branches -- and COLLAPSED by the same
+// rule as Quick Claw and Focus Band: branch only where the draws differ in
+// anything the round can observe.
+//
+// Cmd_disablelastusedattack sets `(Random() & 3) + 2`, i.e. {2,3,4,5} at 1/4
+// each. The timer decrements once per end-of-turn and the lock lifts at 0, so a
+// mon disabled on turn t is still locked on turn t+j exactly while timer > j.
+// Inside a 3-turn round j can only reach 3 - t, so the OBSERVABLE value is
+// min(T, 4 - t):
+//   used on turn 1 -> min(T,3): {2 at 1/4, 3 at 3/4}   TWO classes
+//   used on turn 2 -> min(T,2): every draw gives 2      one class
+//   used on turn 3 -> min(T,1): nothing left to observe one class
+// So the four draws cost at most a 2-way split, and only on a turn-1 Disable.
+const DISABLE_TIMER_DRAWS = [2, 3, 4, 5]; // (Random() & 3) + 2, uniform
+function disableTimerBranches(ctx, state, actor, moveData, results) {
+  if (moveData.effect !== "EFFECT_DISABLE") return results;
+  const isYou = actor === "you";
+  const foeMon = isYou ? ctx.opp : ctx.you;
+  // If the executor is going to fail anyway, the timer is never read.
+  if (isYou ? state.oppDisabledMove : state.youDisabledMove) return results;
+  const foeLast = isYou ? state.oppLastMove : state.youLastMove;
+  if (!foeLast || !foeMon.moves.includes(foeLast)) return results;
+
+  const observableCap = Math.max(1, 4 - state.turn);
+  const buckets = new Map();
+  for (const draw of DISABLE_TIMER_DRAWS) {
+    const observable = Math.min(draw, observableCap);
+    buckets.set(observable, (buckets.get(observable) || 0) + 1 / DISABLE_TIMER_DRAWS.length);
+  }
+  if (buckets.size === 1) {
+    const only = [...buckets.keys()][0];
+    return results.map((r) => (r.hit ? { ...r, disableTimer: only } : r));
+  }
+  const out = [];
+  for (const r of results) {
+    if (!r.hit) { out.push(r); continue; }
+    for (const [timer, p] of buckets) out.push({ ...r, p: r.p * p, disableTimer: timer });
+  }
+  return out;
 }
 
 // Focus Band's per-hit roll, enumerated as weighted branches -- and PRUNED by
@@ -6189,7 +6426,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
@@ -6208,7 +6445,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
-      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false);
+      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null);
       const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
@@ -6315,7 +6552,7 @@ function search(ctx, state, turnsRemaining) {
     ? [{ move: state.oppCharging.move, prob: 1 }]
     : chooseOpponentMoves(ctx.opp, ctx.you, state);
   const yourMoveChoices = state.youCharging ? [state.youCharging.move]
-    : tauntLegalMoves(ctx.you.moves, state.youTauntTurns, "you");
+    : selectableMoves(ctx.you.moves, state, "you", ctx.opp, "you");
 
   const options = [];
   for (const yourMove of yourMoveChoices) {
