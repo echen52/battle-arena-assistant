@@ -22,7 +22,7 @@
 // doesn't match the actor's action fragment). It fails LOUD only when matched
 // branches genuinely DISAGREE — the real silent-wrong-branch risk.
 
-import { buildStartState, resolveTurn } from "./logic.js";
+import { buildStartState, resolveTurn, SEMI_INVULN_BIT } from "./logic.js";
 import { MOVES } from "./move-data.js";
 
 // Status moves whose SUCCESS — and therefore Skill — is HP-dependent: they FAIL
@@ -160,7 +160,23 @@ function applySideConditions(s, actorSide, r) {
   if (r.outcome === OUTCOME.ATTRACT && isYou) s.youAttracted = true;
   // PROTECT is NOT set here — the flag would be wiped at turn start; the foe
   // drives a real Detect instead (see scoreSide's foe-move selection).
-  if (r.phase === PHASE.ATTACK) s[isYou ? "youCharging" : "oppCharging"] = { move: r.move, invulnBit: "underwater" };
+  if (r.phase === PHASE.ATTACK) {
+    // A10: derive the invulnerability bit from the engine's own table rather
+    // than hard-coding Dive's. Fly and Bounce are "onair", Dig is "underground"
+    // (logic.js SEMI_INVULN_BIT, mirrored from the semi-invulnerable move
+    // scripts). The hard-coded "underwater" was masked today -- the scored
+    // side's Mind/Skill are HP-independent and the non-scored side's filler is
+    // Tackle, which bypasses no bit, so the wrong bit and the right bit both
+    // made the filler miss -- but it was a wrong value waiting for the filler
+    // or the read to change. sim-audit.md §3.4 flagged it; ledger #15 -> A10.
+    const bit = SEMI_INVULN_BIT[r.move];
+    if (!bit) {
+      throw new Error(`scorekeeper: "${r.move}" was reported with a two-turn PHASE but is not a ` +
+        `semi-invulnerable move (no SEMI_INVULN_BIT entry). Report it as a normal move, or add it ` +
+        `to the engine's table if it genuinely charges.`);
+    }
+    s[isYou ? "youCharging" : "oppCharging"] = { move: r.move, invulnBit: bit };
+  }
 }
 
 // Single-side drive-and-read. Returns { mind, skill, matchedCount } — the banked

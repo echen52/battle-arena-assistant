@@ -5355,6 +5355,9 @@ export {
   // ground-truth branch deltas (it is the sole Mind/Skill banker resolveTurn
   // uses — see logic.js:4068/4086; end-of-turn effects never touch score).
   mindDelta, skillDelta, classifyOutcome, resolveAbilityInteraction, applyMove,
+  // A10: surfaced so scorekeeper.js derives a two-turn move's invulnerability
+  // bit from the same table the engine does, instead of hard-coding one.
+  SEMI_INVULN_BIT,
   // A7: the two Arena Skill mechanisms, surfaced so tests assert on the source
   // structure rather than on hand-netted constants.
   arenaSkillDelta, ARENA_DEDUCT_STRINGS, ARENA_ADD_SKILL, ABILITY_BLOCK_SOURCE, ABILITY_BLOCK_SKILL_DELTA,
