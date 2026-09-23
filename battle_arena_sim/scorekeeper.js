@@ -156,7 +156,7 @@ function segmentMatchesOutcome(seg, who, move, outcome) {
 function applySideConditions(s, actorSide, r) {
   const isYou = actorSide === "you";
   if (r.outcome === OUTCOME.IMMOBILIZED) s[isYou ? "youStatus" : "oppStatus"] = "paralysis";
-  if (r.outcome === OUTCOME.CONFUSION_SELF && isYou) s.metagrossConfused = true;
+  if (r.outcome === OUTCOME.CONFUSION_SELF && isYou) s.youConfused = true;
   if (r.outcome === OUTCOME.ATTRACT && isYou) s.youAttracted = true;
   // PROTECT is NOT set here — the flag would be wiped at turn start; the foe
   // drives a real Detect instead (see scoreSide's foe-move selection).

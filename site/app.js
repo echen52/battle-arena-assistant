@@ -317,7 +317,7 @@ function buildMatchState() {
   // fields (see HANDOFF.md). Opponent-side toggles are disabled in the
   // markup (the engine has no branch for them at all), so there's nothing
   // to read for the opponent here.
-  s.metagrossConfused = $("youConfused").checked;
+  s.youConfused = $("youConfused").checked;
   s.youAttracted = $("youAttracted").checked;
   // Weather/Reflect/Light Screen are plain on/off toggles in this UI — no
   // turn-count input. ON passes the engine's own "active indefinitely"
@@ -592,7 +592,7 @@ const SK_OUTCOMES = [
   { value: OUTCOME.MISSED, label: "Missed" },
   { value: OUTCOME.PROTECT, label: "Blocked" }, // terse like the rest; Protect/Detect are the only block sources (display only; route unchanged)
   // Labels short so the Outcome box stays compact; each still routes to its own
-  // drive state (IMMOBILIZED->youStatus, CONFUSION_SELF->metagrossConfused,
+  // drive state (IMMOBILIZED->youStatus, CONFUSION_SELF->youConfused,
   // ATTRACT->youAttracted) — distinct paths, not merged. (para/freeze/sleep all
   // collapse under IMMOBILIZED, banking Mind=selected/Skill=0 via paralysis.)
   { value: OUTCOME.IMMOBILIZED, label: "Immobilized" },

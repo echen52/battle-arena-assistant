@@ -14,7 +14,7 @@ import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
 // mid-match state it's in):
 //   turn, yourHpPct, oppHpPct, yourUsablePartyMons, oppUsablePartyMons,
 //   youStages, oppStages (7-key each), youStatus, oppStatus,
-//   metagrossConfused, youAttracted (volatile STATUS2 conditions — You side
+//   youConfused, youAttracted (volatile STATUS2 conditions — You side
 //   only, the engine has no opponent-side branch for either, see HANDOFF.md),
 //   weatherType, weatherTurns,
 //   youReflectTurns, oppReflectTurns, youLightScreenTurns, oppLightScreenTurns
@@ -27,7 +27,7 @@ export function freshMatchState() {
     youStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 },
     oppStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 },
     youStatus: null, oppStatus: null,
-    metagrossConfused: false, youAttracted: false,
+    youConfused: false, youAttracted: false,
     weatherType: null, weatherTurns: null,
     youReflectTurns: null, oppReflectTurns: null,
     youLightScreenTurns: null, oppLightScreenTurns: null,

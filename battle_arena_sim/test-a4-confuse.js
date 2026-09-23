@@ -1,7 +1,7 @@
 // ── test-a4-confuse.js ─────────────────────────────────────────────────────
 // A4 characterization test: EFFECT_CONFUSE respects its blockers.
 //
-// WHAT CHANGED. The executor set s.metagrossConfused unconditionally, so
+// WHAT CHANGED. The executor set s.youConfused unconditionally, so
 // Confuse Ray went through Own Tempo, through a Substitute, through Safeguard,
 // and re-applied to an already-confused target -- banking +1 Skill each time.
 // EFFECT_SWAGGER's executor already had all three ability/side checks and its
@@ -65,16 +65,16 @@ console.log("-- PART 1: each blocker refuses the confusion and scores -2 --");
     ["Own Tempo", LICKITUNG, null],
     ["Substitute", LICKITUNG_NO_OT, { youSubstituteHP: 20 }],
     ["Safeguard", LICKITUNG_NO_OT, { youSafeguardTurns: 5 }],
-    ["already confused", LICKITUNG_NO_OT, { metagrossConfused: true }],
+    ["already confused", LICKITUNG_NO_OT, { youConfused: true }],
   ];
   for (const [label, leadCfg, ov] of cases) {
     const you = buildMon(leadCfg);
     const s = buildStartState({ you, opp, overrides: ov });
-    const before = s.metagrossConfused;
+    const before = s.youConfused;
     const outs = resolveTurn({ you, opp }, s, "Body Slam", "Confuse Ray");
     for (const o of outs) {
-      ok(o.state.metagrossConfused === before,
-         `${label}: confusion state must not change (was ${before}, got ${o.state.metagrossConfused})`);
+      ok(o.state.youConfused === before,
+         `${label}: confusion state must not change (was ${before}, got ${o.state.youConfused})`);
       ok(o.state.skillOpp === -2, `${label}: opponent Skill must be -2, got ${o.state.skillOpp}`);
     }
     console.log(`   ${label.padEnd(17)} confused stays ${String(before)}, opponent Skill -2`);
@@ -86,7 +86,7 @@ console.log("-- PART 2: with no blocker it still lands and still scores +1 --");
 {
   const you = buildMon(LICKITUNG_NO_OT), opp = confuser();
   const outs = resolveTurn({ you, opp }, buildStartState({ you, opp }), "Body Slam", "Confuse Ray");
-  ok(outs.every((o) => o.state.metagrossConfused === true), "an unblocked Confuse Ray must confuse");
+  ok(outs.every((o) => o.state.youConfused === true), "an unblocked Confuse Ray must confuse");
   ok(outs.every((o) => o.state.skillOpp === 1), "an unblocked Confuse Ray banks +1 Skill");
   console.log(`   unblocked: confused=true, opponent Skill +1 across all ${outs.length} branches`);
 }
@@ -99,7 +99,7 @@ console.log("-- PART 3: EFFECT_SWAGGER and EFFECT_CONFUSE now agree --");
   const you = buildMon(LICKITUNG); // Own Tempo
   const s = buildStartState({ you, opp: swaggerer });
   const outs = resolveTurn({ you, opp: swaggerer }, s, "Body Slam", "Swagger");
-  ok(outs.every((o) => o.state.metagrossConfused === false),
+  ok(outs.every((o) => o.state.youConfused === false),
      "Swagger's confusion must also be refused by Own Tempo");
   ok(outs.some((o) => o.state.youStages.atk === 2),
      "but Swagger's Atk +2 still lands -- source gates the two parts independently");

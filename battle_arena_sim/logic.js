@@ -2900,8 +2900,13 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     weatherType: initialWeather, weatherTurns: null, // null turns = permanent when weatherType is set from an ability
 
     yourUsablePartyMons, oppUsablePartyMons, // PER-MATCHUP inputs like yourHpPct/oppHpPct, not constants — see analyzeMatchup's comment
-    metagrossConfused: false, // NOTE: only "you can be confused" is modeled — see known limitations
-    youAttracted: false, // Attract — same one-directional limitation as confusion (opponent->you only; none of your 3 team mons carry Attract)
+    // A5: confusion and infatuation are now tracked on BOTH sides. They used to
+    // be you-side only (the field was literally called metagrossConfused),
+    // which meant the player could not be given Confuse Ray, Swagger, Attract
+    // or Double Team at all — four effects that appear on 127 of the 552
+    // opponent sets. A two-sided simulator cannot have one-directional status.
+    youConfused: false, oppConfused: false,
+    youAttracted: false, oppAttracted: false,
     youStages: freshStages(), oppStages: freshStages(),
     youStatus: null, oppStatus: null, // null | "paralysis" | "freeze" | "burn" | "poison" | "sleep"
     // A3: bad poison (Toxic) is STATUS1_TOXIC_POISON in source, a DIFFERENT
@@ -3147,11 +3152,12 @@ function tryCureWithBerry(s, side, mon) {
     used = true;
   }
   // Confusion is STATUS2 (volatile), tracked separately from the major-status
-  // field above — only "you" can currently be confused (see metagrossConfused's
+  // field above — only "you" can currently be confused (see youConfused's
   // existing one-directional limitation), so this only ever matters for the
   // player's own side.
-  if (side === "you" && s.metagrossConfused && cures.includes("confusion")) {
-    s.metagrossConfused = false;
+  const confKey = side === "you" ? "youConfused" : "oppConfused";
+  if (s[confKey] && cures.includes("confusion")) {
+    s[confKey] = false;
     used = true;
   }
   if (used) s[consumedKey] = true;
@@ -3187,6 +3193,19 @@ function inflictStatus(s, targetSide, statusType, targetTypes, targetAbility = n
 // Attack-decreases specifically (src/battle_script_commands.c:4142-4145) —
 // note EXECUTION checks Hyper Cutter but the AI's own SCORING (AI_CBM_AttackDown)
 // does not, a real asymmetry preserved in AI_HANDLERS above, not "fixed" here.
+// A5: the side an opponent-targeting confusion effect lands on. Confusion,
+// Swagger and Attract all target the FOE of whoever used the move.
+function confusionTarget(s, actor, ctx) {
+  const isYou = actor === "you";
+  return {
+    mon: isYou ? ctx.opp : ctx.you,
+    confKey: isYou ? "oppConfused" : "youConfused",
+    subKey: isYou ? "oppSubstituteHP" : "youSubstituteHP",
+    safeguardKey: isYou ? "oppSafeguardTurns" : "youSafeguardTurns",
+    stages: isYou ? s.oppStages : s.youStages,
+  };
+}
+
 function statDownExecutor(stageKey, amount, blockingAbility) {
   return (s, actor, ctx) => {
     const foeMon = actor === "you" ? ctx.opp : ctx.you;
@@ -3400,12 +3419,12 @@ const EFFECT_EXECUTORS = {
   // flagged this one as the known hole; the two now agree. Accuracy is handled
   // upstream in enumerateActionOutcomes, as for every other status move.
   EFFECT_CONFUSE: (s, actor, ctx) => {
-    if (actor === "you") throw new Error("Confuse Ray from your side not modeled — only opponent->you confusion is wired up.");
-    if (ctx.you.ability === "Own Tempo") return "failed";
-    if (s.youSubstituteHP != null) return "failed";
-    if (s.youSafeguardTurns != null) return "failed";
-    if (s.metagrossConfused) return "failed"; // AlreadyConfused — no restack
-    s.metagrossConfused = true;
+    const t = confusionTarget(s, actor, ctx);
+    if (t.mon.ability === "Own Tempo") return "failed";
+    if (s[t.subKey] != null) return "failed";
+    if (s[t.safeguardKey] != null) return "failed";
+    if (s[t.confKey]) return "failed"; // AlreadyConfused — no restack
+    s[t.confKey] = true;
   },
   // Cmd_tryinfatuating (src/battle_script_commands.c:7654+) — fails (routes
   // to BattleScript_ButItFailed, MOVE_RESULT_FAILED — scored as a real "no
@@ -3420,15 +3439,21 @@ const EFFECT_EXECUTORS = {
   // already resolved into a concrete branch upstream in
   // enumerateActionOutcomes (Lesson 1 — never re-roll here).
   EFFECT_ATTRACT: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible) => {
-    if (actor === "you") throw new Error("Attract from your side not modeled — only opponent->you infatuation is wired up (none of your 3 team mons carry Attract).");
-    if (s.youAttracted) return "failed";
-    if (ctx.you.ability === "Oblivious") return "failed";
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const attrKey = isYou ? "oppAttracted" : "youAttracted";
+    if (s[attrKey]) return "failed";
+    if (foeMon.ability === "Oblivious") return "failed";
     if (!attractGenderCompatible) return "failed";
-    s.youAttracted = true;
+    s[attrKey] = true;
   },
+  // A5: evasion was refused on the player side, but the accuracy machinery was
+  // ALREADY symmetric — enumerateActionOutcomes picks attackerAccStage and
+  // targetEvasionStage per actor (see its accuracy branch). So the throw was
+  // the only thing standing between the player and Double Team; nothing else
+  // needed to change for it.
   EFFECT_EVASION_UP: (s, actor) => {
-    if (actor === "you") throw new Error("Evasion tracking only implemented for the opponent side — extend if needed.");
-    bumpStage(s.oppStages, "evasion", 1);
+    bumpStage(actor === "you" ? s.youStages : s.oppStages, "evasion", 1);
   },
   EFFECT_CALM_MIND: (s, actor) => {
     // Well-documented, generation-stable: +1 SpA and +1 SpD simultaneously.
@@ -3550,28 +3575,28 @@ const EFFECT_EXECUTORS = {
   },
   // Batch 6:
   EFFECT_SWAGGER: (s, actor, ctx) => {
-    if (actor === "you") throw new Error("Swagger from your side not modeled — only opponent->you confusion is wired up (same limitation as EFFECT_CONFUSE's executor).");
+    const t = confusionTarget(s, actor, ctx);
     // BattleScript_EffectSwagger (data/battle_scripts_1.s:1608-1628): ONE
     // substitute check gates the ENTIRE move (both the Atk raise AND the
     // confusion) — fails/misses outright if the target has an active sub.
-    if (s.youSubstituteHP != null) return "failed";
+    if (s[t.subKey] != null) return "failed";
     // Also fails outright (jumpifconfusedandstatmaxed) if the target is
     // ALREADY confused AND its Atk is already maxed — a narrower, separate
     // fail condition from the substitute one.
-    if (s.metagrossConfused && s.youStages.atk >= 6) return "failed";
+    if (s[t.confKey] && t.stages.atk >= 6) return "failed";
     // The Atk+2 raise ALWAYS lands (silently capped) regardless of what
     // happens to the confusion attempt below — source gates these two
     // parts INDEPENDENTLY, not as a single all-or-nothing effect.
-    bumpStage(s.youStages, "atk", 2);
+    bumpStage(t.stages, "atk", 2);
     // Confusion itself is separately blocked by Own Tempo/Safeguard (but
     // does NOT fail the move as a whole — the Atk raise above still landed
-    // either way). Uses the same s.metagrossConfused mechanism as
+    // either way). Uses the same s.youConfused mechanism as
     // EFFECT_CONFUSE's own executor, which has the identical "your side not
     // modeled" limitation and does NOT itself check substitute (a
     // pre-existing gap, left as-is per instruction to leave EFFECT_CONFUSE
     // alone — flagged here rather than silently fixed or silently ignored).
-    if (ctx.you.ability !== "Own Tempo" && s.youSafeguardTurns == null) {
-      if (!s.metagrossConfused) s.metagrossConfused = true;
+    if (t.mon.ability !== "Own Tempo" && s[t.safeguardKey] == null) {
+      if (!s[t.confKey]) s[t.confKey] = true;
     }
   },
   EFFECT_DESTINY_BOND: (s, actor) => {
@@ -4711,9 +4736,9 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
     // confusion (backwards from source) — a pre-existing bug caught while
     // wiring Attract in, since Attract's own prevention has to slot into
     // this exact same chain as the third/last check.
-    const confusable = actor === "you" ? state.metagrossConfused : false; // only "you" can be confused so far
+    const confusable = actor === "you" ? state.youConfused : state.oppConfused; // A5: both sides
     const paralyzed = status === "paralysis";
-    const attracted = actor === "you" ? state.youAttracted : false; // only "you" can be attracted so far — opponent->you only
+    const attracted = actor === "you" ? state.youAttracted : state.oppAttracted; // A5: both sides
 
     let actionBranches;
     if (confusable) {
