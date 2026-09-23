@@ -2002,7 +2002,7 @@ function getFriendshipPower(effect, friendship) {
 }
 
 function calcDamage(attacker, defender, moveName, {
-  rollFrac = 0.925, crit = false, atkStage = 0, defStage = 0,
+  rollFrac = 0.925, rollPercent = null, crit = false, atkStage = 0, defStage = 0,
   attackerBurned = false, attackerFlashFireActive = false, attackerHpPct = 100,
   screenActive = false, weather = null,
 } = {}) {
@@ -2087,7 +2087,18 @@ function calcDamage(attacker, defender, moveName, {
   let dmg = Math.floor(base * stab);
   dmg = Math.floor(dmg * eff);
   dmg = Math.floor(dmg * critMult);
-  dmg = Math.floor(dmg * rollFrac);
+  // A2: `rollPercent`, when supplied, applies the roll as INTEGER arithmetic —
+  // floor(dmg * r / 100) — matching source exactly. The AI's own damage
+  // estimate does `gBattleMoveDamage * simulatedRNG[i] / 100` in u32 math
+  // (src/battle_ai_script_commands.c:1211/:1760/:1789), so the engine must not
+  // route it through a float fraction: 0.85 and friends are not exactly
+  // representable, and Math.floor(dmg * (r/100)) can land one below
+  // floor(dmg*r/100). (Same one-ULP class as the Body truncation in
+  // sim-audit.md §3.3.) The float `rollFrac` path is UNCHANGED and remains what
+  // the battle-damage path uses — widening that one is ledger #6, not A2.
+  dmg = rollPercent != null
+    ? Math.floor((dmg * rollPercent) / 100)
+    : Math.floor(dmg * rollFrac);
   if (eff === 0) return 0; // complete type immunity — the min-1 floor below is for weak-but-effective hits only
   return Math.max(1, dmg);
 }
@@ -2187,7 +2198,18 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
 
   // AI_TryToFaint — generic, applies to any damaging move (data/battle_ai_scripts.s:2616-2622).
   if (move.power > 0) {
-    const simDmg = calcDamage(user, target, moveName, { rollFrac: 0.925 });
+    // A2: the AI's simulated damage uses THIS DECISION'S roll for THIS move
+    // slot, not a fixed midpoint. `ctx.aiRolls` is the enumerated assignment
+    // supplied by chooseOpponentMoves (see AI_SIM_ROLLS). Missing it is a hard
+    // error, never a silent fallback to the old 0.925 collapse — constraint 4.
+    if (!ctx.aiRolls) {
+      throw new Error(`scoreOpponentMoveDist requires ctx.aiRolls (the enumerated AI damage-roll ` +
+        `assignment) for damaging move "${moveName}". Call it through chooseOpponentMoves, which ` +
+        `enumerates the rolls; scoring a damaging move against a single collapsed roll is the ` +
+        `A2 defect and is no longer reachable.`);
+    }
+    const myRoll = ctx.aiRolls[moveName];
+    const simDmg = calcDamage(user, target, moveName, { rollPercent: myRoll });
     const targetHp = Math.round((ctx.targetHpPct / 100) * target.stats.hp);
     // Cmd_if_can_faint (src/battle_ai_script_commands.c:1743-1750) opens with
     // `if (power < 2) { /* always take the non-KO branch */ }`, BEFORE ever
@@ -2256,7 +2278,11 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
         const myDmg = Math.max(1, simDmg);
         notMostPowerful = user.moves.some((rivalMove) => {
           if (rivalMove === moveName || !isPowerfulMoveEligible(rivalMove)) return false;
-          const rivalDmg = Math.max(1, calcDamage(user, target, rivalMove, { rollFrac: 0.925 }));
+          // A2: each rival is compared at ITS OWN slot's roll — source indexes
+          // simulatedRNG[checkedMove] inside the comparison loop
+          // (src/battle_ai_script_commands.c:1211), so the four estimates in one
+          // decision are drawn independently but each is fixed for that decision.
+          const rivalDmg = Math.max(1, calcDamage(user, target, rivalMove, { rollPercent: ctx.aiRolls[rivalMove] }));
           return rivalDmg > myDmg;
         });
       }
@@ -2296,10 +2322,130 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
 // single representative number is genuinely fine (e.g. debug printouts),
 // NEVER for move selection (see chooseOpponentMoves).
 function scoreOpponentMove(user, target, moveName, ctx) {
-  const dist = scoreOpponentMoveDist(user, target, moveName, ctx);
-  return dist.reduce((sum, { p, score }) => sum + p * score, 0);
+  // A2: a damaging move has no single score any more — it depends on the
+  // decision's roll assignment. Average over the enumerated classes rather than
+  // picking a representative roll, so this stays a faithful expectation instead
+  // of quietly reintroducing the collapse it exists downstream of. Callers that
+  // already hold an assignment can pass it in ctx.aiRolls and skip the mixture.
+  if (ctx.aiRolls) {
+    const dist = scoreOpponentMoveDist(user, target, moveName, ctx);
+    return dist.reduce((sum, { p, score }) => sum + p * score, 0);
+  }
+  let expected = 0;
+  for (const { p: rollP, rolls } of enumerateAiRollOutcomes(user, target, ctx)) {
+    const dist = scoreOpponentMoveDist(user, target, moveName, { ...ctx, aiRolls: rolls });
+    expected += rollP * dist.reduce((sum, { p, score }) => sum + p * score, 0);
+  }
+  return expected;
 }
 
+
+// ── A2: the AI's simulated-damage roll ──────────────────────────────────────
+// BattleAI_SetupAIData (src/battle_ai_script_commands.c:312) draws, ONCE PER AI
+// DECISION and independently PER MOVE SLOT:
+//     AI_THINKING_STRUCT->simulatedRNG[i] = 100 - (Random() % 16);   // :341
+// i.e. four iid draws uniform over {85..100}. Every consumer inside that one
+// decision reads the SAME array:
+//   * Cmd_get_how_powerful_move_is   :1211  simulatedRNG[checkedMove]
+//   * Cmd_if_can_faint               :1760  simulatedRNG[movesetIndex]
+//   * Cmd_if_cant_faint              :1789  simulatedRNG[movesetIndex]
+// and it is applied AFTER type effectiveness (AI_CalcDmg ->
+// src/battle_script_commands.c:1306 computes the base damage, TypeCalc scales
+// it, then the AI multiplies by simulatedRNG/100), which is where calcDamage's
+// own roll sits too — so the placement matches; only the VALUE was collapsed.
+//
+// The engine previously hardcoded the 0.925 midpoint at both sites. That is the
+// A2 defect: the KO verdict it drives is worth +4, the single largest delta in
+// the whole AI, so collapsing it turned a coin-flip into a certainty.
+const AI_SIM_ROLLS = [85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100];
+
+// Enumerates the roll assignments as weighted classes (constraint 3: chance is
+// enumerated, never sampled). Returns [{ p, rolls }] where `rolls` maps every
+// move name to an integer roll and the entries' p sum to 1.
+//
+// Two exact reductions keep this affordable:
+//
+//  1. Only power>1 moves can change anything. A move's roll is read for its own
+//     KO check (gated `power > 1`, mirroring Cmd_if_can_faint's `if (power < 2)`
+//     early-out) and for the get_how_powerful comparison (gated by
+//     isPowerfulMoveEligible). A power<=1 move's roll is drawn in source and
+//     never read, so it collapses out exactly; it is pinned to 85 here.
+//
+//  2. Damage is monotone non-decreasing in the roll — the roll enters as a
+//     single floor(dmg * r / 100) at the very end — so evaluating r=85 and
+//     r=100 BRACKETS every value. If, for every relevant move, both the KO
+//     verdict and the "is this the most powerful move" verdict are the same at
+//     both ends, they are the same for all 16^k assignments and one
+//     representative assignment reproduces them exactly (fast path).
+//
+// Otherwise the assignments are enumerated and BUCKETED by the resulting
+// (KO, notMostPowerful) vector, so the handler machinery downstream runs once
+// per distinct outcome class rather than once per assignment.
+function enumerateAiRollOutcomes(opp, you, ctx) {
+  const targetHp = Math.round((ctx.targetHpPct / 100) * you.stats.hp);
+  const relevant = opp.moves.filter((m) => MOVES[m] && MOVES[m].power > 1);
+  const pin = (r) => Object.fromEntries(opp.moves.map((m) => [m, r]));
+
+  if (relevant.length === 0) return [{ p: 1, rolls: pin(85) }];
+
+  // Per-move damage at every roll (monotone, so [0] is the min and [15] the max).
+  const dmg = new Map();
+  for (const m of relevant) {
+    dmg.set(m, AI_SIM_ROLLS.map((r) => calcDamage(opp, you, m, { rollPercent: r })));
+  }
+  const eligible = relevant.filter((m) => isPowerfulMoveEligible(m));
+  const D = (m, i) => Math.max(1, dmg.get(m)[i]);
+
+  // --- fast-path test -------------------------------------------------------
+  let invariant = true;
+  for (const m of relevant) {
+    const lo = dmg.get(m)[0], hi = dmg.get(m)[AI_SIM_ROLLS.length - 1];
+    if ((lo >= targetHp) !== (hi >= targetHp)) { invariant = false; break; }
+  }
+  if (invariant) {
+    for (const m of eligible) {
+      const myLo = D(m, 0), myHi = D(m, AI_SIM_ROLLS.length - 1);
+      const others = eligible.filter((j) => j !== m);
+      const alwaysNotMost = others.some((j) => D(j, 0) > myHi);
+      const neverNotMost = others.every((j) => D(j, AI_SIM_ROLLS.length - 1) <= myLo);
+      if (!alwaysNotMost && !neverNotMost) { invariant = false; break; }
+    }
+  }
+  if (invariant) return [{ p: 1, rolls: pin(85) }];
+
+  // --- exact enumeration, bucketed by outcome class -------------------------
+  const n = AI_SIM_ROLLS.length;
+  const total = n ** relevant.length;
+  const buckets = new Map();
+  const idx = new Array(relevant.length).fill(0);
+  for (let a = 0; a < total; a++) {
+    let rem = a;
+    for (let k = 0; k < relevant.length; k++) { idx[k] = rem % n; rem = (rem - idx[k]) / n; }
+
+    // notMostPowerful_m is exactly "D_m is below the max over the eligible set"
+    // — a strict `>` comparison, so ties count as most-powerful.
+    let maxD = -Infinity;
+    for (const m of eligible) {
+      const v = D(m, idx[relevant.indexOf(m)]);
+      if (v > maxD) maxD = v;
+    }
+    let key = "";
+    for (let k = 0; k < relevant.length; k++) {
+      const m = relevant[k];
+      const ko = dmg.get(m)[idx[k]] >= targetHp ? 1 : 0;
+      const notMost = eligible.includes(m) && D(m, idx[k]) < maxD ? 1 : 0;
+      key += ko + "" + notMost;
+    }
+    let b = buckets.get(key);
+    if (!b) {
+      b = { count: 0, rolls: pin(85) };
+      for (let k = 0; k < relevant.length; k++) b.rolls[relevant[k]] = AI_SIM_ROLLS[idx[k]];
+      buckets.set(key, b);
+    }
+    b.count++;
+  }
+  return [...buckets.values()].map((b) => ({ p: b.count / total, rolls: b.rolls }));
+}
 
 // Returns [{ move, prob }] — the real probability distribution over which
 // move the AI ends up picking, accounting for each candidate's own internal
@@ -2463,27 +2609,36 @@ function chooseOpponentMoves(opp, you, state) {
     userPastFirstTurn: !state.oppMonFirstTurn,
   };
 
-  const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, ctx) }));
-
-  // Cartesian product across all moves' distributions — each combination is
-  // one "what if these specific dice all landed this way" world.
-  let combos = [{ p: 1, scores: {} }];
-  for (const { move, dist } of perMoveDist) {
-    const next = [];
-    for (const c of combos) {
-      for (const d of dist) {
-        next.push({ p: c.p * d.p, scores: { ...c.scores, [move]: d.score } });
-      }
-    }
-    combos = next;
-  }
+  // A2: mix over the enumerated AI damage-roll assignments (see
+  // enumerateAiRollOutcomes). Each entry is one class of assignments that all
+  // produce the SAME AI_TryToFaint outcome, so the per-move scoring below runs
+  // once per class rather than once per assignment.
+  const rollOutcomes = enumerateAiRollOutcomes(opp, you, ctx);
 
   const outcomeProb = new Map();
-  for (const combo of combos) {
-    const maxScore = Math.max(...Object.values(combo.scores));
-    const winners = Object.entries(combo.scores).filter(([, s]) => s === maxScore).map(([m]) => m);
-    for (const w of winners) {
-      outcomeProb.set(w, (outcomeProb.get(w) || 0) + combo.p / winners.length);
+  for (const { p: rollP, rolls } of rollOutcomes) {
+    const rollCtx = { ...ctx, aiRolls: rolls };
+    const perMoveDist = opp.moves.map((m) => ({ move: m, dist: scoreOpponentMoveDist(opp, you, m, rollCtx) }));
+
+    // Cartesian product across all moves' distributions — each combination is
+    // one "what if these specific dice all landed this way" world.
+    let combos = [{ p: 1, scores: {} }];
+    for (const { move, dist } of perMoveDist) {
+      const next = [];
+      for (const c of combos) {
+        for (const d of dist) {
+          next.push({ p: c.p * d.p, scores: { ...c.scores, [move]: d.score } });
+        }
+      }
+      combos = next;
+    }
+
+    for (const combo of combos) {
+      const maxScore = Math.max(...Object.values(combo.scores));
+      const winners = Object.entries(combo.scores).filter(([, s]) => s === maxScore).map(([m]) => m);
+      for (const w of winners) {
+        outcomeProb.set(w, (outcomeProb.get(w) || 0) + (rollP * combo.p) / winners.length);
+      }
     }
   }
 
@@ -4810,7 +4965,10 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
 
 export {
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
-  scoreOpponentMove, chooseOpponentMoves,
+  scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
+  // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
+  // assert on the roll classes directly instead of re-deriving them.
+  enumerateAiRollOutcomes, AI_SIM_ROLLS,
   buildStartState, resolveTurn, search, printTree,
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
   // Change #11 guard tables — exported so the coverage test pins them to the
