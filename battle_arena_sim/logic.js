@@ -2381,8 +2381,46 @@ const AI_SIM_ROLLS = [85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99
 // Otherwise the assignments are enumerated and BUCKETED by the resulting
 // (KO, notMostPowerful) vector, so the handler machinery downstream runs once
 // per distinct outcome class rather than once per assignment.
+// Memo for enumerateAiRollOutcomes. The expensive part is the bucketing loop,
+// and its inputs barely move inside one matchup: the AI's damage estimate is a
+// pure function of (attacker, defender, move, roll), so the whole 16-roll damage
+// table is constant for a matchup and only `targetHp` varies.
+//
+// KNOWN DEFECT THE KEY DEFENDS AGAINST (found while building this memo, not yet
+// assigned a phase item — see arena-solver/docs/fidelity-log.md A2 flags):
+// source's AI damage estimate DOES see stat stages. AI_CalcDmg
+// (src/battle_script_commands.c:1306) passes &gBattleMons[attacker] /
+// [defender] into CalculateBaseDamage, which applies APPLY_STAT_MOD from
+// mon->statStages (src/pokemon.c:3237-3257). This engine's AI call sites pass no
+// stage/weather/burn arguments, so its estimate is state-blind. That is a real
+// fidelity gap, orthogonal to A2 (A2 is about the ROLL, not the inputs).
+// The cache key therefore includes the state a CORRECTED damage model would
+// read, so this memo stays exact after that gap is closed rather than silently
+// baking in the current blindness. Extra key fields only cost cache misses.
+const _aiRollClassCache = new WeakMap();
+
+function aiRollCacheKey(ctx, targetHp) {
+  const t = ctx.targetStages || {};
+  return [targetHp, ctx.userAtkStage, ctx.userSpAtkStage, t.def, t.spd,
+    ctx.currentWeather, ctx.userStatus, ctx.userHasReflect, ctx.userHasLightScreen,
+    ctx.targetHasReflect].join("|");
+}
+
 function enumerateAiRollOutcomes(opp, you, ctx) {
   const targetHp = Math.round((ctx.targetHpPct / 100) * you.stats.hp);
+  let byYou = _aiRollClassCache.get(opp);
+  if (!byYou) { byYou = new WeakMap(); _aiRollClassCache.set(opp, byYou); }
+  let byKey = byYou.get(you);
+  if (!byKey) { byKey = new Map(); byYou.set(you, byKey); }
+  const cacheKey = aiRollCacheKey(ctx, targetHp);
+  const cached = byKey.get(cacheKey);
+  if (cached) return cached;
+  const computed = computeAiRollOutcomes(opp, you, ctx, targetHp);
+  byKey.set(cacheKey, computed);
+  return computed;
+}
+
+function computeAiRollOutcomes(opp, you, ctx, targetHp) {
   const relevant = opp.moves.filter((m) => MOVES[m] && MOVES[m].power > 1);
   const pin = (r) => Object.fromEntries(opp.moves.map((m) => [m, r]));
 
