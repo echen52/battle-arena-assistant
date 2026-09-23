@@ -17,6 +17,7 @@ import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
 import { ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED } from "./ai-tables.js";
 import { moveFlags } from "./move-flags.js";
+import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
@@ -571,6 +572,25 @@ function defenseDownViability(ctx) {
   return block3(combineDist([{ p: 1, delta: 0 }],
     [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -2 }]));
 }
+
+// AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:368-376). ONE routine in
+// source, dispatched for ten different effects (:128 Superpower, :151 Recharge,
+// :154 LevelDamage, :156, :160 Flail, :175 Magnitude's fallthrough, :182, and
+// the batch 5 arrivals Super Fang :129, Psywave :155, Present :172,
+// Sonic Boom :177, Endeavor :203, Low Kick :206), so it is ONE function here.
+//
+// It was ten byte-identical hand-written copies until batch 5 needed a
+// eleventh. Ten copies of a clause is how a clause gets fixed in nine places
+// (amendments 9 and 10) -- the Hustle and Choice Band shape, before it happens.
+//
+// -10 if the move is immune outright, or if the target has Wonder Guard and
+// this hit is not a clean "x2". AI_EFFECTIVENESS_x2 is an EXACT category match
+// in source, not "at least 2x" -- a real, preserved quirk.
+const highRiskForDamage = (ctx) => {
+  if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+  if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
+  return 0;
+};
 
 const AI_HANDLERS = {
   // -- B2b batch 4: support, status-clearing and status-inflicting --------
@@ -1658,6 +1678,45 @@ const AI_HANDLERS = {
     },
     checkViability: (ctx) => statDownDefenseFamilyViability(ctx, "evasion"),
   },
+  // ── B2b batch 5: the variable-damage family's AI rows ───────────────────
+  // Every one of these is a DAMAGING move, so it already reached AI_TryToFaint
+  // and the generic path. What was missing is its own AI_CBM_*/AI_CV_* row --
+  // and for five of them that row is AI_CBM_HighRiskForDamage, the routine
+  // factored out just above.
+  EFFECT_SONICBOOM: { checkBadMove: highRiskForDamage },   // dispatched :177
+  EFFECT_PSYWAVE: { checkBadMove: highRiskForDamage },     // dispatched :155
+  EFFECT_LOW_KICK: { checkBadMove: highRiskForDamage },    // dispatched :206
+  EFFECT_PRESENT: { checkBadMove: highRiskForDamage },     // dispatched :172
+  // EFFECT_DRAGON_RAGE has NO row in either dispatch table -- checked, not
+  // assumed: it appears nowhere in battle_ai_scripts.s. Absence recorded here
+  // so the next reader does not have to re-derive it.
+  EFFECT_SUPER_FANG: {
+    checkBadMove: highRiskForDamage,                        // dispatched :129
+    // AI_CV_SuperFang (:1710-1714): -1 unless the target is ABOVE 50% -- the
+    // move halves current HP, so it is worth least when there is least to halve.
+    checkViability: (ctx) => [{ p: 1, delta: ctx.targetHpPct > 50 ? 0 : -1 }],
+  },
+  EFFECT_MAGNITUDE: {
+    // AI_CBM_Magnitude (:365-367) adds a Levitate check and then FALLS THROUGH
+    // into AI_CBM_HighRiskForDamage -- it does not replace it.
+    checkBadMove: (ctx) => (ctx.targetAbility === "Levitate" ? -10 : highRiskForDamage(ctx)),
+  },
+  EFFECT_ENDEAVOR: {
+    checkBadMove: highRiskForDamage,                        // dispatched :203
+    // AI_CV_Endeavor (:2372-2388). Endeavor sets the target to the USER's HP,
+    // so the AI wants a healthy target and a hurt user -- and the threshold for
+    // "hurt enough" is LOOSER when the AI moves first (40 vs 50), because it
+    // does not have to survive a hit before using it.
+    checkViability: (ctx) => {
+      if (ctx.targetHpPct < 70) return [{ p: 1, delta: -1 }];
+      if (ctx.targetFaster) return [{ p: 1, delta: ctx.userHpPct > 50 ? -1 : 1 }];
+      return [{ p: 1, delta: ctx.userHpPct > 40 ? -1 : 1 }];
+    },
+  },
+  // EFFECT_ERUPTION's AI row is NOT here: AI_CV_Eruption was already ported
+  // (search EFFECT_ERUPTION below). Batch 5 added its DAMAGE mechanic only --
+  // the HP-scaled base power -- and a second AI copy was caught by
+  // test-no-duplicate-keys.js, which is the test that exists for exactly this.
   EFFECT_PERISH_SONG: {
     // AI_CBM_PerishSong (:447-449) — no AI_CV_PerishSong exists in source.
     checkBadMove: (ctx) => (ctx.targetPerishSonged ? -10 : 0),
@@ -1671,18 +1730,10 @@ const AI_HANDLERS = {
   // so this always evaluates to -10 against a hypothetical Wonder Guard
   // target, matching Wonder Guard's real block-everything-but-clean-SE rule).
   EFFECT_RETURN: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
   },
   EFFECT_FRUSTRATION: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
   },
   // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:154 dispatches
   // EFFECT_LEVEL_DAMAGE here — same routine as EFFECT_RETURN/EFFECT_FRUSTRATION
@@ -1690,11 +1741,7 @@ const AI_HANDLERS = {
   // in source's CheckViability dispatch table at all — checkViability
   // intentionally omitted, not a gap.
   EFFECT_LEVEL_DAMAGE: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
   },
   // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:156 dispatches
   // EFFECT_COUNTER here — same shared routine as EFFECT_RETURN/
@@ -1702,11 +1749,7 @@ const AI_HANDLERS = {
   // reinvented). checkViability is AI_CV_Counter (:713 -> :1618-1673) — see
   // counterViability's own long comment above for the full trace.
   EFFECT_COUNTER: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: counterViability,
   },
   // AI_CBM_HighRiskForDamage (data/battle_ai_scripts.s:182 dispatches
@@ -1716,11 +1759,7 @@ const AI_HANDLERS = {
   // (:738 -> :2116-2182) — see mirrorCoatViability's own comment above
   // (and reflectFamilyViability's shared trace) for the full derivation.
   EFFECT_MIRROR_COAT: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: mirrorCoatViability,
   },
   // ── LOCKSTEP PORT CAMPAIGN, BATCH 1 (2026-08-03) ──────────────────────
@@ -1845,11 +1884,7 @@ const AI_HANDLERS = {
   // batch-1 Regirock-probe finding, now landed: at full HP Superpower is
   // discouraged in virtually every state.
   EFFECT_SUPERPOWER: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: (ctx) => {
       const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
       if (eff === 0.25 || eff === 0.5) return -1;
@@ -1866,11 +1901,7 @@ const AI_HANDLERS = {
   // HP > 40. Deterministic. (Hyper Beam & co are discouraged at high HP —
   // the AI saves them for the endgame.)
   EFFECT_RECHARGE: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: (ctx) => {
       const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
       if (eff === 0.25 || eff === 0.5) return -1;
@@ -1890,11 +1921,7 @@ const AI_HANDLERS = {
   //   Flail3 roll (:1831-1834): +1 with p 156/256 (if_random_less_than 100
   //   jumps away with p 100/256)
   EFFECT_FLAIL: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: (ctx) => {
       const roll = [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 1 }];
       const plusOne = roll.map((x) => ({ p: x.p, delta: x.delta + 1 }));
@@ -1996,11 +2023,7 @@ const AI_HANDLERS = {
   // ChargeUpMove effect with a CheckBadMove entry; SOLAR_BEAM and
   // SKY_ATTACK have none, so checkBadMove lives on this entry alone).
   EFFECT_RAZOR_WIND: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: (ctx) => {
       const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
       if (eff === 0.25 || eff === 0.5) return -2;
@@ -2130,11 +2153,7 @@ const AI_HANDLERS = {
   // since batch 4 (state.oppMonFirstTurn + the search's decay); the
   // batch-3 partial registry entry is retired. Every branch is live.
   EFFECT_FOCUS_PUNCH: {
-    checkBadMove: (ctx) => {
-      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-      return 0;
-    },
+    checkBadMove: highRiskForDamage,
     checkViability: (ctx) => {
       const eff = typeEffectiveness(ctx.moveType, ctx.targetTypes);
       if (eff === 0.25 || eff === 0.5) return -1;
@@ -2420,12 +2439,100 @@ function getFriendshipPower(effect, friendship) {
     : Math.floor((10 * (255 - friendship)) / 25);
 }
 
+// ── B2b batch 5: the effects whose DAMAGE NUMBER is not power-based ────────
+// Two different shapes, and they are kept apart because source keeps them apart:
+//
+//   SET_DAMAGE_EFFECTS       the script decides gBattleMoveDamage itself and
+//                            never runs the formula (handled inside calcDamage)
+//   variablePowerFor()       the script substitutes gDynamicBasePower and then
+//                            runs the ORDINARY formula, so STAB, type, crit,
+//                            the roll and every modifier still apply
+//
+// Both were in SILENT_FALLTHROUGH_EFFECTS, which threw rather than quietly
+// computing a number off a placeholder power. This is what they were waiting
+// for; the guard entries come out in the same commit.
+const SET_DAMAGE_EFFECTS = new Set([
+  "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_PSYWAVE",
+  "EFFECT_SUPER_FANG", "EFFECT_ENDEAVOR",
+]);
+
+// Magnitude's own distribution (Cmd_magnitudedamagecalculation,
+// src/battle_script_commands.c:8670-8708). `Random() % 100` against seven
+// cutoffs -- NOT uniform over the seven, which is the whole character of the
+// move: magnitude 4 is 5% and magnitude 7 is 30%.
+const MAGNITUDE_DRAWS = [
+  { power: 10, p: 5 / 100 },    // rand < 5     magnitude 4
+  { power: 30, p: 10 / 100 },   // rand < 15    magnitude 5
+  { power: 50, p: 20 / 100 },   // rand < 35    magnitude 6
+  { power: 70, p: 30 / 100 },   // rand < 65    magnitude 7
+  { power: 90, p: 20 / 100 },   // rand < 85    magnitude 8
+  { power: 110, p: 10 / 100 },  // rand < 95    magnitude 9
+  { power: 150, p: 5 / 100 },   // else         magnitude 10
+];
+
+// Present (Cmd_presentdamagecalculation, :9111-9147). `Random() & 0xFF` against
+// 102 / 178 / 204 out of 256 -- and the fourth arm does not attack at all, it
+// HEALS the target for maxHP/4. That arm is carried as the sentinel "heal"
+// rather than a power, because it is a different kind of outcome and collapsing
+// it into a 0-power hit would silently lose the heal.
+const PRESENT_DRAWS = [
+  { power: 40, p: 102 / 256 },
+  { power: 80, p: 76 / 256 },   // 178 - 102
+  { power: 120, p: 26 / 256 },  // 204 - 178
+  { power: "heal", p: 52 / 256 }, // 256 - 204
+];
+
+// Psywave's rejection sample (:7934). `while ((r = Random() % 16) > 10);` keeps
+// drawing until r <= 10, so the reachable set is 0..10 UNIFORMLY -- 1/11 each,
+// not 1/16 with a fat tail. The engine enumerates the OUTCOME distribution, so
+// the rejected draws simply do not exist as branches.
+const PSYWAVE_DRAWS = Array.from({ length: 11 }, (_, r) => ({ power: r, p: 1 / 11 }));
+
+// The table the enumerator reads. Keyed by effect, same shape as
+// MULTI_HIT_DISTRIBUTION, and deliberately the ONLY place these lists live.
+const VARIABLE_DAMAGE_DRAWS = {
+  EFFECT_MAGNITUDE: MAGNITUDE_DRAWS,
+  EFFECT_PRESENT: PRESENT_DRAWS,
+  EFFECT_PSYWAVE: PSYWAVE_DRAWS,
+};
+
+function variablePowerFor(move, attacker, defender, attackerHpPct, variablePower, moveName) {
+  switch (move.effect) {
+    // Cmd_weightdamagecalculation (:9467-9482): power is a pure function of the
+    // TARGET's dex weight. The weights are generated, never transcribed --
+    // arena-solver/tools/gen-species-weights.mjs.
+    case "EFFECT_LOW_KICK":
+      return lowKickPower(defender.species);
+    // Cmd_scaledamagebyhealthratio (:9379-9389): gDynamicBasePower =
+    // hp * power / maxHP, minimum 1. Eruption and Water Spout.
+    case "EFFECT_ERUPTION": {
+      const maxHp = attacker.stats.hp;
+      const curHp = Math.round((attackerHpPct / 100) * maxHp);
+      return Math.max(1, Math.floor((curHp * move.power) / maxHp));
+    }
+    case "EFFECT_MAGNITUDE":
+    case "EFFECT_PRESENT": {
+      // An enumerated draw, never a live one. Present's heal arm never reaches
+      // the damage formula at all (applyMove handles it), so seeing it here is
+      // a routing bug worth failing on rather than defaulting.
+      if (variablePower === null || variablePower === "heal") {
+        throw new Error(`calcDamage: ${moveName} (${move.effect}) needs an enumerated power draw ` +
+          `and got ${JSON.stringify(variablePower)} -- the caller must branch it.`);
+      }
+      return variablePower;
+    }
+    default:
+      return move.power;
+  }
+}
+
 function calcDamage(attacker, defender, moveName, {
   rollFrac = 0.925, rollPercent = null, crit = false, atkStage = 0, defStage = 0,
   attackerBurned = false, attackerFlashFireActive = false, attackerHpPct = 100,
   screenActive = false, weather = null, defenderForesighted = false,
   attackerStatus = null, defenderStatus = null,
   mudSportActive = false, waterSportActive = false,
+  defenderHpPct = 100, variablePower = null, aiEstimate = false,
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
@@ -2441,9 +2548,53 @@ function calcDamage(attacker, defender, moveName, {
   if (move.effect === "EFFECT_LEVEL_DAMAGE") {
     return typeEffectiveness(move.type, defender.types, defenderForesighted) === 0 ? 0 : attacker.level;
   }
+
+  // ── B2b batch 5: the SET-DAMAGE family ──────────────────────────────────
+  // Sonic Boom, Dragon Rage, Psywave, Super Fang and Endeavor decide
+  // gBattleMoveDamage outright and never enter the formula. Every one of their
+  // scripts runs `typecalc` and then bics MOVE_RESULT_SUPER_EFFECTIVE |
+  // MOVE_RESULT_NOT_VERY_EFFECTIVE (data/battle_scripts_1.s:1936 Sonic Boom,
+  // :1946 Dragon Rage, :2116 Psywave, :1926 Super Fang, :3684 Endeavor), so the
+  // 0.5x/2x multipliers are DISCARDED while a type IMMUNITY still zeroes the
+  // move. No roll, no STAB, no crit -- exactly EFFECT_LEVEL_DAMAGE's shape,
+  // which is why it sits beside it rather than inside the formula below.
+  //
+  // The returned number still flows through applyMove's substitute, Endure and
+  // Focus Band handling, because in source those live in Cmd_adjustsetdamage
+  // (src/battle_script_commands.c:2168-2199) AFTER the number is fixed.
+  if (!aiEstimate && SET_DAMAGE_EFFECTS.has(move.effect)) {
+    if (typeEffectiveness(move.type, defender.types, defenderForesighted) === 0) return 0;
+    const defHp = Math.round((defenderHpPct / 100) * defender.stats.hp);
+    const atkHp = Math.round((attackerHpPct / 100) * attacker.stats.hp);
+    switch (move.effect) {
+      // setword gBattleMoveDamage, 20 / 40 -- literally that, level-independent.
+      case "EFFECT_SONICBOOM": return 20;
+      case "EFFECT_DRAGON_RAGE": return 40;
+      // Cmd_damagetohalftargethp (:9505-9512): hp / 2, floored, minimum 1.
+      case "EFFECT_SUPER_FANG": return Math.max(1, Math.floor(defHp / 2));
+      // Cmd_setdamagetohealthdifference (:9366-9377): target hp - user hp, and
+      // the script FAILS outright when the target is not above the user. The
+      // fail branch is applyMove's, since it is a move result, not a number.
+      case "EFFECT_ENDEAVOR": return Math.max(0, defHp - atkHp);
+      // Cmd_psywavedamageeffect (:7932-7941): `while ((r = Random() % 16) > 10);`
+      // -- a rejection sample, so r is UNIFORM over 0..10, not a 16-way draw.
+      // damage = level * (10r + 50) / 100. The draw is enumerated by the caller
+      // (VARIABLE_DAMAGE_DRAWS); reaching here without one is a bug, not a
+      // reason to pick a number.
+      case "EFFECT_PSYWAVE": {
+        if (variablePower === null) {
+          throw new Error(`calcDamage: ${moveName} (EFFECT_PSYWAVE) needs an enumerated draw ` +
+            `(0-10, uniform after rejection) and got none -- the caller must branch it.`);
+        }
+        return Math.floor((attacker.level * (variablePower * 10 + 50)) / 100);
+      }
+      default: break;
+    }
+  }
   const effectivePower = moveName === "Flail" || moveName === "Reversal" ? getFlailPower(attackerHpPct)
     : (move.effect === "EFFECT_RETURN" || move.effect === "EFFECT_FRUSTRATION") ? getFriendshipPower(move.effect, attacker.friendship)
-    : move.power;
+    : aiEstimate ? move.power
+    : variablePowerFor(move, attacker, defender, attackerHpPct, variablePower, moveName);
 
   const atkStatKey = move.category === "physical" ? "atk" : "spa";
   const defStatKey = move.category === "physical" ? "def" : "spd";
@@ -2765,7 +2916,18 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
     }
     const myRoll = ctx.aiRolls[moveName];
     const aiState = requireAiDamageState(ctx, "scoreOpponentMoveDist");
-    const simDmg = aiCalcDamage(user, target, moveName, aiState, myRoll);
+    // LAZY, and that is source-exact rather than an optimisation. Both consumers
+    // of this estimate are gated on power > 1 -- Cmd_if_can_faint returns the
+    // non-KO branch for `power < 2` BEFORE calling AI_CalcDmg
+    // (src/battle_ai_script_commands.c:1743-1750), and
+    // Cmd_get_how_powerful_move_is has the same eligibility gate -- so source
+    // never computes it for a power-1 move at all. Computing it eagerly was
+    // harmless until batch 5: the variable-damage family is power 1 and now
+    // demands an enumerated draw that the AI, correctly, has no way to supply.
+    let simDmgMemo;
+    const simDmg = () => (simDmgMemo === undefined
+      ? (simDmgMemo = aiCalcDamage(user, target, moveName, aiState, myRoll))
+      : simDmgMemo);
     const targetHp = Math.round((ctx.targetHpPct / 100) * target.stats.hp);
     // Cmd_if_can_faint (src/battle_ai_script_commands.c:1743-1750) opens with
     // `if (power < 2) { /* always take the non-KO branch */ }`, BEFORE ever
@@ -2786,7 +2948,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
     // instead of this inner condition would silently suppress a bonus source
     // actually grants to power-1 moves — a real divergence a prior proposal
     // in this series would have introduced by "simplifying" the fix upward.
-    if (move.power > 1 && simDmg >= targetHp) {
+    if (move.power > 1 && simDmg() >= targetHp) {
       // AI_TryToFaint_TryToEncourageQuickAttack (battle_ai_scripts.s:2629-2636).
       if (move.effect === "EFFECT_EXPLOSION") {
         // :2630 `if_effect EFFECT_EXPLOSION, AI_TryToFaint_End` jumps straight
@@ -2831,7 +2993,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
         // elsewhere in this file (see calcDamage's own eff===0 early
         // return, which must NOT be touched) — replicated here on top of
         // calcDamage's real number, not as a separate proxy calculation.
-        const myDmg = Math.max(1, simDmg);
+        const myDmg = Math.max(1, simDmg());
         notMostPowerful = user.moves.some((rivalMove) => {
           if (rivalMove === moveName || !isPowerfulMoveEligible(rivalMove)) return false;
           // A2: each rival is compared at ITS OWN slot's roll — source indexes
@@ -3017,6 +3179,16 @@ function aiCalcDamage(user, target, moveName, st, rollPercent) {
     weather: st.weather,
     defenderForesighted: st.targetForesighted,
     attackerStatus: st.attackerStatus, defenderStatus: st.defenderStatus,
+    // SOURCE-EXACT, and an asymmetry worth naming: during AI evaluation
+    // gDynamicBasePower is 0 (src/battle_ai_script_commands.c:1188, :1472,
+    // :1519, :1751, :1780), and every dynamic-power command -- magnitudedamage-
+    // calculation, weightdamagecalculation, scaledamagebyhealthratio,
+    // presentdamagecalculation -- runs in the BATTLE SCRIPT, never in the AI.
+    // CalculateBaseDamage therefore falls back to the move table's own power for
+    // the estimate. The visible consequence is Eruption: the AI values it at a
+    // flat 150 no matter how hurt the user is, while the battle scales it with
+    // HP. Preserved, like the Cloud Nine and speed-tie asymmetries, not "fixed".
+    aiEstimate: true,
   });
 }
 
@@ -4431,9 +4603,12 @@ function resolveAbilityInteraction(moveName, moveData, attacker, defender, defen
 // coverage audit findings, not yet ported (deliberately NOT fixed here, see
 // HANDOFF.md §10 task 2).
 const SILENT_FALLTHROUGH_EFFECTS = new Set([
-  "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_PSYWAVE",
-  "EFFECT_SUPER_FANG", "EFFECT_ENDEAVOR", "EFFECT_LOW_KICK", "EFFECT_MAGNITUDE",
-  "EFFECT_PRESENT", "EFFECT_HIDDEN_POWER", "EFFECT_BIDE",
+  // B2b batch 5 REMOVED nine of these -- they now have their real mechanic:
+  // EFFECT_SONICBOOM, EFFECT_DRAGON_RAGE, EFFECT_PSYWAVE, EFFECT_SUPER_FANG and
+  // EFFECT_ENDEAVOR through SET_DAMAGE_EFFECTS, and EFFECT_LOW_KICK,
+  // EFFECT_MAGNITUDE, EFFECT_PRESENT and EFFECT_ERUPTION through
+  // variablePowerFor(). What is left is what is genuinely still unported.
+  "EFFECT_HIDDEN_POWER", "EFFECT_BIDE",
   // EFFECT_RETURN/EFFECT_FRUSTRATION REMOVED from this set — now correctly
   // handled via calcDamage's friendship-based effectivePower (see
   // getFriendshipPower/buildMon's `friendship` field).
@@ -5215,6 +5390,12 @@ const PURE_DAMAGE_EFFECTS = new Set([
   "EFFECT_RETURN",         // friendship-based power handled in calcDamage
   "EFFECT_FRUSTRATION",    // friendship-based power handled in calcDamage
   "EFFECT_SKY_UPPERCUT",   // hits-through-Fly bypass; inert here (target never Flies)
+  // B2b batch 5. Eruption and Water Spout carry NO on-hit mechanic at all --
+  // their whole specialness is the HP-scaled base power, which calcDamage now
+  // computes (Cmd_scaledamagebyhealthratio, src/battle_script_commands.c:9379).
+  // They reach this guard, unlike the rest of batch 5, because their table
+  // power is 150 rather than the 1-placeholder.
+  "EFFECT_ERUPTION",
 ]);
 
 // INLINE_HANDLED: mandatory-mechanic effects whose consequence is applied
@@ -5332,7 +5513,7 @@ function warnUnmodeledMechanicOnce(effect, moveName) {
 // alternative -- a second, probe-only damage estimate -- is exactly the drift
 // anti-pattern this project exists downstream of, and it would be wrong the
 // moment either copy gained a modifier the other lacked.
-function battleDamageOptions(ctx, s, actor, moveData) {
+function battleDamageOptions(ctx, s, actor, moveData, variablePower = null) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
@@ -5360,6 +5541,11 @@ function battleDamageOptions(ctx, s, actor, moveData) {
     attackerHpPct: isYou ? s.yourHpPct : s.oppHpPct,
     screenActive: moveData.category === "physical" ? foeReflect != null : foeLightScreen != null,
     weather: effectiveWeather(s, you, opp),
+    // B2b batch 5. Super Fang and Endeavor read the DEFENDER's current HP, which
+    // no other damage path needed; the enumerated draw reaches Magnitude,
+    // Present and Psywave the same way hitCount reaches the multi-hit loop.
+    defenderHpPct: isYou ? s.oppHpPct : s.yourHpPct,
+    variablePower,
   };
 }
 
@@ -5373,7 +5559,7 @@ function battleDamageOptions(ctx, s, actor, moveData) {
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --
@@ -5609,6 +5795,46 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // falls through to the normal power>0 damage-dealing branch below
   }
 
+  // ── B2b batch 5: the two non-damage outcomes of a damaging move ─────────
+  if (variablePower === "failed") {
+    // Endeavor against a target that is not above the user. The script takes
+    // `setdamagetohealthdifference`'s ButItFailed branch before the accuracy
+    // check ever runs (data/battle_scripts_1.s:3687), so this is a FAILURE, not
+    // a miss, and it is enumerated as a single branch upstream.
+    s[skillKey] += skillDelta("noEffect");
+    return;
+  }
+  if (variablePower === "heal") {
+    // Present's fourth arm (Cmd_presentdamagecalculation, rand >= 204 of 256).
+    // It does not attack at all: it heals the TARGET for maxHP/4, and fails
+    // with AlreadyAtFullHp if there is nothing to heal.
+    //
+    // SOURCE QUIRK, deliberately reproduced: the heal arm explicitly clears
+    // MOVE_RESULT_DOESNT_AFFECT_FOE (:9140) before jumping to
+    // BattleScript_PresentHealTarget, so a Present that would be TYPE-IMMUNE
+    // still heals -- a Normal-type move that "does not affect" a Ghost hands it
+    // a quarter of its HP. That is why this sits ABOVE the ability/immunity
+    // block below rather than after it.
+    if (foeMon.ability === "Wonder Guard") {
+      // Wonder Guard takes a DIFFERENT flag path in Cmd_typecalc
+      // (MOVE_RESULT_MISSED, src/battle_script_commands.c:1409-1419), which the
+      // heal arm does NOT clear. Rather than guess how the two interact, this
+      // throws with the pair named -- unreachable unless a Wonder Guard mon
+      // meets the pool's one Present user.
+      throw new Error(`Present's heal arm against a Wonder Guard holder (${foeMon.species}) is ` +
+        `unmodelled: the heal arm clears MOVE_RESULT_DOESNT_AFFECT_FOE but Wonder Guard sets ` +
+        `MOVE_RESULT_MISSED instead, and the interaction is not established. Port it before solving.`);
+    }
+    if (s[foeHpKey] >= 100) {
+      s[skillKey] += skillDelta("noEffect"); // BattleScript_AlreadyAtFullHp
+      return;
+    }
+    const heal = Math.max(1, Math.floor(foeMon.stats.hp / 4));
+    s[foeHpKey] = Math.min(100, s[foeHpKey] + (heal / foeMon.stats.hp) * 100);
+    s[skillKey] += skillDelta("landed");
+    return;
+  }
+
   // Ability interactions (Soundproof/Levitate/Wonder Guard/Absorb/Flash
   // Fire) checked before normal resolution — Soundproof applies to status
   // moves too, so this check runs regardless of moveData.power.
@@ -5665,7 +5891,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // Crits bypass this (gCritMultiplier==1 gate) — moot here since this
       // engine never branches crits (expected-value damage only, HANDOFF §4
       // known gap), so screenActive is always safe to apply when present.
-      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData));
+      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, variablePower));
       // Bypass bonus: moves that ignore semi-invulnerability (Surf/Whirlpool
       // vs Dive, Earthquake vs Dig, Twister/Gust vs Fly) double damage;
       // Thunder/Sky Uppercut bypass without the bonus (source-confirmed).
@@ -6316,6 +6542,22 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
     }
     return out;
   }
+  if (moveData.effect === "EFFECT_ENDEAVOR") {
+    // BattleScript_EffectEndeavor (data/battle_scripts_1.s:3684-3695) runs
+    // `setdamagetohealthdifference BattleScript_ButItFailed` BEFORE
+    // `accuracycheck`, so a target that is not above the user makes the move
+    // FAIL -- it does not miss, and no accuracy branch is taken at all. Order
+    // matters here because "failed" and "missed" are different Skill outcomes,
+    // so this cannot be left to applyMove after the accuracy split.
+    const isYou = actor === "you";
+    const selfMon = isYou ? ctx.you : ctx.opp;
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const selfHp = Math.round(((isYou ? state.yourHpPct : state.oppHpPct) / 100) * selfMon.stats.hp);
+    const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foeMon.stats.hp);
+    if (foeHp <= selfHp) {
+      return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false, variablePower: "failed" }];
+    }
+  }
   if (moveData.effect === "EFFECT_SLEEP_TALK" && !skipStatusGates) {
     const statusNow = state[actor === "you" ? "youStatus" : "oppStatus"];
     if (statusNow === "sleep") {
@@ -6616,6 +6858,16 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
           }
           continue;
         }
+        // B2b batch 5: the variable-damage draws, enumerated exactly like the
+        // hit-count draw below -- resolved ONCE per move use, never re-rolled,
+        // and carried on the outcome rather than drawn inside applyMove.
+        const powerDist = VARIABLE_DAMAGE_DRAWS[moveData.effect];
+        if (powerDist) {
+          for (const { power, p: pp } of powerDist) {
+            if (pp > 0) results.push({ p: p * ab.p * pp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, variablePower: power });
+          }
+          continue;
+        }
         const hitDist = MULTI_HIT_DISTRIBUTION[moveData.effect];
         if (hitDist) {
           // Hit-count resolved ONCE per move use (never re-rolled per hit —
@@ -6702,9 +6954,17 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   if ((isYou ? state.oppSubstituteHP : state.youSubstituteHP) != null) return results;
 
   const selfMon = isYou ? ctx.you : ctx.opp;
-  const dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, state, actor, moveData));
   const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foeMon.stats.hp);
-  if (dmg < foeHp) return results; // cannot KO, so the proc is unobservable
+  // B2b batch 5: the lethality probe is now PER RESULT, because a variable-damage
+  // move's branches differ in exactly the thing being probed -- a magnitude 4 may
+  // not KO where a magnitude 10 does, so "can this hit kill?" has no single
+  // answer for the move any more. Branches that cannot kill keep the collapse
+  // rule's single branch; only the lethal ones split.
+  const lethal = (r) => calcDamage(selfMon, foeMon, moveName,
+    battleDamageOptions(ctx, state, actor, moveData, r.variablePower ?? null)) >= foeHp;
+  if (!results.some((r) => r.hit && r.variablePower !== "heal" && lethal(r))) {
+    return results; // no branch can KO, so the proc is unobservable in any of them
+  }
 
   // The roll sits inside BattleScript_MultiHitLoop (data/battle_scripts_1.s:624),
   // so each hit of a multi-hit move rolls independently and a proc can be
@@ -6721,7 +6981,7 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   const p = fb.param / FOCUS_BAND_SPACE;
   const out = [];
   for (const r of results) {
-    if (!r.hit) { out.push(r); continue; }
+    if (!r.hit || r.variablePower === "heal" || !lethal(r)) { out.push(r); continue; }
     out.push({ ...r, p: r.p * p, focusBanded: true });
     out.push({ ...r, p: r.p * (1 - p), focusBanded: false });
   }
@@ -6832,7 +7092,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
@@ -6851,7 +7111,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
-      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null);
+      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null);
       const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
