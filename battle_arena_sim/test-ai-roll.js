@@ -21,7 +21,8 @@
 // It stays as a STABILITY anchor; these sets are the roll-treatment fidelity
 // anchors, chosen precisely because they move.
 import { analyzeMatchup, buildMon, buildStartState, chooseOpponentMoves,
-         scoreOpponentMoveDist, enumerateAiRollOutcomes, AI_SIM_ROLLS } from "./logic.js";
+         scoreOpponentMoveDist, enumerateAiRollOutcomes, AI_SIM_ROLLS,
+         buildAiDamageState } from "./logic.js";
 import { OPPONENT_SETS } from "./opponent-full-data.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 
@@ -193,7 +194,9 @@ console.log("-- PART 3: roll classes are a proper distribution --");
     const e = OPPONENT_SETS[name];
     const cfg = getOpponentConfig(name, e.abilities.length > 1 ? { ability: e.abilities[0] } : {});
     const you = buildMon(METAGROSS), opp = buildMon({ ...cfg, friendship: 255 });
-    const classes = enumerateAiRollOutcomes(opp, you, { targetHpPct: 100 });
+    const state = buildStartState({ you, opp });
+    const classes = enumerateAiRollOutcomes(opp, you,
+      { targetHpPct: 100, aiDamageState: buildAiDamageState(state, opp, you) });
     const total = classes.reduce((s, c) => s + c.p, 0);
     ok(near(total, 1), `${name}: roll-class probabilities sum to 1, got ${total}`);
     ok(classes.every((c) => c.p > 0), `${name}: no zero-weight roll class`);

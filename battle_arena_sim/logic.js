@@ -2209,7 +2209,8 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
         `A2 defect and is no longer reachable.`);
     }
     const myRoll = ctx.aiRolls[moveName];
-    const simDmg = calcDamage(user, target, moveName, { rollPercent: myRoll });
+    const aiState = requireAiDamageState(ctx, "scoreOpponentMoveDist");
+    const simDmg = aiCalcDamage(user, target, moveName, aiState, myRoll);
     const targetHp = Math.round((ctx.targetHpPct / 100) * target.stats.hp);
     // Cmd_if_can_faint (src/battle_ai_script_commands.c:1743-1750) opens with
     // `if (power < 2) { /* always take the non-KO branch */ }`, BEFORE ever
@@ -2282,7 +2283,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
           // simulatedRNG[checkedMove] inside the comparison loop
           // (src/battle_ai_script_commands.c:1211), so the four estimates in one
           // decision are drawn independently but each is fixed for that decision.
-          const rivalDmg = Math.max(1, calcDamage(user, target, rivalMove, { rollPercent: ctx.aiRolls[rivalMove] }));
+          const rivalDmg = Math.max(1, aiCalcDamage(user, target, rivalMove, aiState, ctx.aiRolls[rivalMove]));
           return rivalDmg > myDmg;
         });
       }
@@ -2399,29 +2400,102 @@ const AI_SIM_ROLLS = [85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99
 // baking in the current blindness. Extra key fields only cost cache misses.
 const _aiRollClassCache = new WeakMap();
 
-function aiRollCacheKey(ctx, targetHp) {
-  const t = ctx.targetStages || {};
-  return [targetHp, ctx.userAtkStage, ctx.userSpAtkStage, t.def, t.spd,
-    ctx.currentWeather, ctx.userStatus, ctx.userHasReflect, ctx.userHasLightScreen,
-    ctx.targetHasReflect].join("|");
+// A9: the state the AI's own damage estimate is entitled to see. Source's
+// AI_CalcDmg (src/battle_script_commands.c:1306) passes the LIVE
+// &gBattleMons[attacker] / [defender] and the DEFENDER's gSideStatuses into
+// CalculateBaseDamage, so the AI's estimate is subject to:
+//   * stat stages   — APPLY_STAT_MOD, src/pokemon.c:3243 (physical) / :3293
+//                     (special). The `> DEFAULT_STAT_STAGE` conditionals at
+//                     :3237/:3251 are CRIT-ONLY, and the AI always evaluates
+//                     non-crit: gCritMultiplier = 1 is set immediately before
+//                     every AI damage call (battle_ai_script_commands.c:1192
+//                     get_how_powerful_move_is, :1755 if_can_faint, :1784
+//                     if_cant_faint). So the unconditional branch is the one
+//                     that applies here.
+//   * burn          — src/pokemon.c:3263-3264, Guts-exempt.
+//   * Reflect/Light Screen — :3267 / the special-branch mirror, both gated on
+//                     `gCritMultiplier == 1`, i.e. live for the AI. It is the
+//                     DEFENDER's side status, so the player's screens.
+//   * weather       — :3331 WEATHER_HAS_EFFECT2. NOTE the asymmetry this
+//                     creates and which is faithfully preserved: the AI's
+//                     DAMAGE respects Cloud Nine / Air Lock suppression, while
+//                     the AI's `get_weather` SCORING command does not (it reads
+//                     gBattleWeather raw — see ctx.currentWeather). Damage uses
+//                     effectiveWeather; the handlers keep the raw value.
+//   * Flash Fire    — :3366.
+// The engine previously passed NONE of this, so the modelled AI mis-estimated
+// its own damage exactly after a Double Team / Calm Mind / screen sequence.
+function buildAiDamageState(state, opp, you) {
+  return {
+    atkStage: state.oppStages.atk, spaStage: state.oppStages.spa,
+    defStage: state.youStages.def, spdStage: state.youStages.spd,
+    attackerBurned: state.oppStatus === "burn",
+    attackerFlashFireActive: state.oppFlashFireActive,
+    attackerHpPct: state.oppHpPct,
+    targetReflect: state.youReflectTurns != null,
+    targetLightScreen: state.youLightScreenTurns != null,
+    weather: effectiveWeather(state, you, opp),
+  };
 }
 
+// The single damage call the AI model uses, everywhere. Category picks which
+// stage pair and which screen apply, exactly as the battle path does in
+// applyMove.
+function aiCalcDamage(user, target, moveName, st, rollPercent) {
+  const physical = MOVES[moveName].category === "physical";
+  return calcDamage(user, target, moveName, {
+    rollPercent,
+    atkStage: physical ? st.atkStage : st.spaStage,
+    defStage: physical ? st.defStage : st.spdStage,
+    attackerBurned: st.attackerBurned,
+    attackerFlashFireActive: st.attackerFlashFireActive,
+    attackerHpPct: st.attackerHpPct,
+    screenActive: physical ? st.targetReflect : st.targetLightScreen,
+    weather: st.weather,
+  });
+}
+
+function requireAiDamageState(ctx, where) {
+  if (!ctx.aiDamageState) {
+    throw new Error(`${where} requires ctx.aiDamageState (the live state the AI's damage estimate ` +
+      `sees — stages/burn/screens/weather, see buildAiDamageState). A state-blind AI damage ` +
+      `estimate is the A9 defect and is no longer reachable.`);
+  }
+  return ctx.aiDamageState;
+}
+
+function aiRollCacheKey(st, targetHp, hpRelevant) {
+  // Every field the damage table can depend on. attackerHpPct is included ONLY
+  // when a tabulated move actually reads it (Flail/Reversal, via
+  // getFlailPower) — today never, since the table is power>1 and both are
+  // power 1 — because HP changes on almost every branch and would otherwise
+  // reduce the memo to a no-op. The flag keeps this correct if that ever
+  // changes rather than relying on the coincidence.
+  return [targetHp, st.atkStage, st.spaStage, st.defStage, st.spdStage,
+    st.attackerBurned, st.attackerFlashFireActive, st.targetReflect,
+    st.targetLightScreen, st.weather, hpRelevant ? st.attackerHpPct : 0].join("|");
+}
+
+const HP_DEPENDENT_POWER_MOVES = new Set(["Flail", "Reversal"]); // getFlailPower's only readers
+
 function enumerateAiRollOutcomes(opp, you, ctx) {
+  const st = requireAiDamageState(ctx, "enumerateAiRollOutcomes");
   const targetHp = Math.round((ctx.targetHpPct / 100) * you.stats.hp);
+  const relevant = opp.moves.filter((m) => MOVES[m] && MOVES[m].power > 1);
+  const hpRelevant = relevant.some((m) => HP_DEPENDENT_POWER_MOVES.has(m));
   let byYou = _aiRollClassCache.get(opp);
   if (!byYou) { byYou = new WeakMap(); _aiRollClassCache.set(opp, byYou); }
   let byKey = byYou.get(you);
   if (!byKey) { byKey = new Map(); byYou.set(you, byKey); }
-  const cacheKey = aiRollCacheKey(ctx, targetHp);
+  const cacheKey = aiRollCacheKey(st, targetHp, hpRelevant);
   const cached = byKey.get(cacheKey);
   if (cached) return cached;
-  const computed = computeAiRollOutcomes(opp, you, ctx, targetHp);
+  const computed = computeAiRollOutcomes(opp, you, st, targetHp, relevant);
   byKey.set(cacheKey, computed);
   return computed;
 }
 
-function computeAiRollOutcomes(opp, you, ctx, targetHp) {
-  const relevant = opp.moves.filter((m) => MOVES[m] && MOVES[m].power > 1);
+function computeAiRollOutcomes(opp, you, st, targetHp, relevant) {
   const pin = (r) => Object.fromEntries(opp.moves.map((m) => [m, r]));
 
   if (relevant.length === 0) return [{ p: 1, rolls: pin(85) }];
@@ -2429,7 +2503,7 @@ function computeAiRollOutcomes(opp, you, ctx, targetHp) {
   // Per-move damage at every roll (monotone, so [0] is the min and [15] the max).
   const dmg = new Map();
   for (const m of relevant) {
-    dmg.set(m, AI_SIM_ROLLS.map((r) => calcDamage(opp, you, m, { rollPercent: r })));
+    dmg.set(m, AI_SIM_ROLLS.map((r) => aiCalcDamage(opp, you, m, st, r)));
   }
   const eligible = relevant.filter((m) => isPowerfulMoveEligible(m));
   const D = (m, i) => Math.max(1, dmg.get(m)[i]);
@@ -2645,6 +2719,13 @@ function chooseOpponentMoves(opp, you, state) {
     // FOCUS_PUNCH/KNOCK_OFF/PURSUIT, whose first-turn branches are live
     // off this flag now.
     userPastFirstTurn: !state.oppMonFirstTurn,
+    // A9: the live state the AI's own damage estimate sees. Distinct from
+    // `currentWeather` above, which is deliberately the RAW weather because the
+    // AI's get_weather SCORING command is blind to Cloud Nine/Air Lock; the
+    // DAMAGE path is not (src/pokemon.c:3331 WEATHER_HAS_EFFECT2), so
+    // buildAiDamageState uses effectiveWeather. Both quirks are real and they
+    // point opposite ways — see buildAiDamageState's comment.
+    aiDamageState: buildAiDamageState(state, opp, you),
   };
 
   // A2: mix over the enumerated AI damage-roll assignments (see
@@ -5006,7 +5087,7 @@ export {
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
   // assert on the roll classes directly instead of re-deriving them.
-  enumerateAiRollOutcomes, AI_SIM_ROLLS,
+  enumerateAiRollOutcomes, AI_SIM_ROLLS, buildAiDamageState,
   buildStartState, resolveTurn, search, printTree,
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
   // Change #11 guard tables — exported so the coverage test pins them to the
