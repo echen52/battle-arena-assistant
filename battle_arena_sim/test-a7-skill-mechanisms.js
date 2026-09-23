@@ -118,7 +118,7 @@ console.log("-- PART 7: no behaviour changed (A7 is a structural port) --");
     ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] };
   const r = analyzeMatchup(METAGROSS, getOpponentConfig("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(r.winProb === 0.9069423628063115, `anchor must be untouched by A7, got ${r.winProb}`);
+  ok(r.winProb === 0.9067329423180334, `anchor must be untouched by A7, got ${r.winProb}`);
   console.log(`   anchor ${r.winProb}; the full 523-set sweep is byte-identical across A7`);
 }
 

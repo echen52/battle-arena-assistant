@@ -1968,13 +1968,32 @@ function effSpeed(mon, status, speedStage = 0, weather = null) {
 // research needed). The two stages combine into a SINGLE effective stage
 // (attacker's accuracy stage minus target's evasion stage, clamped to
 // -6..+6) before one lookup — not two separate multiplications.
-const ACC_EVASION_STAGE_MULT = {
-  "-6": 3/9, "-5": 3/8, "-4": 3/7, "-3": 3/6, "-2": 3/5, "-1": 3/4,
-  "0": 1, "1": 4/3, "2": 5/3, "3": 6/3, "4": 7/3, "5": 8/3, "6": 9/3,
+// A1: source's accuracy stage table is a table of INTEGER RATIOS, and it is
+// applied with INTEGER arithmetic:
+//     calc = sAccuracyStageRatios[buff].dividend * moveAcc;
+//     calc /= sAccuracyStageRatios[buff].divisor;
+// (table src/battle_script_commands.c:588-603, applied :1149-1150). The u32
+// division truncates.
+//
+// This engine used exact rationals (3/8, 4/3, ...) and no truncation. Six of
+// the thirteen entries are not the same number as source's -- source stores
+// 33/100, 36/100, 43/100, 133/100, 166/100, 233/100 and 133/50, which are
+// truncated decimal approximations of 1/3, 3/8, 3/7, 4/3, 5/3, 7/3 and 8/3 --
+// and the missing truncation moved every non-integer product. sim-audit.md §4.2
+// measured 56 of 143 (accuracy, stage) pairs diverging, 22 of 77 within the
+// range a fresh 3-turn round can reach, worst 2.00pp.
+const ACC_EVASION_STAGE_RATIO = {
+  "-6": [33, 100], "-5": [36, 100], "-4": [43, 100], "-3": [50, 100],
+  "-2": [60, 100], "-1": [75, 100], "0": [1, 1], "1": [133, 100],
+  "2": [166, 100], "3": [2, 1], "4": [233, 100], "5": [133, 50], "6": [3, 1],
 };
 function effectiveAccuracy(baseAccuracy, attackerAccStage, targetEvasionStage) {
   const combined = Math.max(-6, Math.min(6, attackerAccStage - targetEvasionStage));
-  return Math.min(100, baseAccuracy * ACC_EVASION_STAGE_MULT[String(combined)]);
+  const [dividend, divisor] = ACC_EVASION_STAGE_RATIO[String(combined)];
+  // Integer arithmetic, then the engine's own 100 cap. Source does not cap --
+  // it compares `Random() % 100 + 1 > calc`, so any calc >= 100 is a guaranteed
+  // hit, which is what capping at 100 expresses here.
+  return Math.min(100, Math.floor((dividend * baseAccuracy) / divisor));
 }
 
 // Flail/Reversal (EFFECT_FLAIL) exact power table, source-confirmed.

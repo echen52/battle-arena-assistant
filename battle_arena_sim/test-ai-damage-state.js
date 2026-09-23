@@ -52,7 +52,7 @@ const POST_A9 = {
   "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
   "Snorlax 7": { move: "Meteor Mash", winProb: 0.8081748046875002 },
   "Marowak 2": { move: "Meteor Mash", winProb: 0.9494408927112818 },
-  "Suicune 1": { move: "Meteor Mash", winProb: 0.5150743437919585 },
+  "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 }, // re-recorded by A1
 };
 
 let failures = 0;

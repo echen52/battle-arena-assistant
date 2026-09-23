@@ -140,7 +140,7 @@ console.log("-- PART 6: the opponent side is unchanged (A5 is additive) --");
     ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] };
   const r = analyzeMatchup(METAGROSS, getOpponentConfig("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(r.winProb === 0.9069423628063115, `the anchor must be untouched by A5, got ${r.winProb}`);
+  ok(r.winProb === 0.9067329423180334, `the anchor must be untouched by A5, got ${r.winProb}`);
   console.log(`   anchor at ${r.winProb} (A5 itself left the full sweep byte-identical; the value was later re-recorded by A6)`);
 }
 

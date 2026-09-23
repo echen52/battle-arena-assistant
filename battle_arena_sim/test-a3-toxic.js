@@ -152,7 +152,7 @@ console.log("-- PART 5: recorded cross-lead behaviour --");
   // the Metagross blindness is itself an assertion
   const mg = analyzeMatchup(LEADS.Metagross, cfgOf("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(mg.winProb === 0.9069423628063115, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
+  ok(mg.winProb === 0.9067329423180334, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
   console.log(`   ${Object.keys(POST_A3).length} poisonable-lead cells asserted; Metagross anchor unchanged at ${mg.winProb}`);
   let flips = 0;
   for (const [c, pre] of Object.entries(PRE_A3)) if (pre.move !== POST_A3[c].move) flips++;
