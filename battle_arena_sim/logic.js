@@ -14,6 +14,7 @@
 
 import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
+import { ITEM_DATA } from "./item-data.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
@@ -2114,6 +2115,51 @@ const STAT_STAGE_MULT = {
 };
 function stageMult(stage) { return STAT_STAGE_MULT[String(stage)] ?? 1; }
 
+// B7: gStatStageRatios as the INTEGER pairs source stores, applied the way
+// APPLY_STAT_MOD applies them (src/pokemon.c:3100-3104): `stat * r0 / r1` in
+// truncating s32.
+//
+// MEASURED INERT, and said plainly because an earlier draft of this comment
+// claimed otherwise: over stat 1..20000 x all 13 stages (260,000 pairs) the
+// integer form and the float form `floor(stat * STAT_STAGE_MULT[stage])` agree
+// on EVERY pair. The float multiply is exact here -- 3 * (2/3) is 2 in IEEE754,
+// not 1.9999999999999998 -- so there is no one-ULP bug of the sim-audit.md §3.3
+// class hiding in the old form. This is adopted because it is source's literal
+// arithmetic and Phase D compares against the ROM, not because it fixes a
+// measured error. What DOES change the numbers is the ORDER: source applies
+// this AFTER the item/ability modifiers, and this engine applied it before.
+// STAT_STAGE_MULT is retained for speed(), which mirrors
+// src/battle_main.c:4625-4626's own use of the same table.
+const STAT_STAGE_RATIO = {
+  "-6": [2, 8], "-5": [2, 7], "-4": [2, 6], "-3": [2, 5], "-2": [2, 4], "-1": [2, 3],
+  "0": [1, 1], "1": [3, 2], "2": [4, 2], "3": [5, 2], "4": [6, 2], "5": [7, 2], "6": [8, 2],
+};
+function applyStatStage(stat, stage) {
+  const [n, d] = STAT_STAGE_RATIO[String(stage)] ?? [1, 1];
+  return Math.floor((stat * n) / d);
+}
+
+// sHoldEffectToType (src/pokemon.c:1919-1938), restricted to the hold effects
+// the Lv50 pool actually carries. Each gives (param + 100)% of the attacking
+// stat for its own type; every one of them has param 10, i.e. 1.1x.
+const HOLD_EFFECT_BOOSTED_TYPE = {
+  HOLD_EFFECT_BUG_POWER: "Bug", HOLD_EFFECT_STEEL_POWER: "Steel",
+  HOLD_EFFECT_GROUND_POWER: "Ground", HOLD_EFFECT_ROCK_POWER: "Rock",
+  HOLD_EFFECT_GRASS_POWER: "Grass", HOLD_EFFECT_DARK_POWER: "Dark",
+  HOLD_EFFECT_FIGHTING_POWER: "Fighting", HOLD_EFFECT_ELECTRIC_POWER: "Electric",
+  HOLD_EFFECT_WATER_POWER: "Water", HOLD_EFFECT_FLYING_POWER: "Flying",
+  HOLD_EFFECT_POISON_POWER: "Poison", HOLD_EFFECT_ICE_POWER: "Ice",
+  HOLD_EFFECT_GHOST_POWER: "Ghost", HOLD_EFFECT_PSYCHIC_POWER: "Psychic",
+  HOLD_EFFECT_FIRE_POWER: "Fire", HOLD_EFFECT_DRAGON_POWER: "Dragon",
+  HOLD_EFFECT_NORMAL_POWER: "Normal",
+};
+
+// The four pinch abilities (src/pokemon.c:3219-3226) -- 1.5x POWER for their
+// own type at hp <= floor(maxHP / 3).
+const PINCH_ABILITY_TYPE = {
+  Overgrow: "Grass", Blaze: "Fire", Torrent: "Water", Swarm: "Bug",
+};
+
 // Cloud Nine / Air Lock suppress EVERY weather effect (damage multiplier,
 // chip damage, speed doubling, accuracy changes) while on the field, WITHOUT
 // touching the underlying weatherType/weatherTurns state — the counter keeps
@@ -2207,6 +2253,8 @@ function calcDamage(attacker, defender, moveName, {
   rollFrac = 0.925, rollPercent = null, crit = false, atkStage = 0, defStage = 0,
   attackerBurned = false, attackerFlashFireActive = false, attackerHpPct = 100,
   screenActive = false, weather = null, defenderForesighted = false,
+  attackerStatus = null, defenderStatus = null,
+  mudSportActive = false, waterSportActive = false,
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
@@ -2231,24 +2279,96 @@ function calcDamage(attacker, defender, moveName, {
   // Crits ignore negative attack stages and positive defense stages (Gen III rule).
   const effAtkStage = crit ? Math.max(0, atkStage) : atkStage;
   const effDefStage = crit ? Math.min(0, defStage) : defStage;
-  const atkStat = Math.floor(attacker.stats[atkStatKey] * stageMult(effAtkStage));
-  const defStatRaw = Math.floor(defender.stats[defStatKey] * stageMult(effDefStage));
-  // Explosion and Self Destruct both carry effect: "EFFECT_EXPLOSION" in
-  // move-data.js — keying off that (like everywhere else in this file)
-  // instead of the move NAME. The previous version checked the move name
-  // and had "Self-Destruct" (hyphenated) instead of the real key ("Self
-  // Destruct", space) — never matched anything, a real bug caught while
-  // pre-flighting Snorlax (this defense-halving bonus silently never applied).
-  const effDef = move.effect === "EFFECT_EXPLOSION" ? Math.floor(defStatRaw / 2) : defStatRaw;
+  // ── CalculateBaseDamage's modifier chain (src/pokemon.c:3158-3231) ───────
+  // ORDER IS THE POINT. Source applies every flat item/ability modifier to the
+  // RAW stat and only then folds in the stat stage, via APPLY_STAT_MOD
+  // (:3100-3104). This engine used to do the opposite -- stage first -- which is
+  // a different integer as soon as any modifier is present: for a Choice Band
+  // holder with raw Attack 200 at stage -1, source gives 200 and stage-first
+  // gives 199. With NO modifier present the two orders are identical, which is
+  // why the 106 cells this class moved are exactly the cells carrying a modelled
+  // item or ability and not one cell more.
+  const physical = move.category === "physical";
+  const atkItem = ITEM_DATA[attacker.item] || null;
+  let attack = attacker.stats[atkStatKey];
+  let defense = defender.stats[defStatKey];
+  let power = effectivePower;
 
+  // :3158-3159 Huge Power / Pure Power -- `attack *= 2`, so physical only.
+  if (physical && (attacker.ability === "Huge Power" || attacker.ability === "Pure Power")) {
+    attack *= 2;
+  }
+  // :3170-3182 the type-boost hold items. Source picks `attack` when the MOVE'S
+  // TYPE is physical and `spAttack` otherwise -- which in Gen III is the same
+  // question as this engine's move.category, since the split is by type.
+  if (atkItem && HOLD_EFFECT_BOOSTED_TYPE[atkItem.holdEffect] === move.type) {
+    attack = Math.floor((attack * (atkItem.param + 100)) / 100);
+  }
+  // :3185 Choice Band -- `attack = (150 * attack) / 100`, attack only.
+  if (physical && atkItem && atkItem.holdEffect === "HOLD_EFFECT_CHOICE_BAND") {
+    attack = Math.floor((150 * attack) / 100);
+  }
+  // :3199-3200 Thick Club -- doubles Attack, and ONLY for Cubone and Marowak.
+  if (physical && atkItem && atkItem.holdEffect === "HOLD_EFFECT_THICK_CLUB"
+      && (attacker.species === "Cubone" || attacker.species === "Marowak")) {
+    attack *= 2;
+  }
+  // :3203-3204 Thick Fat -- halves the attacker's SpAttack against Fire/Ice.
+  // Source touches spAttack only; every Fire and Ice move is special in Gen III,
+  // so the category gate is redundant in practice and kept for exactness.
+  if (!physical && defender.ability === "Thick Fat" && (move.type === "Fire" || move.type === "Ice")) {
+    attack = Math.floor(attack / 2);
+  }
+  // :3205-3206 Hustle -- 1.5x Attack, unconditionally (its accuracy penalty
+  // lives in the accuracy path, not here).
+  if (physical && attacker.ability === "Hustle") {
+    attack = Math.floor((150 * attack) / 100);
+  }
+  // :3211-3212 Guts -- 1.5x Attack while the user carries ANY major status.
+  // Note this is separate from, and stacks with, Guts exempting the holder from
+  // the burn halving further down.
+  if (physical && attacker.ability === "Guts" && attackerStatus !== null) {
+    attack = Math.floor((150 * attack) / 100);
+  }
+  // :3213-3214 Marvel Scale -- 1.5x Defense while the DEFENDER carries any
+  // major status. Source modifies `defense`, so physical only.
+  if (physical && defender.ability === "Marvel Scale" && defenderStatus !== null) {
+    defense = Math.floor((150 * defense) / 100);
+  }
+  // :3215-3218 Mud Sport halves Electric power, Water Sport halves Fire power.
+  // Both are set by EFFECT_MUD_SPORT / EFFECT_WATER_SPORT, which are still
+  // unported (they sit in B2b's remaining list), so no reachable state can set
+  // these yet -- default false, same stated convention as every other
+  // not-yet-reachable flag in this file, and wired here so porting those two
+  // effects is a state change rather than a hunt through the damage formula.
+  if (mudSportActive && move.type === "Electric") power = Math.floor(power / 2);
+  if (waterSportActive && move.type === "Fire") power = Math.floor(power / 2);
+  // :3219-3226 Overgrow / Blaze / Torrent / Swarm -- 1.5x POWER (not the stat)
+  // at hp <= floor(maxHP / 3), for their own type only.
+  const pinchAbility = PINCH_ABILITY_TYPE[attacker.ability];
+  if (pinchAbility === move.type) {
+    const maxHp = attacker.stats.hp;
+    const curHp = Math.round((attackerHpPct / 100) * maxHp);
+    if (curHp <= Math.floor(maxHp / 3)) power = Math.floor((150 * power) / 100);
+  }
+  // :3229-3230 Explosion / Self-Destruct halve the DEFENDER's Defense. Keyed on
+  // the effect, not the move name (the name check this replaced was hyphenated
+  // and never matched -- see the note kept below).
+  if (move.effect === "EFFECT_EXPLOSION") defense = Math.floor(defense / 2);
+
+  // APPLY_STAT_MOD last, on the modified stats. Crits ignore a negative attack
+  // stage and a positive defense stage (:3235-3243 / :3250-3258) -- the gate is
+  // on the STAGE, which is why it is resolved here and not earlier.
+  const atkStat = applyStatStage(attack, effAtkStage);
+  const effDef = Math.max(1, applyStatStage(defense, effDefStage));
   let preFinal = Math.floor(
-    Math.floor((2 * attacker.level / 5 + 2) * effectivePower * atkStat / effDef) / 50
+    Math.floor((2 * attacker.level / 5 + 2) * power * atkStat / effDef) / 50
   );
 
   // Burn: physical damage halved, UNLESS attacker has Guts (source-confirmed
   // ordering: this happens here, before the +2 and before STAB/type-calc,
   // and DOES apply to crits — nothing exempts crits from it).
-  if (attackerBurned && move.category === "physical" && attacker.ability !== "Guts") {
+  if (attackerBurned && physical && attacker.ability !== "Guts") {
     preFinal = Math.floor(preFinal / 2);
   }
   // Reflect/Light Screen: halves damage at this same pre-+2 stage (src/pokemon.c:3267-3273
@@ -2637,6 +2757,10 @@ function buildAiDamageState(state, opp, you) {
     targetReflect: state.youReflectTurns != null,
     targetLightScreen: state.youLightScreenTurns != null,
     targetForesighted: state.youForesighted, // B2b: the AI's own damage estimate sees it too (A9 defect class)
+    // B7: Guts / Marvel Scale read status1 on either side. Same A9 reasoning --
+    // an AI whose damage estimate cannot see a modifier the battle applies is
+    // wrong in exactly the direction that matters.
+    attackerStatus: state.oppStatus, defenderStatus: state.youStatus,
     weather: effectiveWeather(state, you, opp),
   };
 }
@@ -2656,6 +2780,7 @@ function aiCalcDamage(user, target, moveName, st, rollPercent) {
     screenActive: physical ? st.targetReflect : st.targetLightScreen,
     weather: st.weather,
     defenderForesighted: st.targetForesighted,
+    attackerStatus: st.attackerStatus, defenderStatus: st.defenderStatus,
   });
 }
 
@@ -4777,6 +4902,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       const screenActive = moveData.category === "physical" ? s[foeReflectKey] != null : s[foeLightScreenKey] != null;
       let dmg = calcDamage(selfMon, foeMon, moveName, {
         defenderForesighted: foeForesighted,
+        attackerStatus: s[selfStatusKey], defenderStatus: s[foeStatusKey],
         atkStage: selfStages[atkStatKey], defStage: foeStages[defStatKey],
         attackerBurned: s[selfStatusKey] === "burn",
         attackerFlashFireActive: s[selfFlashFireKey],
@@ -5672,6 +5798,7 @@ function moveTiebreakScore(ctx, state, moveName) {
     screenActive,
     weather: effectiveWeather(state, ctx.you, ctx.opp),
     defenderForesighted: state.oppForesighted,
+    attackerStatus: state.youStatus, defenderStatus: state.oppStatus,
   });
 }
 
@@ -5779,6 +5906,9 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
 
 export {
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
+  // B7a: surfaced so the test can pin the stage arithmetic to source's integer
+  // form directly, instead of inferring it through damage.
+  applyStatStage,
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
   // assert on the roll classes directly instead of re-deriving them.

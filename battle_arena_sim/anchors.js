@@ -61,7 +61,20 @@ export const ANCHOR_HISTORY = [
   ["0.9069423628063115", "A7", "unchanged — structural port"],
   ["0.9067329423180334", "A1", "MOVED — accuracy arithmetic; Double Team is this opponent's main play"],
   ["0.9067329423180334", "A8/A10", "unchanged"],
+  ["0.9067329423180334", "B1/B2a/B2b-1", "unchanged — Umbreon 4 carries no item or ability the pool changes"],
+  ["0.9067329423180334", "B7a", "unchanged — Metagross holds Cheri Berry and Umbreon 4 Leftovers; neither is a damage modifier, and neither mon has a modifier ability"],
 ];
+
+// B7a moved three OTHER recorded values, each with a named mechanism. Kept here
+// because ANCHOR itself did not move, and a class that moves nothing at the
+// canonical anchor while moving 106 sweep cells is exactly the blindness
+// amendment 2 was written about.
+export const B7A_PRE = {
+  "Rapidash 1": { move: "Earthquake", winProb: 0.0625, why: "holds Charcoal — HOLD_EFFECT_FIRE_POWER, 1.1x its Fire moves" },
+  "Marowak 2": { move: "Meteor Mash", winProb: 0.9494408927112818, why: "holds Thick Club — 2x Attack on Cubone/Marowak" },
+  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9810316569313972, why: "the SNORLAX LEAD's own Thick Fat now halves Articuno's Ice damage — moved in the PLAYER's favour" },
+  "Muk 1": { move: "Surf", winProb: 0.49859460108585935, why: "holds Poison Barb — HOLD_EFFECT_POISON_POWER, 1.1x its Poison moves" },
+};
 
 // ── per-class recorded tables ──────────────────────────────────────────────
 // PRE_* are history and are never asserted. POST_* are asserted.
@@ -121,7 +134,7 @@ export const CURRENT = {
   "Rhydon 3": { move: "Earthquake", winProb: 0.044375 },
   "Rhydon 4": { move: "Earthquake", winProb: 0.044375 },
   "Houndoom 1": { move: "Earthquake", winProb: 0.13020833333333334 },
-  "Rapidash 1": { move: "Earthquake", winProb: 0.0625 },
+  "Rapidash 1": { move: "Earthquake", winProb: 0.0009765625 }, // B7a: Charcoal
   "Anabel Silver Entei": { move: "Explosion", winProb: 0.5 },
   "Exploud 3": { move: "Explosion", winProb: 0.5 },
   "Donphan 1": { move: "Explosion", winProb: 0.5 },
@@ -131,7 +144,7 @@ export const CURRENT = {
   "Snorlax 2": { move: "Meteor Mash", winProb: 0.8027441776394845 },
   "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
   "Snorlax 7": { move: "Meteor Mash", winProb: 0.8081748046875002 },
-  "Marowak 2": { move: "Meteor Mash", winProb: 0.9494408927112818 },
+  "Marowak 2": { move: "Explosion", winProb: 0.5 }, // B7a: Thick Club doubles its Attack
   "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 },
   // A4/A6's confusion-sensitive set
   "Gengar 1": { move: "Shadow Ball", winProb: 0.5800000000000001 },
@@ -154,7 +167,7 @@ export const CURRENT = {
 
 // Cross-lead cells, keyed "Lead|Set". A3's poison-sensitive set.
 export const CURRENT_CELLS = {
-  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9810316569313972 },
+  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.985365207225065 }, // B7a: the lead's own Thick Fat
   "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
@@ -172,7 +185,9 @@ export const CURRENT_DIST = {
   "Rhydon 3": [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
   "Rhydon 4": [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
   "Houndoom 1": [["Flamethrower", 0.7916666666666666], ["Counter", 0.10416666666666667], ["Will-O-Wisp", 0.10416666666666667]],
-  "Rapidash 1": [["Protect", 0.5], ["Flamethrower", 0.5]],
+  // B7a: Charcoal boosts its Flamethrower in the AI's OWN damage estimate too,
+  // so AI_TryToFaint stops splitting with Protect. Was [["Protect", 0.5], ["Flamethrower", 0.5]].
+  "Rapidash 1": [["Flamethrower", 0.9375], ["Protect", 0.0625]],
   "Anabel Silver Entei": [["Fire Blast", 0.7917938232421875], ["Calm Mind", 0.2082061767578125]],
   "Exploud 3": [["Overheat", 0.90625], ["ThunderPunch", 0.09375]],
   "Donphan 1": [["Earthquake", 0.671875], ["Swagger", 0.328125]],
@@ -196,7 +211,7 @@ export const B2B1 = {
   "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.04666666666666666 },
   "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.03202128648757935 },
   "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.07542444229125977 },
-  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49859460108585935 },
+  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49061960451908687 }, // B7a: Poison Barb
   "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9934374999999999 },
   "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.3474999999999999 },
   "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0 },
