@@ -5600,9 +5600,29 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
       }
     }
-    // B2b batch 2: Choice Band locks its holder into the first move it uses
-    // (the `choicedMove` clause of CheckMoveLimitations, src/battle_util.c:1119).
-    // Set here, once the move has actually been used.
+    // B2b batch 2: Choice Band locks its holder into the first move it uses.
+    //
+    // MECHANIC-WHOLENESS (amendment 9). Choice Band is referenced from FIVE
+    // source functions; every clause is accounted for here:
+    //   src/pokemon.c:3185          CalculateBaseDamage, 1.5x Attack  -> B7a
+    //   src/battle_util.c:1119      CheckMoveLimitations, the lock    -> selectableMoves
+    //   src/battle_util.c:1051      TrySetCantSelectMoveBattleScript  -> same rule, the
+    //                               per-move selection guard; equivalent, nothing extra
+    //   src/battle_script_commands.c:4296  MOVEEND_CHOICE_MOVE, which SETS the lock -> here
+    //   include/constants/hold_effects.h:33  the constant itself
+    //
+    // MOVEEND_CHOICE_MOVE's own clauses, each ported or ledgered:
+    //   HITMARKER_OBEYS            always true in a normal battle -- inert
+    //   gChosenMove != MOVE_STRUGGLE  Struggle is not modelled -- inert
+    //   choicedMove not already set   ported, the `== null` guard below
+    //   Baton Pass that did NOT fail skips the assignment: EFFECT_BATON_PASS
+    //     always fails here (the Arena has no reserve party), so source would
+    //     take the assigning path too -- consistent, and stated rather than
+    //     assumed
+    //   gChosenMove, i.e. the move SELECTED, not the one executed. Identical
+    //     today; it will DIVERGE once Sleep Talk / Metronome / Mirror Move land
+    //     in batch 3, which call a different move than the one chosen. Flagged
+    //     here so that batch does not have to rediscover it.
     {
       const selfItemLock = itemData(selfMon.item);
       if (selfItemLock && selfItemLock.holdEffect === "HOLD_EFFECT_CHOICE_BAND") {
