@@ -2216,13 +2216,45 @@ const ACC_EVASION_STAGE_RATIO = {
   "-2": [60, 100], "-1": [75, 100], "0": [1, 1], "1": [133, 100],
   "2": [166, 100], "3": [2, 1], "4": [233, 100], "5": [133, 50], "6": [3, 1],
 };
-function effectiveAccuracy(baseAccuracy, attackerAccStage, targetEvasionStage) {
+// B7c: the WHOLE accuracy chain, in source's order and UNCAPPED
+// (src/battle_script_commands.c:1128-1174). Returns `calc`, which the caller
+// turns into a hit probability -- source never caps it either, it just compares
+// `Random() % 100 + 1 > calc`, so any calc >= 100 is a guaranteed hit.
+//
+// CAPPING EARLY WAS A BUG. The old version capped at 100 inside this function
+// and the caller then multiplied Sand Veil's 0.8 onto the CAPPED value. Source
+// multiplies onto the raw calc and only compares at the end, so a calc of 130
+// against a Sand Veil holder is 104 in source (still a guaranteed hit) but was
+// 80 here. Every multiplier below now lands before any cap.
+//
+// Two of these were missing entirely: Compound Eyes (4 sets, 5 cells) and
+// HUSTLE'S ACCURACY PENALTY -- B7a ported Hustle's 1.5x Attack and not the 0.8x
+// accuracy that pays for it, which made Hustle a pure buff. Half a port is
+// worse than none, so it is completed here.
+// POSITIONAL, not an options object: this runs on every accuracy evaluation in
+// the search, and the options-object form measured a 15% throughput regression
+// (95.2 -> 80.5 solves/sec) purely from the per-call allocation. `defenderItem`
+// takes an already-resolved itemData() record OR a name; callers in the hot
+// path pass the record so the lookup happens once per action, not once per
+// evaluation.
+function accuracyCalc(baseAccuracy, attackerAccStage, targetEvasionStage,
+  attackerAbility = null, defenderAbility = null, defenderItem = null,
+  weather = null, physical = false) {
   const combined = Math.max(-6, Math.min(6, attackerAccStage - targetEvasionStage));
   const [dividend, divisor] = ACC_EVASION_STAGE_RATIO[String(combined)];
-  // Integer arithmetic, then the engine's own 100 cap. Source does not cap --
-  // it compares `Random() % 100 + 1 > calc`, so any calc >= 100 is a guaranteed
-  // hit, which is what capping at 100 expresses here.
-  return Math.min(100, Math.floor((dividend * baseAccuracy) / divisor));
+  let calc = Math.floor((dividend * baseAccuracy) / divisor);
+  // :1152-1153 Compound Eyes, 1.3x.
+  if (attackerAbility === "Compound Eyes") calc = Math.floor((calc * 130) / 100);
+  // :1154-1155 Sand Veil, 0.8x, and ONLY while sandstorm is actually in effect.
+  if (weather === "sandstorm" && defenderAbility === "Sand Veil") calc = Math.floor((calc * 80) / 100);
+  // :1156-1157 Hustle, 0.8x, physical moves only.
+  if (attackerAbility === "Hustle" && physical) calc = Math.floor((calc * 80) / 100);
+  // :1172-1173 BrightPowder, (100 - param)% -- param 10, so 0.9x.
+  const di = typeof defenderItem === "string" || defenderItem == null ? itemData(defenderItem) : defenderItem;
+  if (di && di.holdEffect === "HOLD_EFFECT_EVASION_UP") {
+    calc = Math.floor((calc * (100 - di.param)) / 100);
+  }
+  return calc;
 }
 
 // Flail/Reversal (EFFECT_FLAIL) exact power table, source-confirmed.
@@ -5762,6 +5794,8 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       const targetEvasionStage = targetForesightedForAcc
         ? 0 : (actor === "you" ? state.oppStages : state.youStages).evasion;
       const foeMonForAcc = actor === "you" ? ctx.opp : ctx.you;
+      // Resolved ONCE per action rather than once per accuracy evaluation.
+      const foeItemForAcc = itemData(foeMonForAcc.item);
       const selfMonForAcc = actor === "you" ? ctx.you : ctx.opp;
       const weatherForAcc = effectiveWeather(state, ctx.you, ctx.opp);
 
@@ -5808,16 +5842,11 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
         // accuracy === null means "always hits" (e.g. Faint Attack, Swift) —
         // these bypass the accuracy check ENTIRELY, including evasion.
         if (baseAccuracy === null) return [{ p: 1, hit: true }];
-        let effAcc = effectiveAccuracy(baseAccuracy, attackerAccStage, targetEvasionStage);
-        // Sand Veil: 0.8x the ATTACKER's accuracy when attacking a Sand-Veil
-        // holder during sandstorm (src/battle_script_commands.c:1154-1155) —
-        // applied after the stage-ratio clamp already in effectiveAccuracy,
-        // a minor ordering simplification (only matters combined with
-        // nonzero accuracy/evasion stages, an edge case for the 4 Dugtrio
-        // sets that carry this ability).
-        if (weatherForAcc === "sandstorm" && foeMonForAcc.ability === "Sand Veil") {
-          effAcc *= 0.8;
-        }
+        // B7c: one call, whole chain, uncapped -- Sand Veil is inside it now
+        // rather than multiplied onto an already-capped number here.
+        const effAcc = accuracyCalc(baseAccuracy, attackerAccStage, targetEvasionStage,
+          selfMonForAcc.ability, foeMonForAcc.ability, foeItemForAcc,
+          weatherForAcc, moveData.category === "physical");
         return effAcc < 100
           ? [{ p: effAcc / 100, hit: true }, { p: 1 - effAcc / 100, hit: false }]
           : [{ p: 1, hit: true }];
@@ -6140,6 +6169,9 @@ export {
   // B7a: surfaced so the test can pin the stage arithmetic to source's integer
   // form directly, instead of inferring it through damage.
   applyStatStage,
+  // B7c: the accuracy chain, surfaced so the test can pin each multiplier and
+  // the UNCAPPED ordering directly rather than inferring them from hit rates.
+  accuracyCalc,
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
   // assert on the roll classes directly instead of re-deriving them.

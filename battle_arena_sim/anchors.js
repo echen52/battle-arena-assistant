@@ -172,7 +172,7 @@ export const CURRENT_CELLS = {
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
   "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 },
-  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9443710298449904 },
+  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9260616024472976 }, // B7c: Blissey 1 holds BrightPowder
 };
 
 // Full opponent AI distributions at fresh turn 1, for the roll-sensitive sets.
@@ -292,13 +292,16 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Thunderbolt", winProb: 0.314569140625 },
     causedBy: "item AND ability: Choice Band + Guts" },
   "Scizor 4": { lead: "Starmie", ability: null,
-    move: "Surf", winProb: 0.684591722223494,
+    move: "Surf", winProb: 0.6736855928174657,
     pre: { move: "Surf", winProb: 0.7852604166666668 },
-    causedBy: "opponent ability: Swarm" },
+    // B7a moved this via Swarm (causally verified). B7c then moved it again,
+    // because Scizor 4 also holds a BrightPowder. Both movements named.
+    causedBy: "opponent ability: Swarm (B7a), then its BrightPowder (B7c)" },
   "Venusaur 2": { lead: "Starmie", ability: null,
-    move: "Ice Beam", winProb: 0.684700342614556,
+    move: "Ice Beam", winProb: 0.6306290589435553,
     pre: { move: "Ice Beam", winProb: 0.7748116731927341 },
-    causedBy: "opponent ability: Overgrow" },
+    // Same shape as Scizor 4: Overgrow in B7a, its BrightPowder in B7c.
+    causedBy: "opponent ability: Overgrow (B7a), then its BrightPowder (B7c)" },
   "Rapidash 1": { lead: "Metagross", ability: "Run Away",
     move: "Earthquake", winProb: 0.0009765625,
     pre: { move: "Earthquake", winProb: 0.0625 },
@@ -345,4 +348,24 @@ export const B7B_ANCHORS = {
     pre: { move: "Thunderbolt", winProb: 0.9999999999999999 } },
   "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.828125,
     pre: { move: "Earthquake", winProb: 1 } },
+};
+
+// -- B7C_ANCHORS -- the accuracy chain -------------------------------------
+// All 319 movers attribute causally to ONE mechanism, the opponent's
+// BrightPowder, so this table is about depth rather than breadth: the largest
+// mover, and a MOVE FLIP, which is the shape that actually changes advice.
+//
+// NAMED BLIND SPOT. B7c part 1 also ported Compound Eyes (4 sets), Hustle's
+// accuracy penalty (6 sets) and fixed the cap-ordering bug, and NONE of the
+// three produces a single sweep mover -- the attribution run assigns all 319 to
+// BrightPowder alone. Their only guards are the direct probes in
+// test-b7c-accuracy-chain.js PARTS 1-3, which pin each multiplier and the
+// uncapped ordering by value rather than by hit rate.
+export const B7C_ANCHORS = {
+  "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.8099999999999999,
+    pre: { move: "Earthquake", winProb: 1 } },
+  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.7479850977404471,
+    pre: { move: "Dragon Claw", winProb: 0.9301677280002171 } },
+  "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.8231904000000001,
+    pre: { move: "Surf", winProb: 1 } },
 };
