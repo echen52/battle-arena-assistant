@@ -5,6 +5,7 @@
 //   Quick Claw   src/battle_main.c:4653, :4687      one shared draw per TURN
 //   Focus Band   src/battle_script_commands.c:1677   one roll per HIT
 //   Speed ties   src/battle_main.c:4728, :4749       Random() & 1, a clean 50/50
+//   AI's belief  src/battle_ai_script_commands.c:1268 the SAME roll, separately
 //
 // THE COLLAPSE RULE, applied identically to both: branch ONLY where the proc
 // and the no-proc outcome actually differ. Quick Claw that would not change who
@@ -15,7 +16,7 @@
 // path uses, through the same battleDamageOptions builder. A second, probe-only
 // damage estimate would be the drift anti-pattern this project exists
 // downstream of.
-import { buildMon, buildStartState, resolveTurn } from "./logic.js";
+import { buildMon, buildStartState, resolveTurn, chooseOpponentMoves } from "./logic.js";
 import { itemData } from "./item-data.js";
 
 let failures = 0;
@@ -169,6 +170,58 @@ console.log("-- PART 4: an EXACT speed tie is a 0.5 / 0.5 branch --");
   ok(firstActors(prioritised).size === 1,
     "a priority gap must decide the order outright, with no tie branch");
   console.log("   priority gap on a tied pair: one order, no branch");
+}
+
+console.log();
+console.log("-- PART 5: the AI's OWN tie belief is a separate coin flip (B7c-4) --");
+{
+  // SOURCE CHECK, which is what decided this was a fix rather than an asymmetry
+  // to preserve. `if_target_faster` is `if_user_goes 1`
+  // (asm/macros/battle_ai_script.inc:595), i.e. Cmd_if_user_goes
+  // (src/battle_ai_script_commands.c:1268) calling GetWhoStrikesFirst(..., TRUE)
+  // -- THE SAME function the battle's turn order uses. With ignoreChosenMoves
+  // both moves are MOVE_NONE, priority 0, so it lands on the same
+  // `speed1 == speed2 && Random() & 1` arm. The AI's belief is a coin flip too,
+  // so the engine being deterministic there was a divergence, not a quirk.
+  //
+  // The DISAGREEMENT is real and IS preserved: the AI's draw and the battle's
+  // order draw are separate Random() calls, so on a tie the AI can believe it
+  // moves first and then move second.
+  //
+  // Probed through the REAL API rather than a hand-built ctx. An earlier draft
+  // assembled a ctx by hand, missed fields the handler reads, and produced NaN
+  // -- the same fragile pattern that has bitten this suite before. Speed only
+  // reaches scoring THROUGH targetFaster, so three states that differ only in
+  // Speed EVs isolate it exactly.
+  const mk = (spe) => buildMon({ species: "Ditto", level: 50, nature: "Hardy", evs: { spe },
+    ability: "Limber", item: null, moves: ["Rest", "Body Slam", "Swagger", "Protect"], friendship: 255 });
+  const distOf = (you, opp) => {
+    const m = new Map();
+    for (const x of chooseOpponentMoves(opp, you, buildStartState({ you, opp, overrides: { oppHpPct: 55 } }))) {
+      m.set(x.move, x.prob);
+    }
+    return m;
+  };
+  const fastMon = mk(252), slowMon = mk(0);
+  ok(fastMon.stats.spe !== slowMon.stats.spe, "the two Speed EV spreads must actually differ");
+
+  const tied = distOf(mk(252), mk(252));        // 100 vs 100
+  const believesSlower = distOf(mk(252), mk(0)); // opponent is slower, so the target IS faster
+  const believesFaster = distOf(mk(0), mk(252)); // opponent is faster
+
+  let worst = 0;
+  for (const k of tied.keys()) {
+    const mean = ((believesSlower.get(k) || 0) + (believesFaster.get(k) || 0)) / 2;
+    worst = Math.max(worst, Math.abs(tied.get(k) - mean));
+  }
+  ok([...tied.keys()].some((k) => Math.abs((believesSlower.get(k) || 0) - (believesFaster.get(k) || 0)) > 1e-9),
+    "this probe is only meaningful if the two beliefs score differently");
+  ok(worst === 0,
+    `a tie must be EXACTLY the 0.5/0.5 mixture of the two beliefs (worst deviation ${worst})`);
+  ok(Math.abs([...tied.values()].reduce((a, b) => a + b, 0) - 1) < 1e-12,
+    "the tied distribution must still sum to 1");
+  console.log(`   Rest: believes-faster ${(believesSlower.get("Rest") || 0).toFixed(6)}, believes-slower ${(believesFaster.get("Rest") || 0).toFixed(6)}, tied ${tied.get("Rest").toFixed(6)}`);
+  console.log(`   max |tie - mean of the two beliefs| across all moves: ${worst}`);
 }
 
 console.log();

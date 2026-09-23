@@ -2537,7 +2537,43 @@ function isPowerfulMoveEligible(moveName) {
 }
 
 // Returns the move's full score distribution: [{ p, score }], summing to 1.
+// B7c-4. SOURCE CHECK FIRST, and it changed the disposition.
+//
+// The AI's `if_target_faster` is `if_user_goes 1`
+// (asm/macros/battle_ai_script.inc:595-597), which is Cmd_if_user_goes
+// (src/battle_ai_script_commands.c:1268-1274) calling
+// GetWhoStrikesFirst(sBattler_AI, gBattlerTarget, TRUE) -- THE SAME FUNCTION
+// the battle's own turn order uses, uncached, once per instruction executed.
+//
+// With ignoreChosenMoves = TRUE both moves are MOVE_NONE, whose priority is 0
+// (src/data/battle_moves.h), so it takes the both-priorities-zero arm at
+// src/battle_main.c:4744-4750 -- which is `if (speedBattler1 == speedBattler2
+// && Random() & 1) strikesFirst = 2`. So on an EXACT tie the AI's own belief is
+// a coin flip in the real game too.
+//
+// That makes this a FIX, not a Cloud-Nine-style asymmetry to preserve: the
+// engine was deterministic where source rolls. But the asymmetry it produces IS
+// real and IS preserved -- the AI's draw and the battle's order draw are
+// SEPARATE Random() calls, so on a tie the AI can believe it moves first and
+// then move second. Those two must stay independent, and they do: this branch
+// lives in the scoring, and resolveTurn's tie branch is its own.
+//
+// Independence per MOVE is also source-exact. Each executed if_target_faster is
+// its own roll, no handler in this engine executes more than one per call
+// (EFFECT_BATON_PASS has two reads but in mutually exclusive arms), and
+// chooseOpponentMoves already takes the Cartesian product across the four
+// moves' distributions -- so four independent rolls fall out of the existing
+// structure rather than needing to be arranged.
 function scoreOpponentMoveDist(user, target, moveName, ctx) {
+  if (ctx.speedTied) {
+    const base = { ...ctx, speedTied: false };
+    const faster = scoreOpponentMoveDist(user, target, moveName, { ...base, targetFaster: true });
+    const slower = scoreOpponentMoveDist(user, target, moveName, { ...base, targetFaster: false });
+    return [
+      ...faster.map((d) => ({ ...d, p: d.p * 0.5 })),
+      ...slower.map((d) => ({ ...d, p: d.p * 0.5 })),
+    ];
+  }
   const move = MOVES[moveName];
   if (!move) throw new Error(`Move "${moveName}" not in MOVES — add its data before using it.`);
   const handler = AI_HANDLERS[move.effect];
@@ -3021,6 +3057,12 @@ function chooseOpponentMoves(opp, you, state) {
     // "will the opponent (user) act before the player (target) if it picks
     // this move" — same formula resolveTurn will actually use (see effSpeed).
     targetFaster: effSpeed(you, state.youStatus, state.youStages.spe, effectiveWeather(state, you, opp)) > effSpeed(opp, state.oppStatus, state.oppStages.spe, effectiveWeather(state, you, opp)),
+    // B7c-4: an EXACT tie makes the AI's own if_target_faster a coin flip in
+    // source (see scoreOpponentMoveDist's header). Flagged here so the scoring
+    // can enumerate it; `targetFaster` above stays the deterministic value for
+    // the non-tied case, which is every cell but ~1.5% of them.
+    speedTied: effSpeed(you, state.youStatus, state.youStages.spe, effectiveWeather(state, you, opp))
+      === effSpeed(opp, state.oppStatus, state.oppStages.spe, effectiveWeather(state, you, opp)),
     // EFFECT_ROAR's count_usable_party_mons(AI_TARGET) check — source-confirmed
     // NONZERO in real Arena play (see the long comment on EFFECT_ROAR above):
     // the AI sees the player's other FRONTIER_PARTY_SIZE=3 team slots same as
