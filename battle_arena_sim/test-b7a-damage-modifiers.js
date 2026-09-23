@@ -33,7 +33,7 @@ import {
 import { ITEM_DATA } from "./item-data.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { FRONTIER_POOL } from "./frontier-pool.js";
-import { LEADS, METAGROSS, CURRENT, CURRENT_CELLS, CURRENT_DIST, B2B1, B7A_PRE } from "./anchors.js";
+import { LEADS, METAGROSS, CURRENT, CURRENT_CELLS, CURRENT_DIST, B2B1, B7A_PRE, MODIFIER_ANCHORS } from "./anchors.js";
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };
@@ -266,6 +266,36 @@ console.log("-- PART 6: the four recorded values this class moved, and why --");
     console.log(`     ${pre.why}`);
   }
   console.warn = origWarn;
+}
+
+console.log();
+console.log("-- PART 7: MODIFIER_ANCHORS -- one per CAUSAL mechanism (amendment 2) --");
+{
+  // The canonical anchor is blind to this whole class, so these are the real
+  // fidelity guards for it. Each row is the largest mover of its mechanism, and
+  // the mechanism was established causally (see anchors.js's header), not by
+  // which modifier happened to be present.
+  const origWarn = console.warn; console.warn = () => {};
+  const mechanisms = new Set();
+  for (const [name, a] of Object.entries(MODIFIER_ANCHORS)) {
+    const { result } = analyzeMatchup(LEADS[a.lead], getOpponentConfig(name, a.ability ? { ability: a.ability } : {}));
+    ok(result.move === a.move, `${name} vs ${a.lead}: move ${result.move} !== ${a.move}`);
+    ok(result.winProb === a.winProb, `${name} vs ${a.lead}: winProb ${result.winProb} !== ${a.winProb}`);
+    ok(a.pre.winProb !== a.winProb || a.pre.move !== a.move,
+      `${name} is recorded as a B7a mover but its pre and post values are identical`);
+    mechanisms.add(a.causedBy);
+  }
+  console.warn = origWarn;
+  ok(mechanisms.size === Object.keys(MODIFIER_ANCHORS).length,
+    `every anchor must cover a DISTINCT mechanism (${mechanisms.size} mechanisms for ${Object.keys(MODIFIER_ANCHORS).length} anchors)`);
+  console.log(`   ${Object.keys(MODIFIER_ANCHORS).length} anchors asserted, covering ${mechanisms.size} distinct causal mechanisms`);
+  // The blind spot, asserted so it cannot be forgotten: these four are
+  // implemented but move nothing in the sweep, so nothing here guards them.
+  for (const blind of ["Guts", "Hustle", "Huge Power", "Marvel Scale"]) {
+    ok(![...mechanisms].some((m) => m.includes(blind) && !m.startsWith("item AND ability")),
+      `${blind} is recorded as unguarded by an anchor, but a MODIFIER_ANCHORS row now claims it -- update the blind-spot note`);
+  }
+  console.log("   blind spot held: Guts, Hustle, Huge Power and Marvel Scale still have no anchor, only PART 2's probes");
 }
 
 console.log();

@@ -233,3 +233,90 @@ export const B2A = {
   "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch",   winProb: 0.9215071402559959 },
   "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Thunderbolt", winProb: 0.00625 },
 };
+
+// -- MODIFIER_ANCHORS -- promoted from B7a's movers, per amendment 2 --------
+// WHY THESE EXIST. The canonical ANCHOR was BLIND to the entire B7a class:
+// Metagross holds Cheri Berry, Umbreon 4 holds Leftovers, neither mon has a
+// modifier ability, and the anchor did not move by so much as a ULP while 106
+// sweep cells moved and 24 changed the recommended move. Amendment 2's rule is
+// that a lock which cannot move when the thing under test moves is not a
+// fidelity guard for that thing.
+//
+// HOW THEY WERE CHOSEN. Not by eyeballing the loudest movers. Every one of the
+// 106 was attributed CAUSALLY by arena-solver/tools/attribute-movers.mjs, which
+// neutralises one candidate at a time and keeps the one that reproduces the pre
+// value exactly. That produced 13 distinct causal mechanisms; this table is the
+// largest mover from each, so the eleven quiet mechanisms are represented
+// alongside Thick Club and Choice Band.
+//
+// An earlier draft classified movers by PRECEDENCE (first candidate present)
+// and got two of these wrong -- Machamp 3 and Typhlosion 1 were filed under
+// Guts and Blaze when the real cause in both is the SNORLAX LEAD'S OWN Thick
+// Fat. "A modifier is present" and "that modifier moved the number" are
+// different claims, and only the second one is recorded here.
+//
+// KNOWN BLIND SPOT, named rather than left implicit: Guts, Hustle, Huge Power
+// and Marvel Scale are implemented by B7a but cause ZERO movers across the
+// 5-lead continuity sweep, so no anchor in this table can guard them. Their
+// only guards are the unit-level probes in test-b7a-damage-modifiers.js. A
+// lead panel that can burn or paralyse its opponent would expose Guts and
+// Marvel Scale; the current panel cannot.
+//
+// `pre` is the pre-B7a value and is HISTORY, never asserted. `move`/`winProb`
+// are current and ARE asserted. `ability` is the one the sweep resolved
+// (abilities[0] where a set has two), spelled out so the row reproduces without
+// knowing the adapter's tie-break. Default IV tier throughout.
+export const MODIFIER_ANCHORS = {
+  "Marowak 3": { lead: "Snorlax", ability: "Rock Head",
+    move: "Body Slam", winProb: 0.008506944444444442,
+    pre: { move: "Body Slam", winProb: 1 },
+    causedBy: "item: Thick Club" },
+  "Medicham 1": { lead: "Snorlax", ability: null,
+    move: "Shadow Ball", winProb: 0.024990844726562492,
+    pre: { move: "Shadow Ball", winProb: 1 },
+    causedBy: "opponent ability: Pure Power" },
+  "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
+    move: "Shadow Ball", winProb: 0.07823631286621092,
+    pre: { move: "Shadow Ball", winProb: 1 },
+    causedBy: "item: Choice Band" },
+  "Ampharos 1": { lead: "Gengar", ability: null,
+    move: "Thunderbolt", winProb: 0.07934632632522814,
+    pre: { move: "Psychic", winProb: 0.49334131133415177 },
+    causedBy: "item: Magnet" },
+  "Regice 3": { lead: "Snorlax", ability: null,
+    move: "Body Slam", winProb: 0.98062091876287,
+    pre: { move: "Shadow Ball", winProb: 0.8157545010610819 },
+    causedBy: "lead ability: Thick Fat" },
+  "Ursaring 5": { lead: "Gengar", ability: null,
+    move: "Psychic", winProb: 0.166375,
+    pre: { move: "Thunderbolt", winProb: 0.314569140625 },
+    causedBy: "item AND ability: Choice Band + Guts" },
+  "Scizor 4": { lead: "Starmie", ability: null,
+    move: "Surf", winProb: 0.684591722223494,
+    pre: { move: "Surf", winProb: 0.7852604166666668 },
+    causedBy: "opponent ability: Swarm" },
+  "Venusaur 2": { lead: "Starmie", ability: null,
+    move: "Ice Beam", winProb: 0.684700342614556,
+    pre: { move: "Ice Beam", winProb: 0.7748116731927341 },
+    causedBy: "opponent ability: Overgrow" },
+  "Rapidash 1": { lead: "Metagross", ability: "Run Away",
+    move: "Earthquake", winProb: 0.0009765625,
+    pre: { move: "Earthquake", winProb: 0.0625 },
+    causedBy: "item: Charcoal" },
+  "Blastoise 1": { lead: "Metagross", ability: null,
+    move: "Earthquake", winProb: 0.8179444444444444,
+    pre: { move: "Earthquake", winProb: 0.8666666666666667 },
+    causedBy: "opponent ability: Torrent" },
+  "Muk 1": { lead: "Snorlax", ability: "Stench",
+    move: "Earthquake", winProb: 0.9618722223090354,
+    pre: { move: "Earthquake", winProb: 0.9816982673274147 },
+    causedBy: "item: Poison Barb" },
+  "Miltank 3": { lead: "Starmie", ability: null,
+    move: "Ice Beam", winProb: 0.13888000000000003,
+    pre: { move: "Ice Beam", winProb: 0.15360000000000004 },
+    causedBy: "opponent ability: Thick Fat" },
+  "Charizard 4": { lead: "Gengar", ability: null,
+    move: "Thunderbolt", winProb: 0.424140625,
+    pre: { move: "Thunderbolt", winProb: 0.42414062500000005 },
+    causedBy: "opponent ability: Blaze" },
+};
