@@ -5187,8 +5187,24 @@ function evaluateTerminal(state) {
   // which route fainted-side cases to a win/loss/draw before bodyWin is ever
   // computed, and by yourHpPctAtStart/oppHpPctAtStart never being 0 in any
   // reachable state) — do not simplify this away.
-  const yourBody = Math.floor((state.yourHpPct / state.yourHpPctAtStart) * 100);
-  const oppBody = Math.floor((state.oppHpPct / state.oppHpPctAtStart) * 100);
+  // A8: source compares INTEGER HP -- (hp * 100) / hpAtStart in C integer
+  // division (src/battle_arena.c:531-532). This engine carries HP as a float
+  // percentage of max HP, and the percentage always encodes an exact integer HP
+  // (every delta is an integer amount converted to a percentage; measured max
+  // representation error 8.5e-14 over 1,075,339 leaves). But the DIVISION is
+  // not exact: 88/176 comes out as 49.99999999999999, and Math.floor turns a
+  // Body of 50 into 49. sim-audit.md §3.3 measured 4,262 such wrong Body
+  // numbers across 2,150,678 computations -- collapsing to 3 flipped Body
+  // categories and 0 flipped match verdicts, so the defect was real and its
+  // measured impact was zero. Fixed anyway: it stays harmless only until an
+  // exhaustive enumeration reaches the position where it is not.
+  //
+  // Rounding to 1e-9 before flooring removes the ULP noise without changing any
+  // genuine value -- the true ratios are integers divided by integers well
+  // inside that tolerance.
+  const bodyPct = (hp, atStart) => Math.floor(Math.round((hp / atStart) * 100 * 1e9) / 1e9);
+  const yourBody = bodyPct(state.yourHpPct, state.yourHpPctAtStart);
+  const oppBody = bodyPct(state.oppHpPct, state.oppHpPctAtStart);
   const bodyWin = yourBody > oppBody ? 2 : yourBody < oppBody ? 0 : 1;
   const total = mindWin + skillWin + bodyWin;
   if (total > 3) return 1;
