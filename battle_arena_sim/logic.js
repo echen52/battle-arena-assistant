@@ -573,6 +573,71 @@ function defenseDownViability(ctx) {
 }
 
 const AI_HANDLERS = {
+  // -- B2b batch 4: support, status-clearing and status-inflicting --------
+  EFFECT_HELPING_HAND: {
+    // AI_CBM_HelpingHand (data/battle_ai_scripts.s:541-544) is a single
+    // `if_not_double_battle Score_Minus10`. The Arena is singles, so this is
+    // ALWAYS -10 -- not a state read at all.
+    checkBadMove: () => -10,
+  },
+  EFFECT_SPIKES: {
+    // AI_CBM_Spikes (:439-442): -10 once the target's side already has a layer.
+    // Source checks the side STATUS, not the count, so a second layer is
+    // discouraged even though up to three are legal.
+    checkBadMove: (ctx) => (ctx.targetSideHasSpikes ? -10 : 0),
+  },
+  EFFECT_HEAL_BELL: {
+    // AI_CV_HealBell (:1841-1847). VANILLA QUIRK PRESERVED: both checks read
+    // AI_TARGET -- the PLAYER's status and the PLAYER's party
+    // (Cmd_if_status_in_party resolves AI_TARGET to gBattlerTarget, and
+    // GetBattlerSide picks that side's party). So the AI declines its own
+    // Heal Bell at -5 unless the PLAYER is statused, which is backwards from
+    // the move's purpose. Ported as written, like AI_CV_Foresight's
+    // non-BUGFIX arm; correcting it would disagree with the ROM.
+    //
+    // The player's PARTY status is not modelled (no reserve party in an Arena
+    // matchup), so that clause defaults false -- the same stated convention
+    // used everywhere else in this file.
+    checkViability: (ctx) => (ctx.targetStatus !== null || ctx.targetPartyStatused
+      ? [{ p: 1, delta: 0 }]
+      : [{ p: 1, delta: -5 }]),
+  },
+  EFFECT_REFRESH: {
+    // AI_CBM_Refresh (:563-566): -10 unless the USER carries poison, burn,
+    // paralysis or bad poison. Note sleep and freeze are NOT in that mask --
+    // Refresh cannot cure them, and the AI knows it.
+    checkBadMove: (ctx) => (["poison", "burn", "paralysis"].includes(ctx.userStatus) ? 0 : -10),
+    // AI_CV_Refresh (:2514-2522): -1 while the TARGET is below 50% HP.
+    checkViability: (ctx) => [{ p: 1, delta: ctx.targetHpPct < 50 ? -1 : 0 }],
+  },
+  EFFECT_NIGHTMARE: {
+    // AI_CBM_Nightmare (:237-241): -10 if the target already has it, then -8
+    // if the target is not asleep. Two different penalties, in that order.
+    checkBadMove: (ctx) => {
+      if (ctx.targetNightmared) return -10;
+      if (ctx.targetStatus !== "sleep") return -8;
+      return 0;
+    },
+  },
+  EFFECT_FLATTER: {
+    // AI_CBM_Confuse, shared with EFFECT_CONFUSE.
+    checkBadMove: (ctx) => (ctx.targetConfused ? -5 : 0),
+    // AI_CV_Flatter (:1464-1466) is a 128/256 gate in FRONT of AI_CV_Confuse,
+    // and it FALLS THROUGH into it either way -- so the +1 and the confuse
+    // block compose rather than alternate.
+    checkViability: (ctx) => combineDist(
+      [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }],
+      AI_HANDLERS.EFFECT_CONFUSE.checkViability(ctx),
+    ),
+  },
+  EFFECT_PAIN_SPLIT: {
+    // AI_CV_PainSplit (:1768-1784). No AI_CBM row.
+    checkViability: (ctx) => {
+      if (ctx.targetHpPct < 80) return [{ p: 1, delta: -1 }];
+      if (ctx.targetFaster) return [{ p: 1, delta: ctx.userHpPct > 60 ? -1 : 1 }];
+      return [{ p: 1, delta: ctx.userHpPct > 40 ? -1 : 1 }];
+    },
+  },
   EFFECT_MIRROR_MOVE: {
     // AI_CV_MirrorMove (data/battle_ai_scripts.s:838-853). No AI_CBM row.
     // Reads the target's last move against the 39-move
@@ -2915,6 +2980,9 @@ const _aiRollClassCache = new WeakMap();
 //   * Flash Fire    — :3366.
 // The engine previously passed NONE of this, so the modelled AI mis-estimated
 // its own damage exactly after a Double Team / Calm Mind / screen sequence.
+// Exported (see the export block below) so tools cannot hand-build this object:
+// a hand-built ctx is what silently broke bench-a2's fast/slow accounting when
+// A9 added it (amendment 10).
 function buildAiDamageState(state, opp, you) {
   return {
     atkStage: state.oppStages.atk, spaStage: state.oppStages.spa,
@@ -3216,6 +3284,13 @@ function chooseOpponentMoves(opp, you, state) {
     // AI_CV_MirrorMove reads the move the TARGET last took, the same field
     // Mirror Move itself copies.
     targetLastTakenMove: state.youLastTakenMove,
+    // B2b batch 4.
+    targetSideHasSpikes: state.youSpikesLayers > 0,
+    targetNightmared: state.youNightmared,
+    // AI_CV_HealBell's second clause reads the TARGET's PARTY status. An Arena
+    // matchup has no reserve party here, so it defaults false -- same stated
+    // convention as targetCantEscape and friends.
+    targetPartyStatused: false,
     targetHasDreamEaterOrNightmare: you.moves.some((m) => ["EFFECT_DREAM_EATER", "EFFECT_NIGHTMARE"].includes(MOVES[m]?.effect)),
     // Added for batch 4 (Dragon Dance/Curse/Leech Seed/Baton Pass):
     userTypes: opp.types, // EFFECT_CURSE's Ghost-type branch check
@@ -3541,6 +3616,11 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // self-targeting boost therefore does NOT become mirrorable, which
     // gLastMoves would have wrongly offered.
     youLastTakenMove: null, oppLastTakenMove: null,
+    // B2b batch 4. Spikes layers are laid faithfully (max 3) and can never
+    // bite: the damage is a SWITCH-IN effect and the Arena has no switching.
+    youSpikesLayers: 0, oppSpikesLayers: 0,
+    // STATUS2_NIGHTMARE -- maxHP/4 per end-of-turn, and only while asleep.
+    youNightmared: false, oppNightmared: false,
     // STATUS3_IMPRISONED_OTHERS sits on the USER and blocks the FOE from moves
     // the user knows -- asymmetric, hence the separate flag rather than a
     // "cannot use" list on the victim.
@@ -3848,9 +3928,15 @@ function tryCureWithBerry(s, side, mon) {
   if (!cures) return;
   let used = false;
   if (s[statusKey] && cures.includes(s[statusKey])) {
+    const wasAsleep = s[statusKey] === "sleep";
     s[statusKey] = null;
     s[sleepTurnsKey] = null;
     s[toxicKey] = null; // A3: curing the poison clears the bad-poison counter with it
+    // Every sleep-clearing site in source clears STATUS2_NIGHTMARE with it —
+    // HOLD_EFFECT_CURE_SLP at src/battle_util.c:3546 and :3692,
+    // HOLD_EFFECT_CURE_STATUS at :3570 and :3725. A Chesto/Lum cure is one of
+    // those sites.
+    if (wasAsleep) s[side === "you" ? "youNightmared" : "oppNightmared"] = false;
     used = true;
   }
   // Confusion is STATUS2 (volatile), tracked separately from the major-status
@@ -4086,6 +4172,35 @@ function confusionTarget(s, actor, ctx) {
     subKey: isYou ? "oppSubstituteHP" : "youSubstituteHP",
     safeguardKey: isYou ? "oppSafeguardTurns" : "youSafeguardTurns",
     stages: isYou ? s.oppStages : s.youStages,
+  };
+}
+
+// BattleScript_EffectSwagger (data/battle_scripts_1.s:1608-1628) and
+// BattleScript_EffectFlatter (:2151-2171) are the SAME SCRIPT with a different
+// (stat, amount): substitute check, jumpifconfusedandstatmaxed, the raise, then
+// a shared TryConfuse tail. They are built from one function here for that
+// reason — two hand-written copies is how a clause gets ported into one and not
+// the other (amendments 9 and 10).
+function raiseThenConfuseExecutor(stageKey, amount) {
+  return (s, actor, ctx) => {
+    const t = confusionTarget(s, actor, ctx);
+    // ONE substitute check gates the ENTIRE move (both the raise AND the
+    // confusion) — misses outright if the target has an active sub.
+    if (s[t.subKey] != null) return "failed";
+    // Also fails outright (jumpifconfusedandstatmaxed) if the target is
+    // ALREADY confused AND the stat is already maxed — a narrower, separate
+    // fail condition from the substitute one. Either alone still works.
+    if (s[t.confKey] && t.stages[stageKey] >= 6) return "failed";
+    // The raise ALWAYS lands (silently capped) regardless of what happens to
+    // the confusion attempt below — source gates these two parts
+    // INDEPENDENTLY, not as a single all-or-nothing effect.
+    bumpStage(t.stages, stageKey, amount);
+    // Confusion is separately blocked by Own Tempo/Safeguard (but does NOT
+    // fail the move as a whole — the raise above still landed either way),
+    // and does not restack on an already-confused target.
+    if (t.mon.ability !== "Own Tempo" && s[t.safeguardKey] == null) {
+      if (!s[t.confKey]) s[t.confKey] = true;
+    }
   };
 }
 
@@ -4558,31 +4673,7 @@ const EFFECT_EXECUTORS = {
     s[key] = 5;
   },
   // Batch 6:
-  EFFECT_SWAGGER: (s, actor, ctx) => {
-    const t = confusionTarget(s, actor, ctx);
-    // BattleScript_EffectSwagger (data/battle_scripts_1.s:1608-1628): ONE
-    // substitute check gates the ENTIRE move (both the Atk raise AND the
-    // confusion) — fails/misses outright if the target has an active sub.
-    if (s[t.subKey] != null) return "failed";
-    // Also fails outright (jumpifconfusedandstatmaxed) if the target is
-    // ALREADY confused AND its Atk is already maxed — a narrower, separate
-    // fail condition from the substitute one.
-    if (s[t.confKey] && t.stages.atk >= 6) return "failed";
-    // The Atk+2 raise ALWAYS lands (silently capped) regardless of what
-    // happens to the confusion attempt below — source gates these two
-    // parts INDEPENDENTLY, not as a single all-or-nothing effect.
-    bumpStage(t.stages, "atk", 2);
-    // Confusion itself is separately blocked by Own Tempo/Safeguard (but
-    // does NOT fail the move as a whole — the Atk raise above still landed
-    // either way). Uses the same s.youConfused mechanism as
-    // EFFECT_CONFUSE's own executor, which has the identical "your side not
-    // modeled" limitation and does NOT itself check substitute (a
-    // pre-existing gap, left as-is per instruction to leave EFFECT_CONFUSE
-    // alone — flagged here rather than silently fixed or silently ignored).
-    if (t.mon.ability !== "Own Tempo" && s[t.safeguardKey] == null) {
-      if (!s[t.confKey]) s[t.confKey] = true;
-    }
-  },
+  EFFECT_SWAGGER: raiseThenConfuseExecutor("atk", 2),
   EFFECT_DESTINY_BOND: (s, actor) => {
     // setdestinybond: always succeeds unconditionally, no fail condition in
     // source. Cleared at the start of the user's OWN next turn (see
@@ -4864,6 +4955,77 @@ const EFFECT_EXECUTORS = {
   // Unreachable in practice -- Metronome always calls something, since its pool
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
+  // -- B2b batch 4 executors ----------------------------------------------
+  EFFECT_HELPING_HAND: () => "failed",
+  // Cmd_trysethelpinghand (src/battle_script_commands.c) is gated on
+  // BATTLE_TYPE_DOUBLE. The Arena is singles, so it ALWAYS takes the failure
+  // branch -- inert by ruleset, not unported, and the same shape as Follow Me.
+  EFFECT_SPIKES: (s, actor) => {
+    // Cmd_trysetspikes (:8485-8500): fails at three layers, otherwise adds one
+    // to the TARGET's side.
+    //
+    // The layers are laid faithfully and can never bite: the damage is applied
+    // in Cmd_switchineffects (:5229-5240), on SWITCH-IN, and an Arena matchup
+    // has no switching. So Spikes is a move that reliably succeeds and reliably
+    // does nothing here. Tracked rather than collapsed to a no-op, because the
+    // AI scores the second layer differently from the first.
+    const key = actor === "you" ? "oppSpikesLayers" : "youSpikesLayers";
+    if (s[key] >= 3) return "failed";
+    s[key] += 1;
+  },
+  EFFECT_HEAL_BELL: (s, actor, ctx) => {
+    // healpartystatus: clears the user's side's major status. Only the active
+    // mon is modelled (an Arena matchup has no reserve party), so this clears
+    // the user's own status and nothing else. Source does not fail when there
+    // is nothing to cure -- the script has no ButItFailed branch at all.
+    const isYou = actor === "you";
+    const statusKey = isYou ? "youStatus" : "oppStatus";
+    s[statusKey] = null;
+    s[isYou ? "youSleepTurns" : "oppSleepTurns"] = null;
+    s[isYou ? "youToxicCounter" : "oppToxicCounter"] = null;
+    s[isYou ? "youNightmared" : "oppNightmared"] = false; // a cured sleep takes the nightmare with it
+    void ctx;
+  },
+  EFFECT_REFRESH: (s, actor) => {
+    // cureifburnedparalyzedorpoisoned: exactly those three, and it FAILS when
+    // the user carries none of them. Sleep and freeze are untouched.
+    const isYou = actor === "you";
+    const statusKey = isYou ? "youStatus" : "oppStatus";
+    if (!["poison", "burn", "paralysis"].includes(s[statusKey])) return "failed";
+    s[statusKey] = null;
+    s[isYou ? "youToxicCounter" : "oppToxicCounter"] = null;
+  },
+  EFFECT_NIGHTMARE: (s, actor, ctx) => {
+    // BattleScript_EffectNightmare (data/battle_scripts_1.s:1459-1466): fails
+    // through a Substitute, fails if already nightmared, and REQUIRES the
+    // target to be asleep. The residual is maxHP/4 per end-of-turn.
+    const isYou = actor === "you";
+    const foeSubKey = isYou ? "oppSubstituteHP" : "youSubstituteHP";
+    const foeNightKey = isYou ? "oppNightmared" : "youNightmared";
+    const foeStatusKey = isYou ? "oppStatus" : "youStatus";
+    if (s[foeSubKey] != null) return "failed";
+    if (s[foeNightKey]) return "failed";
+    if (s[foeStatusKey] !== "sleep") return "failed";
+    s[foeNightKey] = true;
+    void ctx;
+  },
+  // Flatter IS Swagger with (SpAtk, +1) -- same script, shared builder.
+  EFFECT_FLATTER: raiseThenConfuseExecutor("spa", 1),
+  EFFECT_PAIN_SPLIT: (s, actor, ctx) => {
+    // Cmd_painsplitdmgcalc: fails through a Substitute, otherwise both sides
+    // end on floor((hpA + hpB) / 2), each capped at its own max HP.
+    const isYou = actor === "you";
+    const selfMon = isYou ? ctx.you : ctx.opp;
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const selfHpKey = isYou ? "yourHpPct" : "oppHpPct";
+    const foeHpKey = isYou ? "oppHpPct" : "yourHpPct";
+    if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return "failed";
+    const selfHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
+    const foeHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
+    const shared = Math.floor((selfHp + foeHp) / 2);
+    s[selfHpKey] = Math.min(100, (Math.min(shared, selfMon.stats.hp) / selfMon.stats.hp) * 100);
+    s[foeHpKey] = Math.min(100, (Math.min(shared, foeMon.stats.hp) / foeMon.stats.hp) * 100);
+  },
   // -- B2b batch 2 executors: the move-restriction family ----------------
   EFFECT_DISABLE: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer) => {
     // Cmd_disablelastusedattack. Fails unless the target's LAST move is still
@@ -5258,6 +5420,12 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     if (sleepRemaining <= 0) {
       s[selfStatusKey] = null;
       s[selfSleepTurnsKey] = null;
+      // Waking clears the nightmare HERE, at CANCELER_ASLEEP
+      // (src/battle_util.c:2049), not at the end-of-turn residual. The
+      // difference is observable: a mon that wakes on its own turn and then
+      // Rests is asleep again by ENDTURN_NIGHTMARES, so a flag cleared only
+      // there would survive a wake it should not have.
+      s[isYou ? "youNightmared" : "oppNightmared"] = false;
     } else {
       s[selfSleepTurnsKey] = sleepRemaining;
     }
@@ -5949,6 +6117,20 @@ function applyEndOfTurnEffects(ctx, s) {
   // (ENDTURN_TAUNT, src/battle_util.c:1187) and the lock lifts at 0.
   for (const k of ["youTauntTurns", "oppTauntTurns"]) {
     if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
+  }
+
+  // B2b batch 4: Nightmare, maxHP/4 per end-of-turn and ONLY while asleep --
+  // source clears STATUS2_NIGHTMARE the moment the mon wakes, so a woken mon
+  // must stop taking it rather than keep bleeding.
+  for (const [flag, statusKey, hpKey, mon] of [
+    ["youNightmared", "youStatus", "yourHpPct", you],
+    ["oppNightmared", "oppStatus", "oppHpPct", opp],
+  ]) {
+    if (!s[flag]) continue;
+    if (s[statusKey] !== "sleep") { s[flag] = false; continue; }
+    if (s[hpKey] <= 0) continue;
+    const d = Math.max(1, Math.floor(mon.stats.hp / 4));
+    s[hpKey] = Math.max(0, s[hpKey] - (d / mon.stats.hp) * 100);
   }
 
   // B2b batch 2: Disable and Encore decay, each at its own ENDTURN slot
