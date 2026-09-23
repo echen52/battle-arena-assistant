@@ -572,6 +572,14 @@ function defenseDownViability(ctx) {
 }
 
 const AI_HANDLERS = {
+  EFFECT_SLEEP_TALK: {
+    // AI_CBM_DamageDuringSleep (data/battle_ai_scripts.s:426-429): -8 unless
+    // the USER is asleep. Shared with EFFECT_SNORE.
+    checkBadMove: (ctx) => (ctx.userStatus === "sleep" ? 0 : -8),
+    // AI_CV_SleepTalk (:1795-1799): +10 while asleep, a flat -5 otherwise.
+    // One of the largest single swings in the whole scoring table.
+    checkViability: (ctx) => [{ p: 1, delta: ctx.userStatus === "sleep" ? 10 : -5 }],
+  },
   // -- B2b batch 2: the move-restriction family ---------------------------
   // Four effects whose if_effect rows exist in the dispatch chains but had no
   // port, so every set carrying one threw at the ai-scoring guard.
@@ -3656,8 +3664,14 @@ function cloneState(s) {
   return { ...s, youStages: { ...s.youStages }, oppStages: { ...s.oppStages } };
 }
 
-function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null) {
+function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null) {
   const who = actor === "you" ? "You" : "Opp";
+  // B2b batch 3: a move-calling move shows BOTH names. Reading "Opp uses Sleep
+  // Talk" when the damage came from Earthquake makes every trace ambiguous.
+  if (calledMove) {
+    const inner = describeAction(actor, calledMove, hit, selfHit, statusPrevented, attractPrevented, hitCount);
+    return `${inner.replace(`${who} uses `, `${who} uses ${moveName} -> `)}`;
+  }
   if (statusPrevented) return `${who} is fully paralyzed/frozen and can't move`;
   if (attractPrevented) return `${who} is immobilized by love and can't move`;
   if (selfHit) return `${who} hits itself in confusion`;
@@ -4811,6 +4825,13 @@ const EFFECT_EXECUTORS = {
   EFFECT_ATTACK_DOWN_2: statDownExecutor("atk", 2, "Hyper Cutter"),
   EFFECT_SPECIAL_DEFENSE_DOWN_2: statDownExecutor("spd", 2, null),
   // -- B2b batch 1 executors: the stat-stage family ---------------------
+  // B2b batch 3. This executor is only reached when Sleep Talk resolves AS
+  // ITSELF -- i.e. the user was not asleep, or every one of its moves was
+  // excluded or limited out. Both are failures in source
+  // (data/battle_scripts_1.s:1311-1316 for the sleep gate, and the
+  // all-unusable branch of Cmd_trychoosesleeptalkmove). When it DOES call a
+  // move, the enumeration substitutes that move and this never runs.
+  EFFECT_SLEEP_TALK: () => "failed",
   // -- B2b batch 2 executors: the move-restriction family ----------------
   EFFECT_DISABLE: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer) => {
     // Cmd_disablelastusedattack. Fails unless the target's LAST move is still
@@ -5158,12 +5179,19 @@ function battleDamageOptions(ctx, s, actor, moveData) {
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null) {
   const { you, opp } = ctx;
+  // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
+  // CALLED. Everything below therefore works on `moveName` after substitution --
+  // damage, accuracy, executors, Arena scoring. The ONE exception is Choice
+  // Band's lock, which source keys on gChosenMove, the move SELECTED; see the
+  // wholeness note at that site. `chosenMoveName` keeps it available.
+  const chosenMoveName = moveName;
+  if (calledMove) moveName = calledMove;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
   const foeMon = isYou ? opp : you;
-  // B2b: the DEFENDER'''s STATUS2_FORESIGHT, read once and threaded into every
+  // B2b: the DEFENDER's STATUS2_FORESIGHT, read once and threaded into every
   // type-chart and damage call below (Normal/Fighting stop being no-effect
   // against its Ghost typing -- see typeEffectiveness).
   const foeForesighted = isYou ? s.oppForesighted : s.youForesighted;
@@ -5186,21 +5214,27 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
 
   if (thawed && s[selfStatusKey] === "freeze") s[selfStatusKey] = null;
 
+  // The sleep counter decrements at CANCELER_ASLEEP (src/battle_util.c:2029-2038),
+  // BEFORE the decision to act, so it is banked whether or not the mon then
+  // moves. B2b batch 3 moved this out of the statusPrevented block below: Snore
+  // and Sleep Talk act while asleep, and leaving the write-back inside that
+  // block meant their counter never ticked and they could sleep forever.
+  if (sleepRemaining !== null) {
+    // Counter reached 0 this turn — the mon wakes up (still forfeiting THIS
+    // turn's move, per enumerateActionOutcomes) but is available from the NEXT
+    // turn onward. Otherwise just bank the decremented counter.
+    if (sleepRemaining <= 0) {
+      s[selfStatusKey] = null;
+      s[selfSleepTurnsKey] = null;
+    } else {
+      s[selfSleepTurnsKey] = sleepRemaining;
+    }
+  }
+
   if (statusPrevented) {
     // Paralysis full-para / still-frozen: Mind scores off selection
     // regardless (unconditional), no Skill (HITMARKER_OBEYS unset), no
     // damage or effect happens at all.
-    if (sleepRemaining !== null) {
-      // Counter reached 0 this turn — mon wakes up (still forfeits THIS
-      // turn's move, per enumerateActionOutcomes) but is available from the
-      // NEXT turn onward. Otherwise just bank the decremented counter.
-      if (sleepRemaining <= 0) {
-        s[selfStatusKey] = null;
-        s[selfSleepTurnsKey] = null;
-      } else {
-        s[selfSleepTurnsKey] = sleepRemaining;
-      }
-    }
     s[mindKey] += mindDelta(moveName);
     return;
   }
@@ -5627,7 +5661,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       const selfItemLock = itemData(selfMon.item);
       if (selfItemLock && selfItemLock.holdEffect === "HOLD_EFFECT_CHOICE_BAND") {
         const lockKey = isYou ? "youChoiceLock" : "oppChoiceLock";
-        if (s[lockKey] == null) s[lockKey] = moveName;
+        if (s[lockKey] == null) s[lockKey] = chosenMoveName;
       }
     }
     s[skillKey] += skillDelta(classifyOutcome(hit, eff));
@@ -5973,7 +6007,86 @@ function applyEndOfTurnEffects(ctx, s) {
 // status (paralysis/freeze) prevention is checked first — if prevented,
 // nothing else (confusion, accuracy) matters this turn; only if the mon
 // gets to act at all do confusion/accuracy/secondary-effect branches apply.
-function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false) {
+// B2b batch 3: moves that CALL another move.
+//
+// Sleep Talk (Cmd_trychoosesleeptalkmove, src/battle_script_commands.c:8240-8275)
+// picks uniformly at random among the user's own moves, after removing:
+//   IsInvalidForSleepTalkOrAssist (:8209-8219) -- Sleep Talk, Assist,
+//     Mirror Move, Metronome, and the empty slot
+//   Focus Punch and Uproar, named individually
+//   IsTwoTurnsMove (:8221-8233) -- Skull Bash, Razor Wind, Sky Attack,
+//     Solar Beam, Semi-Invulnerable, Bide
+// and THEN `CheckMoveLimitations(attacker, bits, ~MOVE_LIMITATION_PP)` -- the
+// very function selectableMoves implements, reused here rather than re-derived.
+// If every slot is unusable the move fails; otherwise the pick is uniform over
+// the usable ones, which enumerates as 1/k weighted branches.
+//
+// The script (data/battle_scripts_1.s:1311-1316) fails the move outright unless
+// the user is asleep.
+const SLEEP_TALK_EXCLUDED_MOVES = new Set(["Sleep Talk", "Assist", "Mirror Move", "Metronome", "Focus Punch", "Uproar"]);
+const SLEEP_TALK_EXCLUDED_EFFECTS = new Set([
+  "EFFECT_SKULL_BASH", "EFFECT_RAZOR_WIND", "EFFECT_SKY_ATTACK",
+  "EFFECT_SOLAR_BEAM", "EFFECT_SEMI_INVULNERABLE", "EFFECT_BIDE",
+]);
+
+function sleepTalkCandidates(ctx, state, actor) {
+  const isYou = actor === "you";
+  const selfMon = isYou ? ctx.you : ctx.opp;
+  const foeMon = isYou ? ctx.opp : ctx.you;
+  const eligible = selfMon.moves.filter((m) => {
+    const md = MOVES[m];
+    if (!md) return false;
+    if (SLEEP_TALK_EXCLUDED_MOVES.has(m)) return false;
+    if (SLEEP_TALK_EXCLUDED_EFFECTS.has(md.effect)) return false;
+    return true;
+  });
+  if (eligible.length === 0) return [];
+  // The same limitations the selection filter applies, minus PP, which source
+  // explicitly masks off here.
+  try {
+    return selectableMoves(eligible, state, actor, foeMon, `${actor} (via Sleep Talk)`);
+  } catch {
+    return []; // every candidate is limited out -> the move fails, as in source
+  }
+}
+
+function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false, skipStatusGates = false) {
+  if (moveData.effect === "EFFECT_SLEEP_TALK" && !skipStatusGates) {
+    const statusNow = state[actor === "you" ? "youStatus" : "oppStatus"];
+    if (statusNow === "sleep") {
+      // CANCELER_ASLEEP (src/battle_util.c:2015-2053) in order: DECREMENT
+      // first, then decide. A mon that WAKES UP forfeits the turn like any
+      // other waker, even with Sleep Talk selected; only a mon that is STILL
+      // asleep afterwards gets the Snore / Sleep Talk exemption from the lock.
+      const mon = actor === "you" ? ctx.you : ctx.opp;
+      const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
+      const toSub = mon.ability === "Early Bird" ? 2 : 1;
+      const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
+      if (sleepRemaining === 0) {
+        return [{ p: 1, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, sleepRemaining }];
+      }
+      const candidates = sleepTalkCandidates(ctx, state, actor);
+      if (candidates.length > 0) {
+        // Each candidate is equally likely, and each then resolves with its OWN
+        // accuracy roll and secondary chance -- the called move's whole outcome
+        // tree, not just its name. The status gates are SKIPPED on the recursion
+        // because they were just resolved here, for the Sleep Talk action.
+        const out = [];
+        const share = 1 / candidates.length;
+        for (const called of candidates) {
+          for (const o of enumerateActionOutcomes(ctx, state, actor, called, MOVES[called], targetCharging, isLastToAct, true)) {
+            out.push({ ...o, p: o.p * share, calledMove: called, sleepRemaining });
+          }
+        }
+        return out;
+      }
+      // Still asleep but nothing callable: resolves as itself and fails, while
+      // the counter it just ticked still has to be written back.
+      return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false, sleepRemaining }];
+    }
+    // Awake: falls through and resolves as itself, which fails (the script's
+    // own sleep gate, data/battle_scripts_1.s:1311-1316).
+  }
   const statusKey = actor === "you" ? "youStatus" : "oppStatus";
   const status = state[statusKey];
 
@@ -6000,10 +6113,18 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
     const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
     const toSub = mon.ability === "Early Bird" ? 2 : 1;
     const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
-    statusBranches = [{ p: 1, prevented: true, thawed: false, sleepRemaining }];
+    // B2b batch 3: Snore and Sleep Talk are EXEMPT from the sleep lock while
+    // the mon is still asleep -- source gates the "can't move" on
+    // `gCurrentMove != MOVE_SNORE && gCurrentMove != MOVE_SLEEP_TALK`
+    // (:2040). A mon that WAKES UP this turn still forfeits it either way.
+    const sleepExempt = sleepRemaining > 0
+      && (moveData.effect === "EFFECT_SLEEP_TALK" || moveData.effect === "EFFECT_SNORE");
+    statusBranches = [{ p: 1, prevented: !sleepExempt, thawed: false, sleepRemaining }];
   } else {
     statusBranches = [{ p: 1, prevented: false, thawed: false }];
   }
+
+  if (skipStatusGates) statusBranches = [{ p: 1, prevented: false, thawed: false }];
 
   const results = [];
   for (const stb of statusBranches) {
@@ -6446,8 +6567,8 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null);
-    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null);
+    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
@@ -6465,8 +6586,8 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
-      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null);
-      const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null);
+      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null);
+      const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
       s2.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
