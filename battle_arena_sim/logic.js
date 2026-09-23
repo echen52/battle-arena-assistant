@@ -15,7 +15,8 @@
 import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
-import { ENCORE_ENCOURAGED_EFFECTS } from "./ai-tables.js";
+import { ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED } from "./ai-tables.js";
+import { moveFlags } from "./move-flags.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
@@ -572,6 +573,22 @@ function defenseDownViability(ctx) {
 }
 
 const AI_HANDLERS = {
+  EFFECT_MIRROR_MOVE: {
+    // AI_CV_MirrorMove (data/battle_ai_scripts.s:838-853). No AI_CBM row.
+    // Reads the target's last move against the 39-move
+    // AI_CV_MirrorMove_EncouragedMovesToMirror table, generated into
+    // ai-tables.js rather than transcribed.
+    checkViability: (ctx) => {
+      const encouraged = ctx.targetLastTakenMove != null && MIRROR_MOVE_ENCOURAGED.has(ctx.targetLastTakenMove);
+      if (!ctx.targetFaster && encouraged) {
+        return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }];
+      }
+      // AI_CV_MirrorMove2: an encouraged move here ends with no change;
+      // otherwise 176/256 of -1.
+      if (encouraged) return [{ p: 1, delta: 0 }];
+      return [{ p: 80 / 256, delta: 0 }, { p: 176 / 256, delta: -1 }];
+    },
+  },
   EFFECT_SLEEP_TALK: {
     // AI_CBM_DamageDuringSleep (data/battle_ai_scripts.s:426-429): -8 unless
     // the USER is asleep. Shared with EFFECT_SNORE.
@@ -3196,6 +3213,9 @@ function chooseOpponentMoves(opp, you, state) {
     userImprisoning: state.oppImprisoning,
     // AI_CV_Encore's `get_move_effect_from_result` on the target's last move.
     targetLastMoveEffect: state.youLastMove != null ? MOVES[state.youLastMove]?.effect : null,
+    // AI_CV_MirrorMove reads the move the TARGET last took, the same field
+    // Mirror Move itself copies.
+    targetLastTakenMove: state.youLastTakenMove,
     targetHasDreamEaterOrNightmare: you.moves.some((m) => ["EFFECT_DREAM_EATER", "EFFECT_NIGHTMARE"].includes(MOVES[m]?.effect)),
     // Added for batch 4 (Dragon Dance/Curse/Leech Seed/Baton Pass):
     userTypes: opp.types, // EFFECT_CURSE's Ghost-type branch check
@@ -3514,6 +3534,13 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     youEncoredMove: null, oppEncoredMove: null,
     youEncoreTurns: null, oppEncoreTurns: null,
     youTormented: false, oppTormented: false,
+    // B2b batch 3: what Mirror Move actually copies. NOT gLastMoves -- source
+    // reads gBattleStruct->lastTakenMove, written only for a move that is
+    // FLAG_MIRROR_MOVE_AFFECTED, hit, had an effect, and came from someone
+    // ELSE (MOVEEND_MIRROR_MOVE, src/battle_script_commands.c:4438-4452). A
+    // self-targeting boost therefore does NOT become mirrorable, which
+    // gLastMoves would have wrongly offered.
+    youLastTakenMove: null, oppLastTakenMove: null,
     // STATUS3_IMPRISONED_OTHERS sits on the USER and blocks the FOE from moves
     // the user knows -- asymmetric, hence the separate flag rather than a
     // "cannot use" list on the victim.
@@ -4832,6 +4859,11 @@ const EFFECT_EXECUTORS = {
   // all-unusable branch of Cmd_trychoosesleeptalkmove). When it DOES call a
   // move, the enumeration substitutes that move and this never runs.
   EFFECT_SLEEP_TALK: () => "failed",
+  // Reached only when there was nothing to mirror; source's own failure path.
+  EFFECT_MIRROR_MOVE: () => "failed",
+  // Unreachable in practice -- Metronome always calls something, since its pool
+  // is never empty -- but present so the no-executor guard cannot fire on it.
+  EFFECT_METRONOME: () => "failed",
   // -- B2b batch 2 executors: the move-restriction family ----------------
   EFFECT_DISABLE: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer) => {
     // Cmd_disablelastusedattack. Fails unless the target's LAST move is still
@@ -5664,6 +5696,15 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         if (s[lockKey] == null) s[lockKey] = chosenMoveName;
       }
     }
+    // B2b batch 3: MOVEEND_MIRROR_MOVE records what the TARGET just took, so
+    // Mirror Move has something to copy. Gated exactly as source gates it
+    // (src/battle_script_commands.c:4438-4445): the move must be
+    // FLAG_MIRROR_MOVE_AFFECTED, must have obeyed, must not have come from the
+    // target itself, must not have fainted it, and must not have been a
+    // no-effect hit. Keyed on the CHOSEN move, like the Choice lock.
+    if (hit && eff !== 0 && moveFlags(chosenMoveName).mirrorMoveAffected && s[foeHpKey] > 0) {
+      s[isYou ? "oppLastTakenMove" : "youLastTakenMove"] = chosenMoveName;
+    }
     s[skillKey] += skillDelta(classifyOutcome(hit, eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
     // now — see the comment above the blockedByProtect check — since it must
@@ -6023,6 +6064,21 @@ function applyEndOfTurnEffects(ctx, s) {
 //
 // The script (data/battle_scripts_1.s:1311-1316) fails the move outright unless
 // the user is asleep.
+// Cmd_metronome (src/battle_script_commands.c) picks uniformly over move IDs
+// 1..MOVES_COUNT-1, retrying while the pick is in sMovesForbiddenToCopy (:725-745,
+// scanned to METRONOME_FORBIDDEN_END). A retry loop over a uniform draw with
+// rejection is just a uniform draw over the survivors, which is what this is.
+const METRONOME_FORBIDDEN = new Set([
+  "Metronome", "Struggle", "Sketch", "Mimic", "Counter", "Mirror Coat",
+  "Protect", "Detect", "Endure", "Destiny Bond", "Sleep Talk", "Thief",
+  "Follow Me", "Snatch", "Helping Hand", "Covet", "Trick", "Focus Punch",
+]);
+let _metronomePool = null;
+function metronomePool() {
+  if (!_metronomePool) _metronomePool = Object.keys(MOVES).filter((m) => !METRONOME_FORBIDDEN.has(m));
+  return _metronomePool;
+}
+
 const SLEEP_TALK_EXCLUDED_MOVES = new Set(["Sleep Talk", "Assist", "Mirror Move", "Metronome", "Focus Punch", "Uproar"]);
 const SLEEP_TALK_EXCLUDED_EFFECTS = new Set([
   "EFFECT_SKULL_BASH", "EFFECT_RAZOR_WIND", "EFFECT_SKY_ATTACK",
@@ -6051,6 +6107,33 @@ function sleepTalkCandidates(ctx, state, actor) {
 }
 
 function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false, skipStatusGates = false) {
+  if (moveData.effect === "EFFECT_MIRROR_MOVE" && !skipStatusGates) {
+    // Deterministic: whatever was last used AGAINST this mon, if anything.
+    const taken = state[actor === "you" ? "youLastTakenMove" : "oppLastTakenMove"];
+    if (taken && MOVES[taken]) {
+      return enumerateActionOutcomes(ctx, state, actor, taken, MOVES[taken], targetCharging, isLastToAct, true)
+        .map((o) => ({ ...o, calledMove: taken }));
+    }
+    // Nothing to mirror: resolves as itself and fails.
+  }
+  if (moveData.effect === "EFFECT_METRONOME" && !skipStatusGates) {
+    // MODELLED EXACTLY, not approximated: a uniform draw over every non-
+    // forbidden move in the dex. That reaches effects this engine has not
+    // ported yet, and those cells THROW with the called move named -- which is
+    // the agreed steady state, not a defect. See the Metronome ledger entry in
+    // arena-solver/docs/phase-b-log.md; the throwing count shrinks as effects
+    // land, and reaches zero when effect coverage reaches the called-move
+    // universe.
+    const pool = metronomePool();
+    const share = 1 / pool.length;
+    const out = [];
+    for (const called of pool) {
+      for (const o of enumerateActionOutcomes(ctx, state, actor, called, MOVES[called], targetCharging, isLastToAct, true)) {
+        out.push({ ...o, p: o.p * share, calledMove: called });
+      }
+    }
+    return out;
+  }
   if (moveData.effect === "EFFECT_SLEEP_TALK" && !skipStatusGates) {
     const statusNow = state[actor === "you" ? "youStatus" : "oppStatus"];
     if (statusNow === "sleep") {

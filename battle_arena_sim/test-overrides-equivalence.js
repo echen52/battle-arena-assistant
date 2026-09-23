@@ -54,22 +54,25 @@ const overrideState = buildStartState({
   yourUsablePartyMons: branchState.yourUsablePartyMons,
   oppUsablePartyMons: branchState.oppUsablePartyMons,
   you, opp,
-  overrides: {
-    turn: branchState.turn,
-    youStages: { ...branchState.youStages },
-    oppStages: { ...branchState.oppStages },
-    youStatus: branchState.youStatus,
-    oppStatus: branchState.oppStatus,
-    mindYou: branchState.mindYou, mindOpp: branchState.mindOpp,
-    skillYou: branchState.skillYou, skillOpp: branchState.skillOpp,
-    weatherType: branchState.weatherType,
-    weatherTurns: branchState.weatherTurns,
-    youReflectTurns: branchState.youReflectTurns, oppReflectTurns: branchState.oppReflectTurns,
-    youLightScreenTurns: branchState.youLightScreenTurns, oppLightScreenTurns: branchState.oppLightScreenTurns,
-    youSleepTurns: branchState.youSleepTurns, oppSleepTurns: branchState.oppSleepTurns,
-    youSubstituteHP: branchState.youSubstituteHP, oppSubstituteHP: branchState.oppSubstituteHP,
-    youLastMove: branchState.youLastMove, oppLastMove: branchState.oppLastMove,
-  },
+  // DERIVED, not hand-listed. This was a hand-maintained enumeration of state
+  // fields, and it went stale the moment a new field was added -- which is the
+  // same failure mode as the other hand-maintained lists this project has had
+  // to stop trusting. Every key of the real branch state is forwarded except
+  // the ones already passed as top-level arguments above, so a new field is
+  // covered automatically and this test keeps testing what it claims to.
+  overrides: (() => {
+    const TOP_LEVEL = new Set([
+      "yourHpPct", "oppHpPct", "yourHpPctAtStart", "oppHpPctAtStart",
+      "yourUsablePartyMons", "oppUsablePartyMons",
+    ]);
+    const o = {};
+    for (const k of Object.keys(branchState)) {
+      if (TOP_LEVEL.has(k)) continue;
+      const v = branchState[k];
+      o[k] = (v && typeof v === "object" && !Array.isArray(v)) ? { ...v } : v;
+    }
+    return o;
+  })(),
 });
 
 const solveFromBranch = search(ctx, branchState, 2);

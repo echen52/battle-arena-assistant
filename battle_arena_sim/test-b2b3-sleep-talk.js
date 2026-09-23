@@ -1,5 +1,5 @@
 // ── test-b2b3-sleep-talk.js ───────────────────────────────────────────────
-// B2b batch 3: the move-CALLING machinery, landed with Sleep Talk.
+// B2b batch 3: the move-CALLING family -- Sleep Talk, Mirror Move, Metronome.
 //
 //   AI_CBM_DamageDuringSleep  data/battle_ai_scripts.s:426-429  (shared with Snore)
 //   AI_CV_SleepTalk           :1795-1799
@@ -122,5 +122,62 @@ console.log("-- PART 4: the sleep gate, and the counter that must still tick --"
 }
 
 console.log();
-console.log(failures === 0 ? "ALL PASS -- B2b batch 3 (Sleep Talk) characterization green" : `${failures} FAILURES`);
+console.log("-- PART 5: Mirror Move copies lastTakenMove, not gLastMoves --");
+{
+  // ORDER MATTERS HERE, and an earlier draft ignored it. With two identical
+  // Snorlax the speed tie now splits 50/50, and in the branches where the
+  // attacker moves FIRST its Body Slam legitimately becomes mirrorable within
+  // the same turn -- correct behaviour that looked like a failure. So the
+  // mirror user is made strictly faster, which pins it to acting first.
+  const mirror = buildMon({ species: "Electrode", level: 50, nature: "Timid", evs: { spe: 252 },
+    ability: "Soundproof", item: null, moves: ["Mirror Move", "Thunderbolt", "Rest", "Explosion"], friendship: 255 });
+  const attacker = lax(["Body Slam", "Swords Dance", "Rest", "Earthquake"]);
+  ok(mirror.stats.spe > attacker.stats.spe, "the mirror user must be strictly faster for this probe to mean anything");
+  const run2 = (ov) => resolveTurn({ you: attacker, opp: mirror },
+    buildStartState({ you: attacker, opp: mirror, overrides: ov }), "Body Slam", "Mirror Move");
+
+  // Nothing taken yet, and it moves first: the move fails.
+  ok(calls(run2({})).size === 0, "with nothing taken yet, Mirror Move must fail");
+
+  // Something taken: it copies exactly that.
+  const copied = calls(run2({ oppLastTakenMove: "Earthquake" }));
+  ok(copied.size === 1 && copied.has("Earthquake"),
+    `Mirror Move must copy the taken move exactly (got ${[...copied].join(", ")})`);
+
+  // THE DISTINCTION THAT MATTERS: gLastMoves is not lastTakenMove. A move the
+  // foe used on ITSELF sets the former and not the latter, so it must not
+  // become mirrorable.
+  const selfOnly = calls(run2({ youLastMove: "Swords Dance", oppLastTakenMove: null }));
+  ok(selfOnly.size === 0,
+    "a move the foe used on ITSELF must not be mirrorable -- lastTakenMove is not gLastMoves");
+  console.log(`   copies ${[...copied].join(", ")}; fails with nothing taken; ignores a self-targeting last move`);
+
+  // The write-back is flag-gated and happens when the move actually lands.
+  const slowMirror = buildMon({ ...mirror, evs: { spe: 0 } });
+  const afterHit = resolveTurn({ you: attacker, opp: slowMirror },
+    buildStartState({ you: attacker, opp: slowMirror }), "Body Slam", "Rest")[0].state;
+  ok(afterHit.oppLastTakenMove === "Body Slam", "a mirror-affected hit must record itself as taken");
+}
+
+console.log();
+console.log("-- PART 6: Metronome is modelled EXACTLY, and its throws are the ledger --");
+{
+  const metro = lax(["Metronome", "Body Slam", "Rest", "Earthquake"]);
+  // The pool is the dex minus the 18 forbidden moves; the draw is uniform over
+  // it. Modelled exactly rather than special-cased, so a called move this
+  // engine has not ported THROWS with that move named -- the agreed steady
+  // state. The count of throwing called-moves is the ledger figure and shrinks
+  // as effects land (arena-solver/tools/metronome-ledger.mjs).
+  let threw = null;
+  try {
+    resolveTurn({ you, opp: metro }, buildStartState({ you, opp: metro }), "Body Slam", "Metronome");
+  } catch (err) { threw = err.message; }
+  ok(threw !== null, "Metronome must reach an unported effect and THROW rather than approximate");
+  ok(/EFFECT_[A-Z0-9_]+/.test(threw), `the throw must NAME the called move's effect (got: ${String(threw).slice(0, 80)})`);
+  ok(!/EFFECT_METRONOME/.test(threw), "and it must NOT be a generic Metronome throw -- that is the whole point");
+  console.log(`   throws naming the called move: ${String(threw).split(String.fromCharCode(10))[0].slice(0, 88)}`);
+}
+
+console.log();
+console.log(failures === 0 ? "ALL PASS -- B2b batch 3 characterization green" : `${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
