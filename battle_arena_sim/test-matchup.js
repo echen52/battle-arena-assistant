@@ -55,7 +55,10 @@ console.log(`Recommended: ${fresh.result.move} (P(win)=${fresh.result.winProb.to
 //                         re-landing for +1 Skill. Direction matches every
 //                         other A4 mover: the player does better.
 const EXPECTED_MOVE = "Meteor Mash";
-const EXPECTED_WINPROB = 0.9325;
+//   0.9069423628063115    MOVED by A6: targetConfused went live, so this
+//                         opponent's Confuse Ray is now correctly scored as
+//                         bad against an already-confused target.
+const EXPECTED_WINPROB = 0.9069;
 const pass = fresh.result.move === EXPECTED_MOVE &&
   Math.abs(fresh.result.winProb - EXPECTED_WINPROB) < 0.001;
 console.log();

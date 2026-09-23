@@ -31,9 +31,9 @@ console.log(`Recommended: ${result.result.move} (P(win)=${result.result.winProb.
 // HANDOFF.md's Session-9-era note) that predates all of this repo's
 // checkpointed engine changes; corrected to match the current, repeatedly-
 // reverified 0.919 anchor.
-// Anchor re-recorded 0.919 -> 0.9325 by A4 (Confuse Ray no longer re-lands on
+// Anchor re-recorded 0.919 -> 0.9325 (A4) -> 0.9069 (A6) (Confuse Ray no longer re-lands on
 // an already-confused target). See test-matchup.js for the full history.
-const pass = result.result.move === "Meteor Mash" && Math.abs(result.result.winProb - 0.9325) < 0.001;
+const pass = result.result.move === "Meteor Mash" && Math.abs(result.result.winProb - 0.9069) < 0.001;
 console.log(pass ? "✅ PASS — adapter output matches the hand-typed-config result exactly" : "❌ FAIL");
 
 console.log();

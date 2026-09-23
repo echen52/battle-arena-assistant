@@ -47,8 +47,8 @@ const POST_A3 = {
   "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9810316569313972 },
   "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
-  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9761679602993859 }, // re-recorded by A4
-  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.8117059628185961 }, // re-recorded by A4
+  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 }, // re-recorded by A4, then A6
+  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 }, // re-recorded by A4, then A6
   "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9443710298449904 },
 };
 
@@ -152,7 +152,7 @@ console.log("-- PART 5: recorded cross-lead behaviour --");
   // the Metagross blindness is itself an assertion
   const mg = analyzeMatchup(LEADS.Metagross, cfgOf("Umbreon 4")).result;
   console.warn = origWarn;
-  ok(mg.winProb === 0.9325462501623014, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
+  ok(mg.winProb === 0.9069423628063115, `the Steel lead must be unaffected by A3, got ${mg.winProb}`); // value re-recorded by A4; A3 itself still moves it by 0
   console.log(`   ${Object.keys(POST_A3).length} poisonable-lead cells asserted; Metagross anchor unchanged at ${mg.winProb}`);
   let flips = 0;
   for (const [c, pre] of Object.entries(PRE_A3)) if (pre.move !== POST_A3[c].move) flips++;

@@ -45,12 +45,15 @@ const PRE_A4 = {
 };
 // Post-A4. ASSERTED.
 const POST_A4 = {
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.9184375 },
-  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9892416733524039 },
-  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.9084578125 },
-  "Lapras 1": { move: "Earthquake", winProb: 0.6896961805555555 },
-  "Cradily 1": { move: "Earthquake", winProb: 0.9879898477950628 },
-  "Starmie 6": { move: "Shadow Ball", winProb: 0.8614004629629629 },
+  // Re-recorded by A6 (targetConfused went live; these sets all involve
+  // confusion scoring). The A4 values are preserved in PRE_A6 in
+  // test-a6-dead-context.js and in the fidelity log.
+  "Gengar 1": { move: "Shadow Ball", winProb: 0.5800000000000001 },
+  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9783547376864591 },
+  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8143718750000001 },
+  "Lapras 1": { move: "Meteor Mash", winProb: 0.589053488498264 },
+  "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
+  "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
 };
 
 let failures = 0;
@@ -119,7 +122,7 @@ console.log("-- PART 4: recorded behaviour --");
   let flips = 0;
   for (const [n, pre] of Object.entries(PRE_A4)) if (pre.move !== POST_A4[n].move) flips++;
   console.log(`   ${Object.keys(POST_A4).length} sets asserted; ${flips}/${Object.keys(PRE_A4).length} recorded pairs changed the recommended move`);
-  console.log("   direction: all movers rise for the player -- a Confuse Ray that can now fail is worth less to the AI");
+  console.log("   direction at A4 time: all movers rose for the player; A6 later moved several of these again");
 }
 
 console.log();

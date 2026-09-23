@@ -2568,7 +2568,13 @@ function chooseOpponentMoves(opp, you, state) {
   const ctx = {
     userHpPct: state.oppHpPct,
     targetHpPct: state.yourHpPct,
-    targetConfused: false, // extend if "you" can be confused by something other than Confuse Ray
+    // A6: targetConfused was hardcoded false. It was written when only Confuse
+    // Ray could confuse and the flag was called metagrossConfused; it then
+    // stayed false through every later change, so four handler branches that
+    // read it (EFFECT_CONFUSE :572, EFFECT_SWAGGER :1047, EFFECT_REVENGE :1600,
+    // EFFECT_FOCUS_PUNCH :1819, plus reflectFamilyViability :451 shared by
+    // Counter/Mirror Coat) could never fire. Now real.
+    targetConfused: state.youConfused,
     targetTypes: you.types,
     userEvasionStage: state.oppStages.evasion,
     // targetToxicPoisoned/targetCursed still not modeled (regular-vs-badly-
@@ -2670,14 +2676,22 @@ function chooseOpponentMoves(opp, you, state) {
     // Not modeled yet — no switching mechanic in Arena to prevent, and none
     // of Toxic-poison/Curse-status/Perish Song/Infatuation are tracked as
     // their own flags. Defaults false, same convention as other gaps.
-    targetCantEscape: false, targetPerishSonged: state.youPerishSonged, targetInfatuated: false,
+    targetCantEscape: false, targetPerishSonged: state.youPerishSonged,
+    // A6: `targetInfatuated: false` USED TO BE REPEATED HERE, ~74 lines after
+    // the real assignment above. In a JS object literal the later key wins, so
+    // the live wiring at the earlier line was dead and the flag was always
+    // false -- measured inert in sim-audit.md §2.3. The duplicate is deleted;
+    // the real one is the only one. See test-a6-dead-context.js, and the
+    // no-duplicate-keys check that now guards the whole file.
     // Protect/Detect (AI_CV_Protect) — reuses the shared decay counter and
     // the real (now-wired) targetLeechSeeded flag; everything else it needs
     // that isn't modeled yet (badly-poisoned/cursed/perish-song/infatuation/
     // yawn, on either side) defaults false, same convention as above.
     userProtectCount: state.oppProtectUses,
     userToxicPoisoned: state.oppToxicCounter != null, // A3: mirrored for the opponent's own side
-    userCursed: false, userPerishSonged: false, userInfatuated: false,
+    // A6: userInfatuated is the opponent's OWN infatuation. It was false
+    // because only the player could be infatuated; A5 made oppAttracted real.
+    userCursed: false, userPerishSonged: false, userInfatuated: state.oppAttracted,
     userSeeded: state.oppSeeded, // real — the opponent itself currently seeded by Leech Seed
     userYawnPending: false, targetYawnPending: false,
     targetHasRestoreHpOrDefenseCurlMove: you.moves.some((m) => ["EFFECT_RESTORE_HP", "EFFECT_DEFENSE_CURL"].includes(MOVES[m]?.effect)),
