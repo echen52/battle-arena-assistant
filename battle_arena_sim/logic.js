@@ -2575,7 +2575,15 @@ function chooseOpponentMoves(opp, you, state) {
     // poisoned isn't distinguished; non-Ghost Curse doesn't set any "cursed"
     // status, and Ghost-Curse throws) — left false. Ingrain and Leech Seed
     // ARE now real (this batch/batch 4) — wired to actual state below.
-    targetToxicPoisoned: false, targetCursed: false,
+    // A3: targetToxicPoisoned is now REAL. It was hardcoded false because Toxic
+    // had no executor, so bad poison could never exist; with A3 it can, and six
+    // handler branches read it (AI_CV_Toxic's shared tail :333, EFFECT_ATTRACT
+    // :611, EFFECT_MEAN_LOOK :1142, EFFECT_PROTECT :1174, EFFECT_SUBSTITUTE
+    // :1728, EFFECT_TRAP :1878). Leaving it false after implementing the
+    // mechanic would be the A9 defect class again: a model that applies an
+    // effect its own AI cannot see. targetCursed stays false -- Ghost-Curse is
+    // still unmodelled and throws, so no reachable state sets it.
+    targetToxicPoisoned: state.youToxicCounter != null, targetCursed: false,
     userIngrained: state.oppIngrained,
     targetLeechSeeded: state.youSeeded,
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
@@ -2668,7 +2676,8 @@ function chooseOpponentMoves(opp, you, state) {
     // that isn't modeled yet (badly-poisoned/cursed/perish-song/infatuation/
     // yawn, on either side) defaults false, same convention as above.
     userProtectCount: state.oppProtectUses,
-    userToxicPoisoned: false, userCursed: false, userPerishSonged: false, userInfatuated: false,
+    userToxicPoisoned: state.oppToxicCounter != null, // A3: mirrored for the opponent's own side
+    userCursed: false, userPerishSonged: false, userInfatuated: false,
     userSeeded: state.oppSeeded, // real — the opponent itself currently seeded by Leech Seed
     userYawnPending: false, targetYawnPending: false,
     targetHasRestoreHpOrDefenseCurlMove: you.moves.some((m) => ["EFFECT_RESTORE_HP", "EFFECT_DEFENSE_CURL"].includes(MOVES[m]?.effect)),
@@ -2895,6 +2904,14 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     youAttracted: false, // Attract — same one-directional limitation as confusion (opponent->you only; none of your 3 team mons carry Attract)
     youStages: freshStages(), oppStages: freshStages(),
     youStatus: null, oppStatus: null, // null | "paralysis" | "freeze" | "burn" | "poison" | "sleep"
+    // A3: bad poison (Toxic) is STATUS1_TOXIC_POISON in source, a DIFFERENT
+    // status bit from STATUS1_POISON with its own escalating residual
+    // (src/battle_util.c:1536-1548 vs :1525-1535). Modelled as the "poison"
+    // status plus a counter: null = ordinary poison, a number = bad poison
+    // with that many ticks already taken. Kept as a side field rather than a
+    // sixth status string so every existing `status === "poison"` check
+    // (immunity, berry cure, AI ctx, Facade, etc.) keeps working unchanged.
+    youToxicCounter: null, oppToxicCounter: null,
     youSleepTurns: null, oppSleepTurns: null, // turns-remaining counter, rolled ONCE at infliction (see enumerateActionOutcomes)
     youSeeded: false, oppSeeded: false, // Leech Seed — true means THIS side is seeded and drains into the other every end-of-turn
     youLastMove: null, oppLastMove: null, // gLastMoves[battler] equivalent — set unconditionally whenever that actor acts (src/battle_script_commands.c:4407, gLastMoves[gBattlerAttacker] = gChosenMove), regardless of hit/prevented. Needed by e.g. AI_CV_DefenseUp/AI_CV_SpDefUp's "was I just hit by a physical/special move" check.
@@ -3118,6 +3135,7 @@ function tryCureWithBerry(s, side, mon) {
   const consumedKey = side === "you" ? "youBerryConsumed" : "oppBerryConsumed";
   const statusKey = side === "you" ? "youStatus" : "oppStatus";
   const sleepTurnsKey = side === "you" ? "youSleepTurns" : "oppSleepTurns";
+  const toxicKey = side === "you" ? "youToxicCounter" : "oppToxicCounter";
   if (s[consumedKey]) return;
   const cures = BERRY_CURE[mon.item];
   if (!cures) return;
@@ -3125,6 +3143,7 @@ function tryCureWithBerry(s, side, mon) {
   if (s[statusKey] && cures.includes(s[statusKey])) {
     s[statusKey] = null;
     s[sleepTurnsKey] = null;
+    s[toxicKey] = null; // A3: curing the poison clears the bad-poison counter with it
     used = true;
   }
   // Confusion is STATUS2 (volatile), tracked separately from the major-status
@@ -3648,6 +3667,22 @@ const EFFECT_EXECUTORS = {
     // — this used to be a standalone inline check here, now redundant with
     // that centralized version; removed to avoid the two silently drifting.
     if (!inflictStatus(s, foeSide, "paralysis", foeMon.types, foeMon.ability)) return "failed"; // already-statused/Limber no-stack gate
+  },
+  // A3: Toxic. BattleScript_EffectToxic (data/battle_scripts_1.s:686-702) gates on
+  // Immunity, Substitute, already-poisoned (either kind), any other major
+  // status, Poison type, Steel type, the accuracy roll, then Safeguard -- every
+  // one of which inflictStatus already models, so the gating is shared rather
+  // than duplicated here. What is NEW is the status BIT: source applies
+  // MOVE_EFFECT_TOXIC -> STATUS1_TOXIC_POISON (src/battle_script_commands.c:615),
+  // which is a different bit from STATUS1_POISON and ticks on a different,
+  // escalating schedule (see applyEndOfTurnEffects). The counter starts at 0 and
+  // is first incremented by the end-of-turn handler, so infliction sets 0, not 1.
+  EFFECT_TOXIC: (s, actor, ctx) => {
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const foeSide = isYou ? "opp" : "you";
+    if (!inflictStatus(s, foeSide, "poison", foeMon.types, foeMon.ability)) return "failed";
+    s[foeSide === "you" ? "youToxicCounter" : "oppToxicCounter"] = 0;
   },
   EFFECT_ROAR: () => "failed", // Arena has no reserve party to switch into (see AI_HANDLERS.EFFECT_ROAR comment for why the AI's SCORING doesn't know this) — always a no-op, Skill scores noEffect.
   EFFECT_REST: (s, actor) => {
@@ -4378,7 +4413,11 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // — those score Skill as noEffect instead of the default landed/+1.
       const result = executor(s, actor, ctx, moveData, sleepDuration, attractGenderCompatible);
       if (result === "failed") outcome = "noEffect";
-    } else if (moveData.effect !== "EFFECT_TOXIC") {
+    } else {
+      // A3: the EFFECT_TOXIC exemption that used to live on this branch is GONE.
+      // It let Toxic land, score +1 Skill and apply nothing whenever the target
+      // was not Steel/Poison -- the silent-failure class hard constraint 4
+      // forbids. Toxic now has a real executor above.
       // Toxic is intentionally exempt: it's locked out of the AI's move pool
       // by the Steel/Poison immunity check before it would ever be chosen,
       // so it never reaches execution in any matchup so far.
@@ -4502,13 +4541,36 @@ function applyEndOfTurnEffects(ctx, s) {
   }
 
   // Burn/poison residual: maxHP/8 (Gen III — NOT 1/16 as in later generations).
+  //
+  // A3: BAD poison (Toxic) is a separate case with a separate divisor and an
+  // escalating multiplier — src/battle_util.c:1536-1548:
+  //     gBattleMoveDamage = maxHP / 16;  if (0) -> 1;
+  //     if (counter != TOXIC_TURN(15)) counter += 1;      // capped at 15
+  //     gBattleMoveDamage *= counter;                     // AFTER the increment
+  // so the FIRST tick after infliction is maxHP/16 * 1, the second * 2, and so
+  // on. The min-1 floor applies to the per-turn base, before the multiply.
+  // Ordinary poison keeps the flat maxHP/8 (:1525-1535).
+  const toxicTick = (hpKey, counterKey, mon) => {
+    const dmg = Math.max(1, Math.floor(mon.stats.hp / 16));
+    const next = Math.min(15, (s[counterKey] ?? 0) + 1);
+    s[counterKey] = next;
+    s[hpKey] = Math.max(0, s[hpKey] - ((dmg * next) / mon.stats.hp) * 100);
+  };
   if (s.yourHpPct > 0 && (s.youStatus === "burn" || s.youStatus === "poison")) {
-    const dmg = Math.max(1, Math.floor(you.stats.hp / 8));
-    s.yourHpPct = Math.max(0, s.yourHpPct - (dmg / you.stats.hp) * 100);
+    if (s.youStatus === "poison" && s.youToxicCounter != null) {
+      toxicTick("yourHpPct", "youToxicCounter", you);
+    } else {
+      const dmg = Math.max(1, Math.floor(you.stats.hp / 8));
+      s.yourHpPct = Math.max(0, s.yourHpPct - (dmg / you.stats.hp) * 100);
+    }
   }
   if (s.oppHpPct > 0 && (s.oppStatus === "burn" || s.oppStatus === "poison")) {
-    const dmg = Math.max(1, Math.floor(opp.stats.hp / 8));
-    s.oppHpPct = Math.max(0, s.oppHpPct - (dmg / opp.stats.hp) * 100);
+    if (s.oppStatus === "poison" && s.oppToxicCounter != null) {
+      toxicTick("oppHpPct", "oppToxicCounter", opp);
+    } else {
+      const dmg = Math.max(1, Math.floor(opp.stats.hp / 8));
+      s.oppHpPct = Math.max(0, s.oppHpPct - (dmg / opp.stats.hp) * 100);
+    }
   }
 
   // Reflect/Light Screen duration: a SEPARATE end-of-turn tracker from the
