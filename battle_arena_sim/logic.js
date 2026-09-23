@@ -4897,7 +4897,55 @@ function warnUnmodeledMechanicOnce(effect, moveName) {
     `— degrading to plain damage (change #11 accepted-unmodeled ledger).`);
 }
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null) {
+// B7c: the battle path's calcDamage ARGUMENTS, in one place.
+//
+// This exists so the Focus Band lethality probe can ask "would this hit kill?"
+// by calling THE SAME calcDamage with THE SAME inputs the battle path uses. The
+// alternative -- a second, probe-only damage estimate -- is exactly the drift
+// anti-pattern this project exists downstream of, and it would be wrong the
+// moment either copy gained a modifier the other lacked.
+function battleDamageOptions(ctx, s, actor, moveData) {
+  const { you, opp } = ctx;
+  const isYou = actor === "you";
+  const selfMon = isYou ? you : opp;
+  const foeMon = isYou ? opp : you;
+  const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
+  const defStatKey = moveData.category === "physical" ? "def" : "spd";
+  const selfStages = isYou ? s.youStages : s.oppStages;
+  const foeStages = isYou ? s.oppStages : s.youStages;
+  const selfStatusKey = isYou ? "youStatus" : "oppStatus";
+  const foeStatusKey = isYou ? "oppStatus" : "youStatus";
+  // Reflect/Light Screen: halves damage of the matching category, gated on the
+  // DEFENDER'S side having it up (src/pokemon.c:3267-3273 / 3318-3324). Crits
+  // bypass this (the gCritMultiplier == 1 gate) -- moot while crits are not
+  // branched (B6), so applying it whenever present is safe today.
+  const foeReflect = isYou ? s.oppReflectTurns : s.youReflectTurns;
+  const foeLightScreen = isYou ? s.oppLightScreenTurns : s.youLightScreenTurns;
+  return {
+    defenderForesighted: isYou ? s.oppForesighted : s.youForesighted,
+    attackerStatus: s[selfStatusKey],
+    defenderStatus: s[foeStatusKey],
+    atkStage: selfStages[atkStatKey],
+    defStage: foeStages[defStatKey],
+    attackerBurned: s[selfStatusKey] === "burn",
+    attackerFlashFireActive: isYou ? s.youFlashFireActive : s.oppFlashFireActive,
+    attackerHpPct: isYou ? s.yourHpPct : s.oppHpPct,
+    screenActive: moveData.category === "physical" ? foeReflect != null : foeLightScreen != null,
+    weather: effectiveWeather(s, you, opp),
+  };
+}
+
+// Focus Band. Cmd_adjustnormaldamage (src/battle_script_commands.c:1658-1690)
+// rolls `(Random() % 100) < holdEffectParam` -- param 10, so EXACTLY 10/100 --
+// and on a proc clamps a would-be-lethal hit to leave 1 HP, the same clamp
+// Endure uses. It is gated on the target NOT having a Substitute.
+//
+// The roll sits INSIDE BattleScript_MultiHitLoop (data/battle_scripts_1.s:624),
+// so a multi-hit move rolls once PER HIT, independently. That chain is not
+// modelled: see the throw in enumerateActionOutcomes.
+const FOCUS_BAND_SPACE = 100;
+
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
@@ -5170,19 +5218,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // Crits bypass this (gCritMultiplier==1 gate) — moot here since this
       // engine never branches crits (expected-value damage only, HANDOFF §4
       // known gap), so screenActive is always safe to apply when present.
-      const foeReflectKey = isYou ? "oppReflectTurns" : "youReflectTurns";
-      const foeLightScreenKey = isYou ? "oppLightScreenTurns" : "youLightScreenTurns";
-      const screenActive = moveData.category === "physical" ? s[foeReflectKey] != null : s[foeLightScreenKey] != null;
-      let dmg = calcDamage(selfMon, foeMon, moveName, {
-        defenderForesighted: foeForesighted,
-        attackerStatus: s[selfStatusKey], defenderStatus: s[foeStatusKey],
-        atkStage: selfStages[atkStatKey], defStage: foeStages[defStatKey],
-        attackerBurned: s[selfStatusKey] === "burn",
-        attackerFlashFireActive: s[selfFlashFireKey],
-        attackerHpPct: s[selfHpKey],
-        screenActive,
-        weather: effectiveWeather(s, you, opp),
-      });
+      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData));
       // Bypass bonus: moves that ignore semi-invulnerability (Surf/Whirlpool
       // vs Dive, Earthquake vs Dig, Twister/Gust vs Fly) double damage;
       // Thunder/Sky Uppercut bypass without the bonus (source-confirmed).
@@ -5263,6 +5299,14 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
           if (s[foeEndureKey]) {
             const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
             if (hitDmg >= foeRawHp) { hitDmg = Math.max(0, foeRawHp - 1); endureTriggeredThisHit = true; }
+          } else if (focusBanded) {
+            // B7c: Focus Band procced for this hit. It shares Endure's clamp
+            // (src/battle_script_commands.c:1683-1685 is the same expression)
+            // but NOT Endure's multi-hit halt: only MOVE_RESULT_FOE_ENDURED
+            // stops the loop, and a Focus Band proc does not set it. That
+            // distinction is why this is a separate branch and not an `||`.
+            const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
+            if (hitDmg >= foeRawHp) hitDmg = Math.max(0, foeRawHp - 1);
           }
           s[foeHpKey] = Math.max(0, s[foeHpKey] - (hitDmg / foeMon.stats.hp) * 100);
           recoilBasis = hitDmg;
@@ -5951,7 +5995,52 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
     }
   }
-  return results;
+  return focusBandBranches(ctx, state, actor, moveName, moveData, results);
+}
+
+// Focus Band's per-hit roll, enumerated as weighted branches -- and PRUNED by
+// the same collapse rule Quick Claw uses: branch only where the proc and the
+// no-proc outcome actually DIFFER. Focus Band does nothing to a hit that would
+// not have reduced the target to 0, so a non-lethal hit stays one branch.
+//
+// Lethality is asked of THE SAME calcDamage the battle path uses, through the
+// same battleDamageOptions builder. A second, probe-only damage estimate would
+// be the drift anti-pattern this project exists downstream of, and would go
+// wrong the moment either copy gained a modifier the other lacked.
+function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
+  const isYou = actor === "you";
+  const foeMon = isYou ? ctx.opp : ctx.you;
+  const fb = itemData(foeMon.item);
+  if (!fb || fb.holdEffect !== "HOLD_EFFECT_FOCUS_BAND") return results;
+  if (moveData.power === 0) return results;
+  // Source gates the clamp on the target NOT having a Substitute (:1681).
+  if ((isYou ? state.oppSubstituteHP : state.youSubstituteHP) != null) return results;
+
+  const selfMon = isYou ? ctx.you : ctx.opp;
+  const dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, state, actor, moveData));
+  const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foeMon.stats.hp);
+  if (dmg < foeHp) return results; // cannot KO, so the proc is unobservable
+
+  // The roll sits inside BattleScript_MultiHitLoop (data/battle_scripts_1.s:624),
+  // so each hit of a multi-hit move rolls independently and a proc can be
+  // followed by ANOTHER lethal hit that rolls again. That chain is not modelled.
+  // It is unreachable with the current lead panel -- no panel lead carries a
+  // multi-hit move -- so this throws loudly instead of quietly approximating.
+  if (results.some((r) => (r.hitCount ?? 1) > 1)) {
+    throw new Error(`"${moveName}" is a multi-hit move used against a Focus Band holder ` +
+      `(${foeMon.species}). Source rolls Focus Band once per hit inside the multi-hit loop and a ` +
+      `proc can be followed by another lethal hit; that chain is not modelled. Port it before this ` +
+      `position can be solved.`);
+  }
+
+  const p = fb.param / FOCUS_BAND_SPACE;
+  const out = [];
+  for (const r of results) {
+    if (!r.hit) { out.push(r); continue; }
+    out.push({ ...r, p: r.p * p, focusBanded: true });
+    out.push({ ...r, p: r.p * (1 - p), focusBanded: false });
+  }
+  return out;
 }
 
 // B7c: Quick Claw draws ONE gRandomTurnNumber PER TURN (src/battle_main.c:3140,
@@ -6031,7 +6120,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
@@ -6050,7 +6139,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
-      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null);
+      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false);
       const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;

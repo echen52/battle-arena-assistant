@@ -157,7 +157,7 @@ export const CURRENT = {
   "Rhydon 1": { move: "Earthquake", winProb: 0.2583394646841043 }, // B7c: holds Quick Claw
   "Rhydon 3": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
   "Rhydon 4": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
-  "Houndoom 1": { move: "Earthquake", winProb: 0.13020833333333334 },
+  "Houndoom 1": { move: "Earthquake", winProb: 0.11759039545588663 }, // B7c: holds Focus Band
   "Rapidash 1": { move: "Earthquake", winProb: 0.0009765625 }, // B7a: Charcoal
   "Anabel Silver Entei": { move: "Explosion", winProb: 0.5 },
   "Exploud 3": { move: "Explosion", winProb: 0.5 },
@@ -178,7 +178,7 @@ export const CURRENT = {
   "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
   "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
   "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
-  "Articuno 5": { move: "Meteor Mash", winProb: 0.9694799148701366 },
+  "Articuno 5": { move: "Meteor Mash", winProb: 0.9694799148701365 }, // B7c: holds Focus Band (a 1-ULP move)
   "Spenser Silver Slaking": { move: "Explosion", winProb: 0.415625 },
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
   "Heracross 2": { move: "Explosion", winProb: 0.5 },
@@ -254,7 +254,7 @@ export const B2A = {
   "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.025 },
   "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.74333125 },
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
-  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch",   winProb: 0.9215071402559959 },
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch",   winProb: 0.918450597123913 }, // B7c: holds Focus Band
   "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Thunderbolt", winProb: 0.00625 },
 };
 
@@ -311,7 +311,7 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Body Slam", winProb: 1 },
     causedBy: "item: Thick Club" },
   "Medicham 1": { lead: "Snorlax", ability: null,
-    move: "Shadow Ball", winProb: 0.024990844726562492,
+    move: "Shadow Ball", winProb: 0.02274166870117187, // B7c: also holds Focus Band
     pre: { move: "Shadow Ball", winProb: 1 },
     causedBy: "opponent ability: Pure Power" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
