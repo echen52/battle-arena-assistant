@@ -2795,14 +2795,31 @@ function mindDelta(moveName) {
   return MOVES[moveName]?.mindRating ?? 0;
 }
 
+// A7: every value here is now DERIVED from the two source mechanisms via
+// arenaSkillDelta, not typed in. The outcome names are this engine's; the map
+// to BattleArena_AddSkillPoints' branches is stated per case.
+//
+// The five paths sim-audit.md §3.2 called "correct by coincidence of coverage"
+// are the ones that reach `noEffect` with no matching printed string, and they
+// are now derived rather than coincidental:
+//   Clear Body / White Smoke stat-block : +1 fallthrough -3 string  = -2
+//   Limber (and the other ability status immunities) : +1 -3        = -2
+//   already-statused                    : alreadyStatused branch    = -2
+//   type-immune status                  : ButItFailed -> noEffect   = -2
+//   Safeguard                           : +1 -3 string              = -2
+// They all land on -2, which is why one "failed" return value was faithful to
+// all five; the difference is that the engine can now say WHY for each.
 function skillDelta(outcome) {
   switch (outcome) {
-    case "landedSuperEffective": return 2;
-    case "landedMixed": return 1;
-    case "landed": return 1;
-    case "landedNVE": return -1;
-    case "miss": return -2;
-    case "noEffect": return -2;
+    case "landedSuperEffective": return arenaSkillDelta("superEffective");
+    case "landedMixed": return arenaSkillDelta("mixed");
+    case "landed": return arenaSkillDelta("landed");
+    case "landedNVE": return arenaSkillDelta("notVeryEffective");
+    // A miss sets MOVE_RESULT_MISSED, which composites into NO_EFFECT
+    // (include/constants/battle.h:227); MISS_TYPE is not B_MSG_PROTECTED for an
+    // ordinary accuracy miss, so the -2 fires.
+    case "miss": return arenaSkillDelta("noEffect");
+    case "noEffect": return arenaSkillDelta("noEffect");
     // "blocked" REMOVED (was a flat -3) — ability/item blocks do not share a
     // single Skill delta in source. See ABILITY_BLOCK_SKILL_DELTA below;
     // resolveAbilityInteraction() attaches the correct per-ability value
@@ -3304,14 +3321,100 @@ function typeEffectivenessBreakdown(moveType, defTypes) {
 //   `!(MISSED)` alone is true). It also prints STRINGID_PKMNRESTOREDHPUSING
 //   (line 4086), which IS in DeductSkillPoints' list (battle_arena.c:640):
 //   -3. Net: -2 + -3 = -5.
-const ABILITY_BLOCK_SKILL_DELTA = {
-  "Wonder Guard": -2,
-  "Levitate": -2,
-  "Soundproof": -2,
-  "Flash Fire": -2,
-  "Volt Absorb": -5,
-  "Water Absorb": -5,
+// ── A7: Arena Skill as the TWO SOURCE MECHANISMS, not hand-netted constants ──
+//
+// Source writes arenaSkillPoints from two independent places, neither gating
+// the other:
+//   1. BattleArena_AddSkillPoints (src/battle_arena.c:588-622), once per move
+//      from Cmd_end (src/battle_script_commands.c:3951-3953), branching on
+//      gMoveResultFlags.
+//   2. BattleArena_DeductSkillPoints (src/battle_arena.c:624-652), a flat -3
+//      per MATCHING PRINTED STRING, fired from PlayerHandlePrintString /
+//      OpponentHandlePrintString (src/battle_controller_player.c:2554,
+//      src/battle_controller_opponent.c:1532).
+//
+// This engine used to model (1) only, and paper over (2) with six hand-computed
+// NET values. Those six numbers were right, and five further block paths were
+// right by coincidence of coverage -- but nothing derived them, so any new
+// mechanic had to have its Skill re-derived by hand. Now both mechanisms exist
+// and every net falls out of them.
+//
+// CORRECTION TO THE RECORD: this file previously said "the 18 strings
+// DeductSkillPoints matches", and sim-audit.md §3.2 repeated it. The switch has
+// NINETEEN cases (src/battle_arena.c:630-649, counted). Off by one, corrected
+// here and in the audit.
+const ARENA_DEDUCT_STRINGS = new Set([
+  "STRINGID_PKMNSXMADEYUSELESS", "STRINGID_PKMNSXMADEITINEFFECTIVE",
+  "STRINGID_PKMNSXPREVENTSFLINCHING", "STRINGID_PKMNSXBLOCKSY2",
+  "STRINGID_PKMNSXPREVENTSYLOSS", "STRINGID_PKMNSXMADEYINEFFECTIVE",
+  "STRINGID_PKMNSXPREVENTSBURNS", "STRINGID_PKMNSXBLOCKSY",
+  "STRINGID_PKMNPROTECTEDBY", "STRINGID_PKMNPREVENTSUSAGE",
+  "STRINGID_PKMNRESTOREDHPUSING", "STRINGID_PKMNPREVENTSPARALYSISWITH",
+  "STRINGID_PKMNPREVENTSROMANCEWITH", "STRINGID_PKMNPREVENTSPOISONINGWITH",
+  "STRINGID_PKMNPREVENTSCONFUSIONWITH", "STRINGID_PKMNRAISEDFIREPOWERWITH",
+  "STRINGID_PKMNANCHORSITSELFWITH", "STRINGID_PKMNPREVENTSSTATLOSSWITH",
+  "STRINGID_PKMNSTAYEDAWAKEUSING",
+]);
+
+// BattleArena_AddSkillPoints' branch chain (src/battle_arena.c:588-622), as a
+// pure function of which branch the move result lands on.
+//   alreadyStatused  :595-599  the setalreadystatusedmoveattempt bit
+//   noEffect         :600-604  NO_EFFECT and NOT (MISSED with MISS_TYPE==PROTECTED)
+//   protectedBlock   :600-604  NO_EFFECT but the inner condition is false, so 0
+//   mixed            :605-608  SUPER_EFFECTIVE && NOT_VERY_EFFECTIVE
+//   superEffective   :609-612
+//   notVeryEffective :613-616
+//   landed           :617-620  the final else, when the attacker is not itself protected
+//   selfProtected    :617-620  ...and 0 when it is
+const ARENA_ADD_SKILL = {
+  alreadyStatused: -2, noEffect: -2, protectedBlock: 0, mixed: 1,
+  superEffective: 2, notVeryEffective: -1, landed: 1, selfProtected: 0,
 };
+
+// The composite. `printed` is the list of source string IDs this resolution
+// would print; each one that DeductSkillPoints matches costs a further -3.
+function arenaSkillDelta(addBranch, printed = []) {
+  if (!(addBranch in ARENA_ADD_SKILL)) throw new Error(`arenaSkillDelta: unknown AddSkillPoints branch "${addBranch}"`);
+  let d = ARENA_ADD_SKILL[addBranch];
+  for (const s of printed) {
+    if (!s.startsWith("STRINGID_")) throw new Error(`arenaSkillDelta: "${s}" is not a STRINGID_* constant`);
+    if (ARENA_DEDUCT_STRINGS.has(s)) d -= 3;
+  }
+  return d;
+}
+
+// The six ability blocks, now expressed as what source actually does rather
+// than as a net number. Each entry is (AddSkillPoints branch, printed strings);
+// the delta is derived. The per-ability reasoning and its anchors are in the
+// long comment that used to sit above the hand-netted table, retained below.
+//
+// Wonder Guard / Levitate: Cmd_typecalc (src/battle_script_commands.c:1409-1419
+//   / 1375-1383) sets MOVE_RESULT_MISSED (Levitate also DOESNT_AFFECT_FOE) with
+//   MISS_TYPE = B_MSG_AVOIDED_DMG / B_MSG_GROUND_MISS -- neither is
+//   B_MSG_PROTECTED, so the NO_EFFECT branch's -2 fires. The strings it prints
+//   (STRINGID_AVOIDEDDAMAGE / STRINGID_PKMNMAKESGROUNDMISS,
+//   src/battle_message.c:895-896) are NOT in DeductSkillPoints' switch.
+// Soundproof / Flash Fire: both block BEFORE typecalc (src/battle_util.c:
+//   2659-2674 ABILITYEFFECT_MOVES_BLOCK; :2703-2727 ABILITYEFFECT_ABSORBING),
+//   so no MOVE_RESULT_* is ever set and AddSkillPoints falls through to +1 --
+//   but their strings ARE matched, for -3.
+// Volt Absorb / Water Absorb: BattleScript_MoveHPDrain
+//   (data/battle_scripts_1.s:4078-4089) sets MOVE_RESULT_DOESNT_AFFECT_FOE
+//   (line 4088) -> -2, AND prints STRINGID_PKMNRESTOREDHPUSING (line 4086) ->
+//   -3. Both mechanisms penalise; this is the only pair where they do.
+const ABILITY_BLOCK_SOURCE = {
+  "Wonder Guard": { addBranch: "noEffect", printed: ["STRINGID_AVOIDEDDAMAGE"] },
+  "Levitate": { addBranch: "noEffect", printed: ["STRINGID_PKMNMAKESGROUNDMISS"] },
+  "Soundproof": { addBranch: "landed", printed: ["STRINGID_PKMNSXBLOCKSY"] },
+  "Flash Fire": { addBranch: "landed", printed: ["STRINGID_PKMNRAISEDFIREPOWERWITH"] },
+  "Volt Absorb": { addBranch: "noEffect", printed: ["STRINGID_PKMNRESTOREDHPUSING"] },
+  "Water Absorb": { addBranch: "noEffect", printed: ["STRINGID_PKMNRESTOREDHPUSING"] },
+};
+
+const ABILITY_BLOCK_SKILL_DELTA = Object.fromEntries(
+  Object.entries(ABILITY_BLOCK_SOURCE).map(([ability, { addBranch, printed }]) =>
+    [ability, arenaSkillDelta(addBranch, printed)]),
+);
 
 // Resolves ability-based interactions that override normal damage/type
 // resolution. Called before normal damage calc for any power>0 move, and
@@ -5217,4 +5320,7 @@ export {
   // ground-truth branch deltas (it is the sole Mind/Skill banker resolveTurn
   // uses — see logic.js:4068/4086; end-of-turn effects never touch score).
   mindDelta, skillDelta, classifyOutcome, resolveAbilityInteraction, applyMove,
+  // A7: the two Arena Skill mechanisms, surfaced so tests assert on the source
+  // structure rather than on hand-netted constants.
+  arenaSkillDelta, ARENA_DEDUCT_STRINGS, ARENA_ADD_SKILL, ABILITY_BLOCK_SOURCE, ABILITY_BLOCK_SKILL_DELTA,
 };
