@@ -3387,9 +3387,25 @@ const EFFECT_EXECUTORS = {
     // applies (capped at +6, silently no-ops there, matching source).
     bumpStage(actor === "you" ? s.youStages : s.oppStages, "atk", 1);
   },
-  EFFECT_CONFUSE: (s, actor) => {
+  // A4: BattleScript_EffectConfuse (data/battle_scripts_1.s:903-917) gates the
+  // confusion on, in this order: Own Tempo (-> BattleScript_OwnTempoPrevents,
+  // :4152, prints STRINGID_PKMNPREVENTSCONFUSIONWITH and sets no MOVE_RESULT_*),
+  // Substitute (-> ButItFailed, MOVE_RESULT_FAILED), already-confused
+  // (-> AlreadyConfused), the accuracy roll, then Safeguard
+  // (-> SafeguardProtected). Every one of those was missing here: the executor
+  // set the flag unconditionally, so Confuse Ray went through Own Tempo, through
+  // a Substitute and through Safeguard, and banked +1 Skill for doing it.
+  //
+  // EFFECT_SWAGGER's executor already had all three checks and its comment
+  // flagged this one as the known hole; the two now agree. Accuracy is handled
+  // upstream in enumerateActionOutcomes, as for every other status move.
+  EFFECT_CONFUSE: (s, actor, ctx) => {
     if (actor === "you") throw new Error("Confuse Ray from your side not modeled — only opponent->you confusion is wired up.");
-    if (!s.metagrossConfused) s.metagrossConfused = true;
+    if (ctx.you.ability === "Own Tempo") return "failed";
+    if (s.youSubstituteHP != null) return "failed";
+    if (s.youSafeguardTurns != null) return "failed";
+    if (s.metagrossConfused) return "failed"; // AlreadyConfused — no restack
+    s.metagrossConfused = true;
   },
   // Cmd_tryinfatuating (src/battle_script_commands.c:7654+) — fails (routes
   // to BattleScript_ButItFailed, MOVE_RESULT_FAILED — scored as a real "no

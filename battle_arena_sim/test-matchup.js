@@ -39,8 +39,23 @@ console.log(`Recommended: ${fresh.result.move} (P(win)=${fresh.result.winProb.to
 // stage table from the main stat stages), reliable-but-unspectacular moves
 // lose some of their edge over higher-damage options. Not the original
 // early-session value, which predates many rounds of real bug fixes.
+// ANCHOR HISTORY (brief: "keep prior values in history with the attributed
+// delta"; CLAUDE.md amendment 2: this is a STABILITY anchor, not a fidelity
+// guard -- it is blind across all 16 AI damage rolls, which is why A2 could not
+// move it).
+//   0.919                 pre-Phase-A baseline (main @ 8591b80)
+//   0.9186288305167801    unchanged by A2 (ff6ce40) and A2-perf (ea666e4)
+//   0.9186288305167801    unchanged by A9 (fd33392) -- fresh turn 1 has no
+//                         stages/screens/weather for the AI to see
+//   0.9186288305167801    unchanged by A3 (654df57) -- Metagross is Steel, so
+//                         this opponent's Toxic never executes against it
+//   0.9325462501623014    MOVED by A4: Umbreon 4 carries Confuse Ray, and A4
+//                         made a re-confuse of an already-confused target fail
+//                         (BattleScript_AlreadyConfused) instead of silently
+//                         re-landing for +1 Skill. Direction matches every
+//                         other A4 mover: the player does better.
 const EXPECTED_MOVE = "Meteor Mash";
-const EXPECTED_WINPROB = 0.919;
+const EXPECTED_WINPROB = 0.9325;
 const pass = fresh.result.move === EXPECTED_MOVE &&
   Math.abs(fresh.result.winProb - EXPECTED_WINPROB) < 0.001;
 console.log();
