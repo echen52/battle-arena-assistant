@@ -2804,8 +2804,12 @@ function variablePowerFor(move, attacker, defender, attackerHpPct, variablePower
     // Fury Cutter's escalating power is computed in applyMove, where the
     // counter lives, and arrives here the same way Magnitude's draw does.
     case "EFFECT_FURY_CUTTER":
+    // B3 batch 3: Rollout's doubling power is computed in applyMove from its
+    // timer, the same way. Without this case the timer ran and the damage
+    // stayed at base power -- caught by the characterization test's 53/53/53.
+    case "EFFECT_ROLLOUT":
       if (variablePower === null) {
-        throw new Error(`calcDamage: ${moveName} (EFFECT_FURY_CUTTER) needs its counter-derived power ` +
+        throw new Error(`calcDamage: ${moveName} (${move.effect}) needs its counter-derived power ` +
           `from applyMove and got none.`);
       }
       return variablePower;
@@ -4157,6 +4161,28 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // CANCELER_FLINCH, and cleared for everyone at the end of every turn
     // (src/battle_main.c:3943) -- so it only ever matters within one turn.
     youFlinched: false, oppFlinched: false,
+    // B3 batch 3: the LOCKED-MOVE family, as ONE field per side:
+    //   null | { move, kind: "rampage" | "rollout", n }
+    // `move` is gLockedMoves under STATUS2_MULTIPLETURNS (the two-turn charge
+    // keeps its own `xCharging`, recharge its own `xMustRecharge`); a locked mon
+    // gets no action menu (src/battle_main.c:4160-4165) and re-uses it. `n` is
+    // STATUS2_LOCK_CONFUSE's counter for Rampage (2 or 3 when set,
+    // src/battle_script_commands.c:2851-2862) and gDisableStructs.rolloutTimer
+    // for Rollout (5 on the first landed hit, -1 per hit, :8536-8569).
+    // It is REPLACED, never mutated, so cloneState's shallow copy stays safe --
+    // the same discipline as `xCharging`.
+    //
+    // WHY ONE FIELD AND NOT THREE: this state object is copied on every branch,
+    // and V8's object-spread fast path ends at 128 properties. Three scalar
+    // fields per side took it from 123 to 131 and made the whole engine 2.9x
+    // slower (cloneState 0.6 s -> 19 s of a 55 s profile). See
+    // test-state-shape.js, which now fails past 128.
+    youLock: null, oppLock: null,
+    // Per-turn: the subset of WasUnableToUseMove (src/battle_util.c:890-904)
+    // that does NOT already cancel at its canceler -- full paralysis, a
+    // confusion self-hit, and a target the move did not affect. ENDTURN_THRASH
+    // reads it. Cleared by advanceTurn.
+    youUnableThisTurn: false, oppUnableThisTurn: false,
     // B3 batch 2: gDisableStructs.isFirstTurn for the PLAYER's mon, the
     // counterpart of oppMonFirstTurn below. Fake Out's jumpifnotfirstturn
     // (src/battle_script_commands.c:6786-6794) reads it for whoever uses it.
@@ -4738,11 +4764,15 @@ function inflictStatus(s, targetSide, statusType, targetTypes, targetAbility = n
 // clears, this engine models two things: STATUS2_MULTIPLETURNS together with
 // STATUS3_SEMI_INVULNERABLE (a two-turn move's pending release, `xCharging`)
 // and furyCutterCounter. LOCK_CONFUSE, UPROAR, BIDE and rolloutTimer belong to
-// effects still ledgered (Rampage, Uproar, Bide, Rollout), which will need to
-// add their own field here when they land.
+// effects that were still ledgered then; B3 batch 3 added Rampage's and
+// Rollout's. Uproar and Bide must add theirs when they land.
 function cancelMultiTurnMoves(s, side) {
-  s[side === "you" ? "youCharging" : "oppCharging"] = null;
-  s[side === "you" ? "youFuryCutter" : "oppFuryCutter"] = 0;
+  const isYou = side === "you";
+  s[isYou ? "youCharging" : "oppCharging"] = null;
+  s[isYou ? "youFuryCutter" : "oppFuryCutter"] = 0;
+  // B3 batch 3: STATUS2_MULTIPLETURNS for the locked family, with its
+  // LOCK_CONFUSE counter or rolloutTimer.
+  s[isYou ? "youLock" : "oppLock"] = null;
 }
 
 // IsTwoTurnsMove (src/battle_script_commands.c:8196-8207).
@@ -6056,6 +6086,9 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_RECHARGE",       // the user forfeits its next action entirely
   // B3 batch 2: the flinch is modelled now (CANCELER_FLINCH), so Fake Out is too.
   "EFFECT_FAKE_OUT",       // turn-1-only, and a CERTAIN flinch
+  // B3 batch 3: the locked-move family, first half.
+  "EFFECT_RAMPAGE",        // 2-3 turn lock, then self-confusion
+  "EFFECT_ROLLOUT",        // 5-hit lock, doubling power
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6146,9 +6179,7 @@ const HANDLED_EFFECTS = new Set([
 // (552 sets); see change #11 report §2.
 const ACCEPTED_UNMODELED_EFFECTS = {
   EFFECT_TRAP:          "partial-trap residual damage + switch-block — unmodeled (2 sets)",
-  EFFECT_RAMPAGE:       "2-3 turn lock-in then self-confusion (Thrash/Outrage/Petal Dance) — unmodeled (2 sets)",
   EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
-  EFFECT_ROLLOUT:       "5-turn lock-in, escalating power — unmodeled (1 set)",
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
   // yet and neither is cheap:
@@ -6233,7 +6264,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --
@@ -6326,6 +6357,9 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // Sleep and freeze do NOT, and neither does full paralysis -- its call is
     // commented out in Emerald (:2192-2193, "removed in FRLG and Emerald").
     if (cancelReason) cancelMultiTurnMoves(s, actor);
+    // B3 batch 3: full paralysis does not cancel at its canceler, but it is in
+    // WasUnableToUseMove (prlzImmobility), which ENDTURN_THRASH reads.
+    if (!cancelReason && s[selfStatusKey] === "paralysis") s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true;
     // Paralysis full-para / still-frozen: Mind scores off selection
     // regardless (unconditional), no Skill (HITMARKER_OBEYS unset), no
     // damage or effect happens at all.
@@ -6344,6 +6378,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   }
 
   if (selfHit) {
+    s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true; // confusionSelfDmg (B3 batch 3)
     const dmg = calcConfusionDamage(selfMon);
     s[selfHpKey] = Math.max(0, s[selfHpKey] - (dmg / selfMon.stats.hp) * 100);
     s[mindKey] += mindDelta(mindMove);
@@ -6768,6 +6803,29 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         furyCutterPower = moveData.power * Math.pow(2, s[fcKey] - 1);
       }
     }
+    // B3 batch 3: typecalc sets targetNotAffected on a no-effect hit, and it is
+    // in WasUnableToUseMove -- so a Thrash into a Ghost breaks its own lock.
+    if (hit && eff === 0) s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true;
+    // B3 batch 3: ROLLOUT / ICE BALL (Cmd_rolloutdamagecalculation, src/
+    // battle_script_commands.c:8536-8569). The script's accuracycheck jumps to
+    // the very next instruction on a miss, so a MISS still reaches the command,
+    // which sees NO_EFFECT and cancels the chain -- as does a no-effect hit.
+    // Otherwise: the first landed hit sets the timer to 5 and locks the move,
+    // each hit spends one, and power doubles per hit already spent (30, 60,
+    // 120 inside a 3-turn match), doubled again after Defense Curl. There is no
+    // end-of-turn step: full paralysis and a confusion self-hit do not break it.
+    if (moveData.effect === "EFFECT_ROLLOUT") {
+      const lockKey = isYou ? "youLock" : "oppLock";
+      if (!hit || eff === 0) {
+        cancelMultiTurnMoves(s, actor);
+      } else {
+        // A first hit is one made without STATUS2_MULTIPLETURNS already set.
+        const timer = (s[lockKey]?.kind === "rollout" ? s[lockKey].n : 5) - 1;
+        s[lockKey] = timer === 0 ? null : { move: moveName, kind: "rollout", n: timer };
+        furyCutterPower = moveData.power * Math.pow(2, 5 - timer - 1)
+          * (s[isYou ? "youDefenseCurled" : "oppDefenseCurled"] ? 2 : 1);
+      }
+    }
     // B3 batch 1: HI JUMP KICK'S CRASH, on the MISS side of the damage path --
     // the first draft put it in the OHKO branch's miss handling, where Hi Jump
     // Kick never goes, and the probe read a 0% crash.
@@ -6948,6 +7006,18 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       if (moveData.effect === "EFFECT_FAKE_OUT" && dmg > 0 && s[foeHpKey] > 0 && !foeHadSubstitute
           && foeMon.ability !== "Shield Dust" && foeMon.ability !== "Inner Focus") {
         s[isYou ? "oppFlinched" : "youFlinched"] = true;
+      }
+      // B3 batch 3: RAMPAGE'S LOCK. confuseifrepeatingattackends queues
+      // MOVE_EFFECT_THRASH | AFFECTS_USER only while LOCK_CONFUSE is clear
+      // (src/battle_script_commands.c:7131-7137), and seteffectwithchance (100%)
+      // applies it only to a hit that was not NO_EFFECT. The length was drawn
+      // by the enumerator (rampageSplit).
+      if (moveData.effect === "EFFECT_RAMPAGE" && dmg > 0 && s[isYou ? "youLock" : "oppLock"]?.kind !== "rampage") {
+        if (lockTurns !== 2 && lockTurns !== 3) {
+          throw new Error(`"${moveName}" (effect: EFFECT_RAMPAGE) landed without a drawn lock length -- ` +
+            `the enumerator's rampageSplit did not run on this path.`);
+        }
+        s[isYou ? "youLock" : "oppLock"] = { move: moveName, kind: "rampage", n: lockTurns };
       }
       if (moveData.effect === "EFFECT_OVERHEAT" && dmg > 0) {
         bumpStage(isYou ? s.youStages : s.oppStages, "spa", -2);
@@ -7350,6 +7420,17 @@ function applyEndOfTurnEffects(ctx, s) {
     s[hpKey] = Math.max(0, s[hpKey] - (d / mon.stats.hp) * 100);
   }
 
+  // B3 batch 3: ENDTURN_THRASH (src/battle_util.c:1674-1695), between UPROAR
+  // and DISABLE. The counter drops; a mon that was unable to use its move this
+  // turn (WasUnableToUseMove) loses the lock outright; otherwise a counter that
+  // reaches 0 ends the lock and the user confuses ITSELF -- SetMoveEffect(TRUE)
+  // as a primary effect, so Safeguard does not stop it, but Own Tempo and an
+  // existing confusion do.
+  // Written out per side, not as a loop over [side, mon] pairs: this runs at
+  // every node, and the pair array was a per-call allocation.
+  if (s.youLock?.kind === "rampage" && s.yourHpPct > 0) endTurnThrash(s, "you", you);
+  if (s.oppLock?.kind === "rampage" && s.oppHpPct > 0) endTurnThrash(s, "opp", opp);
+
   // B2b batch 2: Disable and Encore decay, each at its own ENDTURN slot
   // (ENDTURN_DISABLE src/battle_util.c:1696-1716, ENDTURN_ENCORE :1718-1735).
   // Both clear the locked move when the timer reaches 0.
@@ -7684,16 +7765,32 @@ function singleCauseCancel(ctx, state, actor, moveName, moveData) {
   return null;
 }
 
+// B3 batch 3: MOVE_EFFECT_THRASH draws the lock length (Random() & 1) + 2 --
+// 2 or 3, equally -- on a Rampage move's first LANDED hit. Split every hit
+// outcome of an unlocked Rampage move in two; applyMove only reads the length
+// when the hit actually affected the target. Applied to CALLED moves too: a
+// Metronome that draws Thrash locks into Thrash (gLockedMoves = gCurrentMove).
+function rampageSplit(state, actor, moveData, outs) {
+  if (moveData.effect !== "EFFECT_RAMPAGE" || state[actor === "you" ? "youLock" : "oppLock"]?.kind === "rampage") return outs;
+  const split = [];
+  for (const o of outs) {
+    if (o.hit !== true) { split.push(o); continue; }
+    split.push({ ...o, p: o.p * 0.5, lockTurns: 2 });
+    split.push({ ...o, p: o.p * 0.5, lockTurns: 3 });
+  }
+  return split;
+}
+
 function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false, skipStatusGates = false) {
   // A CALLED move (Mirror Move, Metronome, Sleep Talk) inherits its caller's
   // canceler result and runs no chain of its own -- see cancelerGates.
-  if (skipStatusGates) return enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, true);
+  if (skipStatusGates) return rampageSplit(state, actor, moveData, enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, true));
   const gates = cancelerGates(ctx, state, actor, moveName, moveData);
-  if (gates === PASS_GATE) return enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false);
+  if (gates === PASS_GATE) return rampageSplit(state, actor, moveData, enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false));
   const out = [];
   for (const g of gates) {
     if (g.outcome) { out.push({ ...g.outcome, p: g.p }); continue; }
-    for (const o of enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false)) {
+    for (const o of rampageSplit(state, actor, moveData, enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false))) {
       out.push({ ...o, p: o.p * g.p, thawed: g.thawed || o.thawed, sleepRemaining: o.sleepRemaining ?? g.sleepRemaining });
     }
   }
@@ -8274,7 +8371,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
@@ -8313,7 +8410,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       const judgeBefore = bounced
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
-      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null);
+      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
         const dMind = order[0] === "you" ? s2.mindYou - judgeBefore.mindYou : s2.mindOpp - judgeBefore.mindOpp;
@@ -8331,6 +8428,21 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   return results;
 }
 
+// B3 batch 3: ENDTURN_THRASH for one side whose lock is a Rampage.
+function endTurnThrash(s, side, mon) {
+  const lockKey = side === "you" ? "youLock" : "oppLock";
+  const n = s[lockKey].n - 1;
+  if (s[side === "you" ? "youUnableThisTurn" : "oppUnableThisTurn"]) {
+    cancelMultiTurnMoves(s, side);
+  } else if (n === 0) {
+    s[lockKey] = null;
+    const confKey = side === "you" ? "youConfused" : "oppConfused";
+    if (!s[confKey] && mon.ability !== "Own Tempo") s[confKey] = true;
+  } else {
+    s[lockKey] = { ...s[lockKey], n };
+  }
+}
+
 // The bookkeeping every successor state needs, in one place (B3 batch 2; the
 // two call sites used to repeat the first two lines by hand).
 function advanceTurn(s) {
@@ -8343,6 +8455,8 @@ function advanceTurn(s) {
   // (src/battle_main.c:3943).
   s.youFlinched = false;
   s.oppFlinched = false;
+  s.youUnableThisTurn = false;
+  s.oppUnableThisTurn = false;
   // rechargeTimer (src/battle_main.c:4878-4883). Written out per side on
   // purpose: this runs on every successor state, and a loop building the key
   // by string concatenation measured 26 ms of self time on one heavy set.
@@ -8446,8 +8560,10 @@ function search(ctx, state, turnsRemaining) {
   // src/battle_util.c:107-110). The AI is not consulted and the player has no
   // menu; without this the recharge turn's Mind score followed whatever move
   // the search or the AI happened to pick.
-  const oppForced = state.oppCharging ? state.oppCharging.move : state.oppMustRecharge;
-  const youForced = state.youCharging ? state.youCharging.move : state.youMustRecharge;
+  // B3 batch 3: and so does a mon locked into Rampage or Rollout
+  // (STATUS2_MULTIPLETURNS, the same branch again).
+  const oppForced = state.oppCharging ? state.oppCharging.move : (state.oppMustRecharge || state.oppLock?.move);
+  const youForced = state.youCharging ? state.youCharging.move : (state.youMustRecharge || state.youLock?.move);
   const oppCandidates = oppForced
     ? [{ move: oppForced, prob: 1 }]
     : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();
