@@ -1717,6 +1717,34 @@ const AI_HANDLERS = {
   // (search EFFECT_ERUPTION below). Batch 5 added its DAMAGE mechanic only --
   // the HP-scaled base power -- and a second AI copy was caught by
   // test-no-duplicate-keys.js, which is the test that exists for exactly this.
+  // ── B2b batch 6 ─────────────────────────────────────────────────────────
+  // EFFECT_SNORE's AI row is NOT here -- it was already ported (search
+  // EFFECT_SNORE below: AI_CBM_DamageDuringSleep + AI_CV_Snore). Batch 6 added
+  // its two MECHANICS instead: the sleep-lock exemption and the
+  // fails-when-awake executor. test-no-duplicate-keys.js caught the second copy,
+  // for the second batch running -- the AI rows and the mechanics are ported on
+  // different days, and "no handler" is not the same question as "no executor".
+  EFFECT_MUD_SPORT: {
+    // AI_CBM_MudSport (:2166-2168): -10 if the USER already has it up.
+    checkBadMove: (ctx) => (ctx.userMudSport ? -10 : 0),
+    // AI_CV_MudSport (:2646-2656): -1 below 50% HP or against a non-Electric
+    // target; +1 only when healthy AND the target is Electric-typed.
+    checkViability: (ctx) => {
+      if (ctx.userHpPct < 50) return [{ p: 1, delta: -1 }];
+      return [{ p: 1, delta: ctx.targetTypes.includes("Electric") ? 1 : -1 }];
+    },
+  },
+  EFFECT_WATER_SPORT: {
+    // AI_CBM_WaterSport (:2170-2172) / AI_CV_WaterSport (:2658-2668) -- the same
+    // shape with Fire in place of Electric. Kept as two entries rather than one
+    // shared builder because the two TABLES they read differ, and a future
+    // divergence between them should show up as a diff here, not be hidden.
+    checkBadMove: (ctx) => (ctx.userWaterSport ? -10 : 0),
+    checkViability: (ctx) => {
+      if (ctx.userHpPct < 50) return [{ p: 1, delta: -1 }];
+      return [{ p: 1, delta: ctx.targetTypes.includes("Fire") ? 1 : -1 }];
+    },
+  },
   EFFECT_PERISH_SONG: {
     // AI_CBM_PerishSong (:447-449) — no AI_CV_PerishSong exists in source.
     checkBadMove: (ctx) => (ctx.targetPerishSonged ? -10 : 0),
@@ -3458,6 +3486,8 @@ function chooseOpponentMoves(opp, you, state) {
     targetLastTakenMove: state.youLastTakenMove,
     // B2b batch 4.
     targetSideHasSpikes: state.youSpikesLayers > 0,
+    userMudSport: state.oppMudSport,
+    userWaterSport: state.oppWaterSport,
     targetNightmared: state.youNightmared,
     // AI_CV_HealBell's second clause reads the TARGET's PARTY status. An Arena
     // matchup has no reserve party here, so it defaults false -- same stated
@@ -3791,6 +3821,11 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B2b batch 4. Spikes layers are laid faithfully (max 3) and can never
     // bite: the damage is a SWITCH-IN effect and the Arena has no switching.
     youSpikesLayers: 0, oppSpikesLayers: 0,
+    // B2b batch 6. STATUS3_MUDSPORT / STATUS3_WATERSPORT sit on the USER and
+    // halve Electric / Fire POWER for everyone (src/pokemon.c:3215-3218), which
+    // calcDamage has read since B7a -- these are the flags that were missing.
+    youMudSport: false, oppMudSport: false,
+    youWaterSport: false, oppWaterSport: false,
     // STATUS2_NIGHTMARE -- maxHP/4 per end-of-turn, and only while asleep.
     youNightmared: false, oppNightmared: false,
     // STATUS3_IMPRISONED_OTHERS sits on the USER and blocks the FOE from moves
@@ -5130,6 +5165,25 @@ const EFFECT_EXECUTORS = {
   // Unreachable in practice -- Metronome always calls something, since its pool
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
+  // -- B2b batch 6 executors ----------------------------------------------
+  // EFFECT_SNORE has no executor ENTRY on purpose: a damaging move's executor
+  // only ever runs through the secondary-chance dispatch, so a "fails while
+  // awake" rule written here would be dead code. It lives inline in the damage
+  // path instead, beside Dream Eater's sleep gate, which is the same shape.
+  EFFECT_MUD_SPORT: (s, actor) => {
+    // Cmd_settypebasedhalvers (src/battle_script_commands.c:9760-9780): fails
+    // if the user already has the flag, otherwise sets it for the rest of the
+    // battle -- there is no timer. src/battle_main.c:3176 keeps it across a
+    // switch, which is moot here.
+    const key = actor === "you" ? "youMudSport" : "oppMudSport";
+    if (s[key]) return "failed";
+    s[key] = true;
+  },
+  EFFECT_WATER_SPORT: (s, actor) => {
+    const key = actor === "you" ? "youWaterSport" : "oppWaterSport";
+    if (s[key]) return "failed";
+    s[key] = true;
+  },
   // -- B2b batch 4 executors ----------------------------------------------
   EFFECT_HELPING_HAND: () => "failed",
   // Cmd_trysethelpinghand (src/battle_script_commands.c) is gated on
@@ -5396,6 +5450,11 @@ const PURE_DAMAGE_EFFECTS = new Set([
   // They reach this guard, unlike the rest of batch 5, because their table
   // power is 150 rather than the 1-placeholder.
   "EFFECT_ERUPTION",
+  // B2b batch 6. Pay Day's only consequence is gPaydayMoney, and only when the
+  // attacker is the PLAYER (src/battle_script_commands.c:2583-2592). It is
+  // money picked up after the battle -- it touches no battler, no status and no
+  // judging category. Genuinely pure damage here, with nothing ledgered.
+  "EFFECT_PAY_DAY",
 ]);
 
 // INLINE_HANDLED: mandatory-mechanic effects whose consequence is applied
@@ -5407,6 +5466,11 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_COUNTER",           // physical reflect (l.~3056) — power=1, but list for completeness
   "EFFECT_MIRROR_COAT",       // special reflect (l.~3056) — power=1
   "EFFECT_DREAM_EATER",       // drain + sleep gate (DRAIN_EFFECTS + l.~3176)
+  // B2b batch 6. Gust and Twister's mandatory mechanic is the semi-invulnerable
+  // bypass AND the 2x bonus against a target in the air -- both already applied
+  // inline from INVULN_BYPASS in the damage path. Nothing was missing but the
+  // classification, which is why this entry adds no behaviour.
+  "EFFECT_GUST",
 ]);
 
 // CHANCE_SECONDARY: effects whose ONLY consequence beyond damage is a
@@ -5438,6 +5502,15 @@ const CHANCE_SECONDARY_EFFECTS = new Set([
   "EFFECT_BLAZE_KICK",               // burn % (+ high-crit, crits unmodeled by design; AI scoring ported #9)
   "EFFECT_SECRET_POWER",             // terrain-dependent status %
   "EFFECT_POISON_FANG",              // bad-poison %
+  // B2b batch 6.
+  "EFFECT_ATTACK_DOWN_HIT",          // Aurora Beam attack-down %
+  // Flame Wheel / Sacred Fire. The MANDATORY half -- a frozen user acts and
+  // thaws -- is modelled (see the freeze branch in enumerateActionOutcomes);
+  // what is left is the burn %, which is this class.
+  "EFFECT_THAW_HIT",
+  // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
+  // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
+  "EFFECT_SNORE",
 ]);
 
 // DAMAGE_MAGNITUDE_ONLY: power>1 effects that deal ordinary power-based damage
@@ -5546,6 +5619,11 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null) {
     // Present and Psywave the same way hitCount reaches the multi-hit loop.
     defenderHpPct: isYou ? s.oppHpPct : s.yourHpPct,
     variablePower,
+    // Either side's sport halves that type for EVERYONE (the flag is read off
+    // gStatuses3 for both battlers in CalculateBaseDamage), so this is an OR
+    // across the two sides, not the attacker's own flag.
+    mudSportActive: s.youMudSport || s.oppMudSport,
+    waterSportActive: s.youWaterSport || s.oppWaterSport,
   };
 }
 
@@ -5877,6 +5955,15 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // splits are unreachable here (Dream Eater is 100 acc and Metagross has no
     // evasion move, and Metagross never carries Substitute), so only the awake-hit
     // case matters; not modeling the miss/sub branches is an accepted limitation.
+    // BattleScript_EffectSnore (data/battle_scripts_1.s:2254-2262): jumpifstatus
+    // BS_ATTACKER, STATUS1_SLEEP -> SnoreIsAsleep, otherwise attackstring,
+    // ppreduce and `goto BattleScript_ButItFailed`. So an AWAKE Snore is a
+    // failure, not a miss and not a no-op. The exemption that lets a SLEEPING
+    // mon select it at all is upstream in enumerateActionOutcomes.
+    if (moveData.effect === "EFFECT_SNORE" && s[selfStatusKey] !== "sleep") {
+      s[skillKey] += skillDelta("noEffect");
+      return;
+    }
     if (moveData.effect === "EFFECT_DREAM_EATER" && s[foeStatusKey] !== "sleep") {
       s[skillKey] += skillDelta("noEffect");
       return;
@@ -6603,9 +6690,18 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
   // fixed alongside Attract — see the long comment further down).
   let statusBranches;
   if (status === "freeze") {
-    // Random() % 5 == 0 → 20% thaw (then acts normally), else stays frozen
-    // and fully prevented. Re-rolled every turn (no duration counter).
-    statusBranches = [{ p: 0.2, prevented: false, thawed: true }, { p: 0.8, prevented: true, thawed: false }];
+    if (moveData.effect === "EFFECT_THAW_HIT") {
+      // B2b batch 6. A frozen user of Flame Wheel or Sacred Fire is NOT stopped:
+      // CANCELER_FROZEN explicitly skips its own block for EFFECT_THAW_HIT
+      // (src/battle_util.c:2064-2074, comment and all), and CANCELER_THAW then
+      // unfreezes the user unconditionally (:2249-2258). So there is no 20%
+      // roll here at all -- it acts, and it thaws, every time. One branch.
+      statusBranches = [{ p: 1, prevented: false, thawed: true }];
+    } else {
+      // Random() % 5 == 0 → 20% thaw (then acts normally), else stays frozen
+      // and fully prevented. Re-rolled every turn (no duration counter).
+      statusBranches = [{ p: 0.2, prevented: false, thawed: true }, { p: 0.8, prevented: true, thawed: false }];
+    }
   } else if (status === "sleep") {
     // Duration was rolled ONCE at infliction (state.<x>SleepTurns) — NOT
     // re-rolled every turn like paralysis/freeze above. Decrement happens
