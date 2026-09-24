@@ -2820,6 +2820,8 @@ function variablePowerFor(move, attacker, defender, attackerHpPct, variablePower
     // timer, the same way. Without this case the timer ran and the damage
     // stayed at base power -- caught by the characterization test's 53/53/53.
     case "EFFECT_ROLLOUT":
+    // B3 batch 6: Triple Kick's per-hit power (10, 20, 30), from applyMove's loop.
+    case "EFFECT_TRIPLE_KICK":
       if (variablePower === null) {
         throw new Error(`calcDamage: ${moveName} (${move.effect}) needs its counter-derived power ` +
           `from applyMove and got none.`);
@@ -6184,6 +6186,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_TRAP",           // 3-6 turn wrap, maxHP/16 per turn
   // B3 batch 5b: the delayed hit, released at turn end before the judges.
   "EFFECT_FUTURE_SIGHT",   // fixed at use, lands 2 turn-ends later
+  // B3 batch 6: the ledger's last entry.
+  "EFFECT_TRIPLE_KICK",    // 10/20/30, each hit re-checks accuracy
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6276,10 +6280,6 @@ const ACCEPTED_UNMODELED_EFFECTS = {
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
   // yet and neither is cheap:
-  EFFECT_TRIPLE_KICK:   "three hits at 10/20/30 power, each with its own accuracy check, stopping at " +
-                        "the first miss (data/battle_scripts_1.s:2904-2933) — unmodeled (1 cell). The " +
-                        "multi-hit machinery here applies ONE damage number N times; this needs a " +
-                        "per-hit power vector, which is a different loop, not a distribution entry.",
 };
 
 // Warn-once dedup — module-scoped so a full 552-set sweep prints at most one
@@ -6946,6 +6946,8 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       }
     }
     if (bideUnleash !== null) furyCutterPower = bideUnleash;
+    // B3 batch 6: Triple Kick's first hit is power 10; the loop raises it.
+    if (moveData.effect === "EFFECT_TRIPLE_KICK") furyCutterPower = 10;
     // B3 batch 3: typecalc sets targetNotAffected on a no-effect hit, and it is
     // in WasUnableToUseMove -- so a Thrash into a Ghost breaks its own lock.
     if (hit && eff === 0) s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE;
@@ -7036,6 +7038,13 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       let shellBellBasis = 0;
       for (let i = 0; i < hits; i++) {
         if (s[foeHpKey] <= 0) break; // already fainted from an earlier hit this sequence (src: jumpifhasnohp BS_TARGET)
+        // B3 batch 6: Triple Kick re-runs damagecalc every hit with
+        // gDynamicBasePower = sTRIPLE_KICK_POWER, which gains 10 per hit
+        // (addbyte ... 10; copyhword gDynamicBasePower, :1399-1401) -- a power
+        // VECTOR, not one number repeated, which is why it was ledgered.
+        if (moveData.effect === "EFFECT_TRIPLE_KICK" && i > 0) {
+          dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, 10 * (i + 1), spitUpMultiplier));
+        }
 
         if (s[foeSubKey] != null) {
           // Substitute: redirect damage to the sub's HP pool instead of the
@@ -8353,6 +8362,19 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           }
           continue;
         }
+        if (moveData.effect === "EFFECT_TRIPLE_KICK") {
+          // B3 batch 6: TRIPLE KICK (data/battle_scripts_1.s:1384-1437). Up to
+          // three hits, and EVERY hit re-runs `accuracycheck` -- the first miss
+          // ends the move (TripleKickNoMoreHits). Given that hit 1 landed with
+          // per-hit probability q (this branch), the count is 1 w.p. (1-q), 2
+          // w.p. q(1-q), 3 w.p. q^2. Stages cannot change mid-move, so q is the
+          // same for every hit; a Lock-On makes it 1 for every hit.
+          const q = ab.p;
+          for (const [hits, w] of [[1, 1 - q], [2, q * (1 - q)], [3, q * q]]) {
+            if (w > 0) results.push({ p: p * ab.p * w, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits });
+          }
+          continue;
+        }
         const hitDist = MULTI_HIT_DISTRIBUTION[moveData.effect];
         if (hitDist) {
           // Hit-count resolved ONCE per move use (never re-rolled per hit —
@@ -8437,6 +8459,16 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   if (moveData.power === 0) return results;
   // Source gates the clamp on the target NOT having a Substitute (:1681).
   if ((isYou ? state.oppSubstituteHP : state.youSubstituteHP) != null) return results;
+  // B3 batch 6: Triple Kick is multi-hit with a per-hit power, and Focus Band
+  // rolls per hit inside its loop -- the same unmodelled chain as the throw
+  // below. Say so here, before the lethality probe asks calcDamage for a power
+  // this path does not carry.
+  if (moveData.effect === "EFFECT_TRIPLE_KICK") {
+    throw new Error(`"${moveName}" is a multi-hit move used against a Focus Band holder ` +
+      `(${foeMon.species}). Source rolls Focus Band once per hit inside the multi-hit loop and a ` +
+      `proc can be followed by another lethal hit; that chain is not modelled. Port it before this ` +
+      `position can be solved.`);
+  }
 
   const selfMon = isYou ? ctx.you : ctx.opp;
   const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foeMon.stats.hp);
