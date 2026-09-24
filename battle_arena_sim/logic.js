@@ -2848,6 +2848,9 @@ function calcDamage(attacker, defender, moveName, {
   attackerStatus = null, defenderStatus = null,
   mudSportActive = false, waterSportActive = false,
   defenderHpPct = 100, variablePower = null, aiEstimate = false, baseMultiplier = 1,
+  // B3 batch 5b: CalculateBaseDamage's output alone -- no STAB, no type chart.
+  // Future Sight fixes its damage this way and never runs typecalc.
+  untyped = false,
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
@@ -3075,8 +3078,8 @@ function calcDamage(attacker, defender, moveName, {
   // would floor in the wrong order and lose a few HP.
   let base = (preFinal + 2) * baseMultiplier;
 
-  const stab = attacker.types.includes(move.type) ? 1.5 : 1;
-  const eff = typeEffectiveness(move.type, defender.types, defenderForesighted);
+  const stab = untyped ? 1 : attacker.types.includes(move.type) ? 1.5 : 1;
+  const eff = untyped ? 1 : typeEffectiveness(move.type, defender.types, defenderForesighted);
   const critMult = crit ? 2 : 1;
 
   let dmg = Math.floor(base * stab);
@@ -4216,6 +4219,14 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // (Random() & 3) + 3 (src/battle_script_commands.c:2611-2635). One field
     // per side, per the 128-key limit.
     youWrapped: null, oppWrapped: null,
+    // B3 batch 5b: a pending Future Sight / Doom Desire AIMED AT this side --
+    // source indexes gWishFutureKnock by the TARGET (src/battle_script_
+    // commands.c:8929-8955):
+    //   null | { move, n, dmg }     (replaced, never mutated)
+    // n = futureSightCounter (3 when set); dmg = futureSightDmg, fixed at USE
+    // time by CalculateBaseDamage -- no STAB, no type chart. The attacker is the
+    // other side (1v1).
+    youFutureSight: null, oppFutureSight: null,
     // B3 batch 2: gDisableStructs.isFirstTurn for the PLAYER's mon, the
     // counterpart of oppMonFirstTurn below. Fake Out's jumpifnotfirstturn
     // (src/battle_script_commands.c:6786-6794) reads it for whoever uses it.
@@ -6171,6 +6182,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // B3 batch 5: the residual. Its switch-block is inert here -- the Arena has
   // no switching -- so the wrap is only its damage and its counter.
   "EFFECT_TRAP",           // 3-6 turn wrap, maxHP/16 per turn
+  // B3 batch 5b: the delayed hit, released at turn end before the judges.
+  "EFFECT_FUTURE_SIGHT",   // fixed at use, lands 2 turn-ends later
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6260,7 +6273,6 @@ const HANDLED_EFFECTS = new Set([
 // computed-output change, only visibility. Set counts are the current pool
 // (552 sets); see change #11 report §2.
 const ACCEPTED_UNMODELED_EFFECTS = {
-  EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
   // yet and neither is cheap:
@@ -6513,6 +6525,20 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // just above), and only otherwise as FAILED, from attackstring.
   if (moveData.effect === "EFFECT_FAKE_OUT" && !s[isYou ? "youMonFirstTurn" : "oppMonFirstTurn"]) {
     s[skillKey] += skillDelta("noEffect");
+    return;
+  }
+
+  // B3 batch 5b: FUTURE SIGHT / DOOM DESIRE -- the SET. trysetfutureattack
+  // fails (ButItFailed, -2) if one is already pending on the target; otherwise
+  // counter 3 and the damage fixed NOW from CalculateBaseDamage with the
+  // target's side statuses (screens) and today's stages. +1 (no result flag).
+  if (moveData.effect === "EFFECT_FUTURE_SIGHT") {
+    const fsKey = isYou ? "oppFutureSight" : "youFutureSight";
+    if (s[fsKey]) { s[skillKey] += skillDelta("noEffect"); return; }
+    const base = calcDamage(selfMon, foeMon, moveName,
+      { ...battleDamageOptions(ctx, s, actor, moveData), untyped: true, rollFrac: 1 });
+    s[fsKey] = { move: moveName, n: 3, dmg: base };
+    s[skillKey] += skillDelta("landed");
     return;
   }
 
@@ -8047,6 +8073,12 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     }
     return out;
   }
+  if (moveData.effect === "EFFECT_FUTURE_SIGHT") {
+    // B3 batch 5b: BattleScript_EffectFutureSight (data/battle_scripts_1.s:
+    // 1881-1889) has no accuracycheck -- the accuracy check comes at RELEASE --
+    // and the move's flags are 0, so Protect does not stop it either.
+    return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false }];
+  }
   if (moveData.effect === "EFFECT_BIDE" && state[actor === "you" ? "youLock" : "oppLock"]?.kind !== "bide") {
     // B3 batch 4c: Bide's SET turn has no accuracycheck and no Protect check
     // that applies (IsTwoTurnsMove + no MULTIPLETURNS yet, src/
@@ -8654,8 +8686,14 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       }
       const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
-      advanceTurn(s2);
-      results.push({ p: fo.p * so.p, state: s2, label: `${firstLabel}; ${secondLabel}` });
+      // B3 batch 5b: Future Sight releases AFTER the end-of-turn effects
+      // (HandleWishPerishSongOnTurnEnd, case 0) and BEFORE the Arena judges
+      // (case 2 of the same function) -- so a turn-1 Future Sight lands before
+      // turn 3 is judged. Its accuracy roll and Focus Band are real branches.
+      for (const fb of futureSightRelease(ctx, s2)) {
+        advanceTurn(fb.state);
+        results.push({ p: fo.p * so.p * fb.p, state: fb.state, label: `${firstLabel}; ${secondLabel}${fb.label}` });
+      }
     }
   }
 
@@ -8694,6 +8732,85 @@ function endTurnThrash(s, side, mon) {
   } else {
     s[lockKey] = { ...s[lockKey], n };
   }
+}
+
+// B3 batch 5b: the Future Sight release (src/battle_util.c:1796-1826 +
+// BattleScript_MonTookFutureAttack, data/battle_scripts_1.s:3508-3545), for
+// each target side in battler order. The counter drops every turn end; at 0,
+// on a target still standing:
+//   accuracycheck with TODAY's stages (90 Future Sight, 85 Doom Desire) --
+//     a semi-invulnerable target dodges, a Lock-On lands
+//   adjustnormaldamage2: the roll, and Focus Band (Endure was cleared by
+//     TurnValuesCleanUp(TRUE) before this runs)
+//   datahpupdate: a Substitute takes it; HITMARKER_IGNORE_BIDE is set
+//   MOVEEND_RAGE, then the item move-end checks
+// It ends in `end2`, not Cmd_end, so NO Arena Skill is scored for it.
+// No typecalc anywhere, so it hits Dark types.
+function futureSightRelease(ctx, s) {
+  let out = [{ p: 1, state: s, label: "" }];
+  if (!(s.youFutureSight || s.oppFutureSight)) return out;
+  for (const side of ["you", "opp"]) {
+    const next = [];
+    for (const br of out) next.push(...futureSightReleaseSide(ctx, br, side));
+    out = next;
+  }
+  return out;
+}
+function futureSightReleaseSide(ctx, br, side) {
+  const s = br.state;
+  const fsKey = side === "you" ? "youFutureSight" : "oppFutureSight";
+  const fs = s[fsKey];
+  if (!fs) return [br];
+  const n = fs.n - 1;
+  if (n > 0) { s[fsKey] = { ...fs, n }; return [br]; }
+  s[fsKey] = null;
+  const hpKey = side === "you" ? "yourHpPct" : "oppHpPct";
+  if (s[hpKey] <= 0) return [br];
+
+  const target = side === "you" ? ctx.you : ctx.opp;
+  const attacker = side === "you" ? ctx.opp : ctx.you;
+  const tStages = side === "you" ? s.youStages : s.oppStages;
+  const aStages = side === "you" ? s.oppStages : s.youStages;
+  const charging = side === "you" ? s.youCharging : s.oppCharging;
+  let pHit;
+  if (charging?.invulnBit) pHit = 0;
+  else if (s[side === "you" ? "youAlwaysHitTurns" : "oppAlwaysHitTurns"] != null) pHit = 1;
+  else {
+    const foresighted = side === "you" ? s.youForesighted : s.oppForesighted;
+    const acc = accuracyCalc(MOVES[fs.move].accuracy, aStages.accuracy, foresighted ? 0 : tStages.evasion,
+      attacker.ability, target.ability, itemData(target.item), effectiveWeather(s, ctx.you, ctx.opp), false);
+    pHit = Math.min(1, acc / 100);
+  }
+  const res = [];
+  if (pHit < 1) res.push({ p: br.p * (1 - pHit), state: s, label: `${br.label} (${fs.move} misses)` });
+  if (pHit > 0) {
+    const dmg = Math.max(1, Math.floor(fs.dmg * 0.925)); // the battle path's point-estimate roll
+    const subKey = side === "you" ? "youSubstituteHP" : "oppSubstituteHP";
+    const hpNow = Math.round((s[hpKey] / 100) * target.stats.hp);
+    const fb = itemData(target.item);
+    const bandable = s[subKey] == null && dmg >= hpNow && fb && fb.holdEffect === "HOLD_EFFECT_FOCUS_BAND";
+    const arms = bandable
+      ? [[fb.param / FOCUS_BAND_SPACE, true], [1 - fb.param / FOCUS_BAND_SPACE, false]]
+      : [[1, false]];
+    for (const [pa, banded] of arms) {
+      const t = cloneState(s);
+      if (t[subKey] != null) {
+        t[subKey] -= dmg;
+        if (t[subKey] <= 0) t[subKey] = null;
+      } else {
+        const hit = banded ? Math.max(0, hpNow - 1) : dmg;
+        t[hpKey] = Math.max(0, t[hpKey] - (hit / target.stats.hp) * 100);
+        // MOVEEND_RAGE (src/battle_script_commands.c:4240-4255) runs for it.
+        if (t[side === "you" ? "youRaging" : "oppRaging"] && t[hpKey] > 0 && tStages.atk < 6) {
+          bumpStage(side === "you" ? t.youStages : t.oppStages, "atk", 1);
+        }
+        // MOVEEND_ITEM_EFFECTS_ALL: the HP-threshold items get their check now.
+        if (t[hpKey] > 0) tryEndOfTurnItem(t, side, target);
+      }
+      res.push({ p: br.p * pHit * pa, state: t, label: `${br.label} (${fs.move} hits${banded ? ", Focus Band" : ""})` });
+    }
+  }
+  return res;
 }
 
 // B3 batch 4c: gBideDmg. Cmd_datahpupdate adds every HP loss a battler takes
