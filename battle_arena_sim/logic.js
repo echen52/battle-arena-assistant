@@ -1751,6 +1751,14 @@ const AI_HANDLERS = {
   // and for five of them that row is AI_CBM_HighRiskForDamage, the routine
   // factored out just above.
   EFFECT_SONICBOOM: { checkBadMove: highRiskForDamage },   // dispatched :177
+  // B3 batch 4c: BIDE. AI_CBM_HighRiskForDamage (dispatched :123) and
+  // AI_CV_Bide (:1284-1288, dispatched :675): -2 unless the user is above 90%
+  // (`if_hp_more_than AI_USER, 90` -- strictly more). Its membership of the
+  // three AI_HPAware discouraged tables comes from the generated ai-tables.js.
+  EFFECT_BIDE: {
+    checkBadMove: highRiskForDamage,
+    checkViability: (ctx) => [{ p: 1, delta: ctx.userHpPct > 90 ? 0 : -2 }],
+  },
   EFFECT_PSYWAVE: { checkBadMove: highRiskForDamage },     // dispatched :155
   EFFECT_LOW_KICK: { checkBadMove: highRiskForDamage },    // dispatched :206
   EFFECT_PRESENT: { checkBadMove: highRiskForDamage },     // dispatched :172
@@ -2743,6 +2751,10 @@ function getFriendshipPower(effect, friendship) {
 // computing a number off a placeholder power. This is what they were waiting
 // for; the guard entries come out in the same commit.
 const SET_DAMAGE_EFFECTS = new Set([
+  // B3 batch 4c: Bide's unleash -- `copyword gBattleMoveDamage, sBIDE_DMG` then
+  // adjustsetdamage (data/battle_scripts_1.s:3292-3303), after a typecalc whose
+  // SE/NVE flags it clears. Twice the stored damage, arriving from applyMove.
+  "EFFECT_BIDE",
   "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_PSYWAVE",
   "EFFECT_SUPER_FANG", "EFFECT_ENDEAVOR",
 ]);
@@ -2872,6 +2884,11 @@ function calcDamage(attacker, defender, moveName, {
     switch (move.effect) {
       // setword gBattleMoveDamage, 20 / 40 -- literally that, level-independent.
       case "EFFECT_SONICBOOM": return 20;
+      case "EFFECT_BIDE":
+        if (variablePower === null) {
+          throw new Error(`calcDamage: ${moveName} (EFFECT_BIDE) needs its stored damage from applyMove and got none.`);
+        }
+        return variablePower;
       case "EFFECT_DRAGON_RAGE": return 40;
       // Cmd_damagetohalftargethp (:9505-9512): hp / 2, floored, minimum 1.
       case "EFFECT_SUPER_FANG": return Math.max(1, Math.floor(defHp / 2));
@@ -4172,13 +4189,16 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // shape.js): batch 3 left one key of headroom.
     turnFlags: 0,
     // B3 batch 3: the LOCKED-MOVE family, as ONE field per side:
-    //   null | { move, kind: "rampage" | "rollout", n }
+    //   null | { move, kind: "rampage" | "rollout" | "bide", n, dmg? }
     // `move` is gLockedMoves under STATUS2_MULTIPLETURNS (the two-turn charge
     // keeps its own `xCharging`, recharge its own `xRecharge`); a locked mon
     // gets no action menu (src/battle_main.c:4160-4165) and re-uses it. `n` is
     // STATUS2_LOCK_CONFUSE's counter for Rampage (2 or 3 when set,
     // src/battle_script_commands.c:2851-2862) and gDisableStructs.rolloutTimer
     // for Rollout (5 on the first landed hit, -1 per hit, :8536-8569).
+    // B3 batch 4c: for Bide, `n` is STATUS2_BIDE's counter (2 at setbide,
+    // src/battle_script_commands.c:7121-7129) and `dmg` is gBideDmg -- the HP
+    // it has lost to actions since, accumulated in resolveTurnWithOrder.
     // It is REPLACED, never mutated, so cloneState's shallow copy stays safe --
     // the same discipline as `xCharging`.
     //
@@ -4364,6 +4384,7 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
   // B3 batches 1-2: the single-cause cancelers are prevented turns too, and
   // must not read as paralysis.
   if (cancelReason === "recharge") return `${who} must recharge`;
+  if (cancelReason === "bideStore") return `${who} is storing energy`;
   if (cancelReason === "flinch") return `${who} flinches`;
   if (cancelReason === "disabled") return `${who} can't use the disabled ${moveName}`;
   if (cancelReason === "taunted") return `${who} can't use ${moveName} after the taunt`;
@@ -5071,7 +5092,8 @@ const SILENT_FALLTHROUGH_EFFECTS = new Set([
   // EFFECT_ENDEAVOR through SET_DAMAGE_EFFECTS, and EFFECT_LOW_KICK,
   // EFFECT_MAGNITUDE, EFFECT_PRESENT and EFFECT_ERUPTION through
   // variablePowerFor(). What is left is what is genuinely still unported.
-  "EFFECT_HIDDEN_POWER", "EFFECT_BIDE",
+  // B3 batch 4c REMOVED EFFECT_BIDE: modelled (lock, storing, unleash).
+  "EFFECT_HIDDEN_POWER",
   // EFFECT_RETURN/EFFECT_FRUSTRATION REMOVED from this set — now correctly
   // handled via calcDamage's friendship-based effectivePower (see
   // getFriendshipPower/buildMon's `friendship` field).
@@ -6348,6 +6370,12 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     }
   }
 
+  if (statusPrevented && cancelReason === "bideStore") {
+    const lk = isYou ? "youLock" : "oppLock";
+    s[lk] = { ...s[lk], n: s[lk].n - 1 };
+    s[mindKey] += mindDelta(mindMove);
+    return;
+  }
   if (statusPrevented) {
     if (cancelReason === "recharge") {
       // B3 batch 1: the recharge is SPENT here -- CANCELER_RECHARGE clears
@@ -6423,7 +6451,9 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // CancelMultiTurnMoves (src/battle_script_commands.c:992-996), unless this
     // is a two-turn move on its CHARGING turn: `!IsTwoTurnsMove(move) ||
     // STATUS2_MULTIPLETURNS`. So a Fury Cutter chain ends in a Protect.
-    const selfChargingNow = s[isYou ? "youCharging" : "oppCharging"];
+    // STATUS2_MULTIPLETURNS is `xCharging` OR a `xLock` here -- a Bide unleash
+    // carries the lock, so a Protect-blocked unleash cancels it (B3 batch 4c).
+    const selfChargingNow = s[isYou ? "youCharging" : "oppCharging"] || s[isYou ? "youLock" : "oppLock"];
     if (!TWO_TURN_EFFECTS.has(moveData.effect) || selfChargingNow) cancelMultiTurnMoves(s, actor);
     return;
   }
@@ -6436,6 +6466,33 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   if (moveData.effect === "EFFECT_FAKE_OUT" && !s[isYou ? "youMonFirstTurn" : "oppMonFirstTurn"]) {
     s[skillKey] += skillDelta("noEffect");
     return;
+  }
+
+  // B3 batch 4c: BIDE.
+  let bideUnleash = null;
+  if (moveData.effect === "EFFECT_BIDE") {
+    const lk = isYou ? "youLock" : "oppLock";
+    if (s[lk]?.kind !== "bide") {
+      // The SET turn: BattleScript_EffectBide (data/battle_scripts_1.s:573-581)
+      // has no accuracycheck, so the enumerator gives it one landed branch;
+      // setbide locks the move, zeroes gBideDmg and sets the counter to 2.
+      // Skill: obeyed, no result flags, so +1 (BattleArena_AddSkillPoints).
+      s[lk] = { move: moveName, kind: "bide", n: 2, dmg: 0 };
+      s[skillKey] += skillDelta("landed");
+      return;
+    }
+    // The UNLEASH (the gate let it through at counter 1 -> 0).
+    // BattleScript_BideAttack runs `setmoveeffect MOVE_EFFECT_CHARGING` +
+    // clearstatusfromeffect first, which drops STATUS2_MULTIPLETURNS whether
+    // or not the hit then lands.
+    const stored = s[lk].dmg;
+    s[lk] = null;
+    if (stored === 0) {
+      // BattleScript_BideNoEnergyToAttack -> ButItFailed.
+      s[skillKey] += skillDelta("noEffect");
+      return;
+    }
+    bideUnleash = stored * 2;
   }
 
   const selfDamageTakenKey = isYou ? "youDamageTaken" : "oppDamageTaken";
@@ -6806,6 +6863,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         furyCutterPower = moveData.power * Math.pow(2, s[fcKey] - 1);
       }
     }
+    if (bideUnleash !== null) furyCutterPower = bideUnleash;
     // B3 batch 3: typecalc sets targetNotAffected on a no-effect hit, and it is
     // in WasUnableToUseMove -- so a Thrash into a Ghost breaks its own lock.
     if (hit && eff === 0) s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE;
@@ -7119,7 +7177,10 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     if (hit && eff !== 0 && moveFlags(chosenMoveName).mirrorMoveAffected && s[foeHpKey] > 0) {
       s[isYou ? "oppLastTakenMove" : "youLastTakenMove"] = chosenMoveName;
     }
-    s[skillKey] += skillDelta(classifyOutcome(hit, eff));
+    // B3 batch 4c: Bide's unleash clears MOVE_RESULT_SUPER_EFFECTIVE and
+    // NOT_VERY_EFFECTIVE after typecalc (data/battle_scripts_1.s:3300), so a
+    // landed unleash always scores as a plain hit.
+    s[skillKey] += skillDelta(classifyOutcome(hit, bideUnleash !== null && eff > 0 ? 1 : eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
     // now — see the comment above the blockedByProtect check — since it must
     // fire even when Protect blocks the move entirely, which returns before
@@ -7625,6 +7686,7 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     if (st !== "sleep" && st !== "freeze" && st !== "paralysis"
         && !state[isYou ? "youConfused" : "oppConfused"]
         && !state[isYou ? "youAttracted" : "oppAttracted"]
+        && state[isYou ? "youLock" : "oppLock"]?.kind !== "bide"
         && !singleCauseCancel(ctx, state, actor, moveName, moveData)) return PASS_GATE;
   }
 
@@ -7746,6 +7808,15 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
         gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, ...carry } });
       } else if (acb.kind === "loveBlocked") {
         gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: false, attractPrevented: true, ...carry } });
+      } else if (state[actor === "you" ? "youLock" : "oppLock"]?.kind === "bide"
+                 && state[actor === "you" ? "youLock" : "oppLock"].n > 1) {
+        // B3 batch 4c: CANCELER_BIDE (src/battle_util.c:2220-2249), AFTER
+        // confusion, paralysis and love. Counter 2 -> 1: still storing, so the
+        // action is BattleScript_BideStoringEnergy -- a spent turn that is not a
+        // cancel (no CancelMultiTurnMoves) and scores no Skill (attackcanceler
+        // returned before HITMARKER_OBEYS). At 1 -> 0 it passes to the body and
+        // unleashes.
+        gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, cancelReason: "bideStore", ...carry } });
       } else {
         gates.push({ p, pass: true, ...carry });
       }
@@ -7834,6 +7905,12 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
       }
     }
     return out;
+  }
+  if (moveData.effect === "EFFECT_BIDE" && state[actor === "you" ? "youLock" : "oppLock"]?.kind !== "bide") {
+    // B3 batch 4c: Bide's SET turn has no accuracycheck and no Protect check
+    // that applies (IsTwoTurnsMove + no MULTIPLETURNS yet, src/
+    // battle_script_commands.c:992-996). One branch.
+    return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false }];
   }
   if (moveData.effect === "EFFECT_MAGIC_COAT" && isLastToAct) {
     // Cmd_trysetmagiccoat (src/battle_script_commands.c:9085-9098) fails when
@@ -8383,7 +8460,9 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
+    const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
     applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null);
+    if (bidePre1) bideAccumulate(ctx, s, bidePre1);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
@@ -8422,7 +8501,9 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       const judgeBefore = bounced
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
+      const bidePre2 = (s2.youLock?.kind === "bide" || s2.oppLock?.kind === "bide") ? bideSnapshot(s2) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
       applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null);
+      if (bidePre2) bideAccumulate(ctx, s2, bidePre2);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
         const dMind = order[0] === "you" ? s2.mindYou - judgeBefore.mindYou : s2.mindOpp - judgeBefore.mindOpp;
@@ -8452,6 +8533,29 @@ function endTurnThrash(s, side, mon) {
     if (!s[confKey] && mon.ability !== "Own Tempo") s[confKey] = true;
   } else {
     s[lockKey] = { ...s[lockKey], n };
+  }
+}
+
+// B3 batch 4c: gBideDmg. Cmd_datahpupdate adds every HP loss a battler takes
+// to its Bide total (src/battle_script_commands.c:1903-1916) -- hits, recoil,
+// crash damage, a confusion self-hit -- EXCEPT under HITMARKER_IGNORE_BIDE,
+// which end-of-turn residuals (src/battle_util.c:1468), Wish/Perish/Future
+// Sight (:1787) and weather (BattleScript_DamagingWeatherLoop) all set. So it
+// is measured around each ACTION here, never at end of turn. It counts only
+// while the mon was already biding before the action and still is after it:
+// damage taken before setbide on the set turn does not count (setbide zeroes
+// it), and the unleash itself clears the lock.
+function bideSnapshot(s) {
+  return { yh: s.yourHpPct, oh: s.oppHpPct, yb: s.youLock?.kind === "bide", ob: s.oppLock?.kind === "bide" };
+}
+function bideAccumulate(ctx, s, pre) {
+  if (pre.yb && s.youLock?.kind === "bide") {
+    const lost = Math.round((pre.yh / 100) * ctx.you.stats.hp) - Math.round((s.yourHpPct / 100) * ctx.you.stats.hp);
+    if (lost > 0) s.youLock = { ...s.youLock, dmg: s.youLock.dmg + lost };
+  }
+  if (pre.ob && s.oppLock?.kind === "bide") {
+    const lost = Math.round((pre.oh / 100) * ctx.opp.stats.hp) - Math.round((s.oppHpPct / 100) * ctx.opp.stats.hp);
+    if (lost > 0) s.oppLock = { ...s.oppLock, dmg: s.oppLock.dmg + lost };
   }
 }
 

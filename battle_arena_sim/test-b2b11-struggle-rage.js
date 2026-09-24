@@ -131,9 +131,11 @@ console.log("-- PART 3b: Teleport is inert BY RULESET, like Helping Hand --");
 console.log();
 console.log("-- PART 4: what is left, and it is named --");
 {
-  // Four effects still throw, deliberately. The test asserts the LIST, so that
-  // a fifth cannot join it quietly.
-  const STILL_THROWING = ["EFFECT_MIMIC", "EFFECT_ASSIST", "EFFECT_TRANSFORM", "EFFECT_BIDE"];
+  // These effects still throw, deliberately. The test asserts the LIST, so that
+  // another cannot join it quietly -- and an effect leaves it only by being
+  // ported, with its own test. HISTORY: four at batch 11; EFFECT_BIDE left in
+  // B3 batch 4c (test-b3-bide.js).
+  const STILL_THROWING = ["EFFECT_MIMIC", "EFFECT_ASSIST", "EFFECT_TRANSFORM"];
   const you = mk("Snorlax", [IDLE, "Body Slam", "Growl", "Shadow Ball"]);
   const byEffect = {
     EFFECT_MIMIC: "Mimic", EFFECT_ASSIST: "Assist", EFFECT_TRANSFORM: "Transform", EFFECT_BIDE: "Bide",
@@ -146,7 +148,7 @@ console.log("-- PART 4: what is left, and it is named --");
     try { resolveTurn({ you, opp }, buildStartState({ you, opp }), IDLE, move); } catch { threw = true; }
     ok(threw, `${move} must still throw LOUDLY -- it is unported, and silence would be the forbidden case`);
   }
-  console.log(`   ${STILL_THROWING.length} effects still throw by design: ${STILL_THROWING.map((e) => byEffect[e]).join(", ")} (5 cells of 1392)`);
+  console.log(`   ${STILL_THROWING.length} effects still throw by design: ${STILL_THROWING.map((e) => byEffect[e]).join(", ")} (of 1392 cells)`);
 }
 
 console.log();
