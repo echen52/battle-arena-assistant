@@ -66,9 +66,15 @@ console.log("-- PART 2: it calls a move, and the call is uniform --");
   // The called move really resolves -- a damaging call must take HP off.
   const damaging = br.find((b) => b.label.includes("-> Earthquake"));
   ok(damaging.state.yourHpPct < 80, "a called damaging move must actually deal damage");
-  // ...and a called Rest must actually heal and re-sleep.
+  // ...and a called Rest must FAIL. This asserted the opposite until B3 batch
+  // 4d: BattleScript_EffectRest's first check is `jumpifstatus BS_ATTACKER,
+  // STATUS1_SLEEP` -> RestIsAlreadyAsleep (data/battle_scripts_1.s:735-760),
+  // and a Sleep Talk user is asleep by definition. No heal, and -2 Skill
+  // (setalreadystatusedmoveattempt).
   const rested = br.find((b) => b.label.includes("-> Rest"));
-  ok(rested.state.oppHpPct === 100, "a called Rest must actually heal to full");
+  // (The player's Body Slam also lands this turn, so HP alone cannot show it.)
+  ok(rested.state.oppHpPct < 100 && rested.state.oppSleepTurns === 2,
+    `a called Rest must FAIL -- no heal to full, and the sleep counter is NOT reset to 3 (hp ${rested.state.oppHpPct.toFixed(1)}, counter ${rested.state.oppSleepTurns})`);
 }
 
 console.log();

@@ -196,7 +196,7 @@ export const CURRENT_CELLS = {
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
   "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 },
-  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9351849809890322 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing)
+  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9351897271082136 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322
 };
 
 // Full opponent AI distributions at fresh turn 1, for the roll-sensitive sets.
@@ -368,7 +368,7 @@ export const MODIFIER_ANCHORS = {
     // hidden by swapping in a cleaner set.
     causedBy: "opponent ability: Torrent (B7a), then its Shell Bell (B7b)" },
   "Muk 1": { lead: "Snorlax", ability: "Stench",
-    move: "Earthquake", winProb: 0.9618722223090354,
+    move: "Earthquake", winProb: 0.972399478253943, // B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9618722223090354
     pre: { move: "Earthquake", winProb: 0.9816982673274147 },
     causedBy: "item: Poison Barb" },
   "Miltank 3": { lead: "Starmie", ability: null,

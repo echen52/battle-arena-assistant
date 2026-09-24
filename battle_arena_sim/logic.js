@@ -4189,13 +4189,15 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // shape.js): batch 3 left one key of headroom.
     turnFlags: 0,
     // B3 batch 3: the LOCKED-MOVE family, as ONE field per side:
-    //   null | { move, kind: "rampage" | "rollout" | "bide", n, dmg? }
+    //   null | { move, kind: "rampage" | "rollout" | "bide" | "uproar", n, dmg? }
     // `move` is gLockedMoves under STATUS2_MULTIPLETURNS (the two-turn charge
     // keeps its own `xCharging`, recharge its own `xRecharge`); a locked mon
     // gets no action menu (src/battle_main.c:4160-4165) and re-uses it. `n` is
     // STATUS2_LOCK_CONFUSE's counter for Rampage (2 or 3 when set,
     // src/battle_script_commands.c:2851-2862) and gDisableStructs.rolloutTimer
     // for Rollout (5 on the first landed hit, -1 per hit, :8536-8569).
+    // B3 batch 4d: for Uproar, `n` is STATUS2_UPROAR's counter, (Random() & 3)
+    // + 2 when set (src/battle_script_commands.c:2568-2582).
     // B3 batch 4c: for Bide, `n` is STATUS2_BIDE's counter (2 at setbide,
     // src/battle_script_commands.c:7121-7129) and `dmg` is gBideDmg -- the HP
     // it has lost to actions since, accumulated in resolveTurnWithOrder.
@@ -4773,6 +4775,8 @@ function inflictStatus(s, targetSide, statusType, targetTypes, targetAbility = n
   // function at all, so that distinction falls out for free).
   if (s[safeguardKey] != null) return false;
   if (s[statusKey]) return false; // major statuses don't stack
+  // B3 batch 4d: an uproar blocks sleep for anything not Soundproof.
+  if (statusType === "sleep" && uproarActive(s) && targetAbility !== "Soundproof") return false;
   if (STATUS_IMMUNITY_TYPES[statusType].some((t) => targetTypes.includes(t))) return false;
   if (targetAbility != null && targetAbility === STATUS_IMMUNITY_ABILITIES[statusType]) return false;
   s[statusKey] = statusType;
@@ -4799,6 +4803,19 @@ function cancelMultiTurnMoves(s, side) {
   // B3 batch 3: STATUS2_MULTIPLETURNS for the locked family, with its
   // LOCK_CONFUSE counter or rolloutTimer.
   s[isYou ? "youLock" : "oppLock"] = null;
+}
+
+// B3 batch 4d: UproarWakeUpCheck (src/battle_script_commands.c:6801-6826) --
+// TRUE when ANY battler is in an uproar and the battler asked about is not
+// Soundproof. It gates every way into sleep: SetMoveEffect's sleep case
+// (:2274-2285), jumpifcantmakeasleep (:6828-6846, used by sleep moves, Rest and
+// Yawn), ENDTURN_YAWN (src/battle_util.c:1759) -- and it WAKES a sleeper at
+// CANCELER_ASLEEP (:2017-2025).
+function uproarActive(s) {
+  return s.youLock?.kind === "uproar" || s.oppLock?.kind === "uproar";
+}
+function uproarKeepsAwake(s, mon) {
+  return uproarActive(s) && mon.ability !== "Soundproof";
 }
 
 // IsTwoTurnsMove (src/battle_script_commands.c:8196-8207).
@@ -5512,10 +5529,11 @@ const EFFECT_EXECUTORS = {
   },
 
   EFFECT_ROAR: () => "failed", // Arena has no reserve party to switch into (see AI_HANDLERS.EFFECT_ROAR comment for why the AI's SCORING doesn't know this) — always a no-op, Skill scores noEffect.
-  EFFECT_REST: (s, actor) => {
+  EFFECT_REST: (s, actor, ctx) => {
     // Cmd_trysetrest (src/battle_script_commands.c:6762-6784): fails outright
-    // (failJump, no heal/sleep/Skill-landed) if already at full HP — the
-    // ONLY precondition checked; current status is irrelevant (Rest clears
+    // (failJump, no heal, no sleep) if already at full HP -- see below for the
+    // checks the SCRIPT makes first, and what each scores. Current status is
+    // otherwise irrelevant (Rest clears
     // and overwrites unconditionally otherwise). Duration is a FIXED 3
     // (STATUS1_SLEEP_TURN(3), :6779) — NOT the random 2-5 rolled by direct
     // sleep-inducing moves (EFFECT_SLEEP, src/battle_util.c:1762) — that
@@ -5524,7 +5542,28 @@ const EFFECT_EXECUTORS = {
     const selfHpKey = actor === "you" ? "yourHpPct" : "oppHpPct";
     const selfStatusKey = actor === "you" ? "youStatus" : "oppStatus";
     const selfSleepTurnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
-    if (s[selfHpKey] >= 100) return "failed";
+    // B3 batch 4d: the comment above said full HP was the ONLY precondition.
+    // BattleScript_EffectRest (data/battle_scripts_1.s:735-743) checks two
+    // things BEFORE trysetrest: `jumpifstatus STATUS1_SLEEP` (a sleeping mon
+    // that reaches Rest through Sleep Talk) and `jumpifcantmakeasleep` --
+    // an uproar, Insomnia or Vital Spirit, on the user (Rest targets itself).
+    //
+    // And the SKILL each failure scores differs, because only one of them sets
+    // a result flag BattleArena_AddSkillPoints reads:
+    //   already asleep  RestIsAlreadyAsleep: setalreadystatusedmoveattempt -> -2
+    //   uproar          RestCantSleep: no flag -> +1, and nothing happens
+    //   Insomnia / VS   RestCantSleep prints STAYEDAWAKEUSING, one of the
+    //                   BattleArena_DeductSkillPoints strings (-3), on top of
+    //                   the +1 -> -2 net
+    //   full HP         BattleScript_AlreadyAtFullHp (:2042-2046): no flag -> +1.
+    //                   This engine scored it -2 until B3 batch 4d; the "failed"
+    //                   it returned was a reading of the message, not of source.
+    // An undefined return is the executor's "landed" (+1) with no effect.
+    const selfMon = actor === "you" ? ctx.you : ctx.opp;
+    if (s[selfStatusKey] === "sleep") return "failed";
+    if (uproarKeepsAwake(s, selfMon)) return;
+    if (selfMon.ability === "Insomnia" || selfMon.ability === "Vital Spirit") return "failed";
+    if (s[selfHpKey] >= 100) return;
     s[selfHpKey] = 100;
     s[selfStatusKey] = "sleep";
     s[selfSleepTurnsKey] = 3;
@@ -5571,6 +5610,9 @@ const EFFECT_EXECUTORS = {
     const foeYawnKey = foeSide === "you" ? "youYawnTurns" : "oppYawnTurns";
     const foeStatusKey = foeSide === "you" ? "youStatus" : "oppStatus";
     if (foeMon.ability === "Insomnia" || foeMon.ability === "Vital Spirit") return "failed";
+    // B3 batch 4d: jumpifcantmakeasleep checks the uproar first (data/
+    // battle_scripts_1.s:2460).
+    if (uproarKeepsAwake(s, foeMon)) return "failed";
     if (s[foeSubKey]) return "failed";
     if (s[foeSafeguardKey] != null) return "failed";
     if (s[foeYawnKey] != null || s[foeStatusKey] != null) return "failed";
@@ -6116,6 +6158,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // B3 batch 3: the locked-move family, first half.
   "EFFECT_RAMPAGE",        // 2-3 turn lock, then self-confusion
   "EFFECT_ROLLOUT",        // 5-hit lock, doubling power
+  // B3 batch 4d: the locked-move family, complete.
+  "EFFECT_UPROAR",         // 2-5 turn lock, a battle-wide sleep block and wake
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6210,12 +6254,6 @@ const ACCEPTED_UNMODELED_EFFECTS = {
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
   // yet and neither is cheap:
-  EFFECT_UPROAR:        "2-5 turn move lock (Random()&3+2, src/battle_script_commands.c:2569-2576) " +
-                        "PLUS a battle-wide sleep block and a wake-up of anything already asleep " +
-                        "(src/battle_util.c:1625-1642, :2017-2024) — unmodeled (12 grid cells). " +
-                        "The lock alone would collapse to 2 classes like Disable's; the sleep " +
-                        "interaction is the expensive half, and it touches Rest, every sleep move " +
-                        "and the sleep counter.",
   EFFECT_TRIPLE_KICK:   "three hits at 10/20/30 power, each with its own accuracy check, stopping at " +
                         "the first miss (data/battle_scripts_1.s:2904-2933) — unmodeled (1 cell). The " +
                         "multi-hit machinery here applies ONE damage number N times; this needs a " +
@@ -7080,6 +7118,16 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         }
         s[isYou ? "youLock" : "oppLock"] = { move: moveName, kind: "rampage", n: lockTurns };
       }
+      // B3 batch 4d: UPROAR'S LOCK. setmoveeffect MOVE_EFFECT_UPROAR |
+      // AFFECTS_USER, applied by seteffectwithchance (100%) to a hit that was
+      // not NO_EFFECT, only if the user is not already in an uproar.
+      if (moveData.effect === "EFFECT_UPROAR" && dmg > 0 && s[isYou ? "youLock" : "oppLock"]?.kind !== "uproar") {
+        if (![2, 3, 4, 5].includes(lockTurns)) {
+          throw new Error(`"${moveName}" (effect: EFFECT_UPROAR) landed without a drawn lock length -- ` +
+            `the enumerator's rampageSplit did not run on this path.`);
+        }
+        s[isYou ? "youLock" : "oppLock"] = { move: moveName, kind: "uproar", n: lockTurns };
+      }
       if (moveData.effect === "EFFECT_OVERHEAT" && dmg > 0) {
         bumpStage(isYou ? s.youStages : s.oppStages, "spa", -2);
       }
@@ -7223,6 +7271,15 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         }
       }
     }
+  } else if (moveData.effect === "EFFECT_SLEEP" && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null
+             && s[foeStatusKey] !== "sleep" && uproarKeepsAwake(s, foeMon)) {
+    // B3 batch 4d: BattleScript_EffectSleep (data/battle_scripts_1.s:284-298)
+    // runs jumpifcantmakeasleep BEFORE its accuracycheck, and the uproar branch
+    // (BattleScript_CantMakeAsleep, :313-317) sets no result flag: +1, and
+    // nothing happens -- on the branches that would have missed, too. The
+    // earlier checks (Substitute, already asleep) and the later ones fail -2
+    // either way, which the paths below already give.
+    s[skillKey] += skillDelta("landed");
   } else if (!hit) {
     // A genuine accuracy miss on a power=0 status move (e.g. Attract, whose
     // 100 base accuracy CAN miss once evasion/accuracy stages are involved
@@ -7484,6 +7541,14 @@ function applyEndOfTurnEffects(ctx, s) {
     s[hpKey] = Math.max(0, s[hpKey] - (d / mon.stats.hp) * 100);
   }
 
+  // B3 batch 4d: ENDTURN_UPROAR (src/battle_util.c:1625-1672), just before
+  // THRASH. For an uproaring battler: first EVERY sleeping, non-Soundproof
+  // battler wakes (the case returns effect 2 without advancing the tracker, so
+  // it re-runs until nobody is left asleep); then the counter drops, and the
+  // uproar is cancelled on WasUnableToUseMove or when the counter hits 0.
+  if (s.youLock?.kind === "uproar" && s.yourHpPct > 0) endTurnUproar(s, "you", you, opp);
+  if (s.oppLock?.kind === "uproar" && s.oppHpPct > 0) endTurnUproar(s, "opp", you, opp);
+
   // B3 batch 3: ENDTURN_THRASH (src/battle_util.c:1674-1695), between UPROAR
   // and DISABLE. The counter drops; a mon that was unable to use its move this
   // turn (WasUnableToUseMove) loses the lock outright; otherwise a counter that
@@ -7566,10 +7631,10 @@ function applyEndOfTurnEffects(ctx, s) {
     s.youYawnTurns--;
     if (s.youYawnTurns <= 0) {
       s.youYawnTurns = null;
-      if (s.youStatus == null && you.ability !== "Insomnia" && you.ability !== "Vital Spirit") {
+      if (s.youStatus == null && you.ability !== "Insomnia" && you.ability !== "Vital Spirit" && !uproarKeepsAwake(s, you)) {
         s.youStatus = "sleep";
         s.youSleepTurns = 2;
-        cancelMultiTurnMoves(s, "you"); // ENDTURN_YAWN goes through SetMoveEffect (B3 batch 2)
+        cancelMultiTurnMoves(s, "you"); // ENDTURN_YAWN calls it explicitly (src/battle_util.c:1761) -- not via SetMoveEffect, as batch 2's note said
       }
     }
   }
@@ -7577,10 +7642,10 @@ function applyEndOfTurnEffects(ctx, s) {
     s.oppYawnTurns--;
     if (s.oppYawnTurns <= 0) {
       s.oppYawnTurns = null;
-      if (s.oppStatus == null && opp.ability !== "Insomnia" && opp.ability !== "Vital Spirit") {
+      if (s.oppStatus == null && opp.ability !== "Insomnia" && opp.ability !== "Vital Spirit" && !uproarKeepsAwake(s, opp)) {
         s.oppStatus = "sleep";
         s.oppSleepTurns = 2;
-        cancelMultiTurnMoves(s, "opp"); // ENDTURN_YAWN goes through SetMoveEffect (B3 batch 2)
+        cancelMultiTurnMoves(s, "opp"); // ENDTURN_YAWN calls it explicitly (src/battle_util.c:1761) -- not via SetMoveEffect, as batch 2's note said
       }
     }
   }
@@ -7731,7 +7796,10 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     const mon = actor === "you" ? ctx.you : ctx.opp;
     const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
     const toSub = mon.ability === "Early Bird" ? 2 : 1;
-    const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
+    // B3 batch 4d: an uproar wakes the sleeper outright (UproarWakeUpCheck,
+    // src/battle_util.c:2017-2025), no decrement -- and with the same
+    // BattleScriptPushCursor, so it acts (batch 4a).
+    const sleepRemaining = uproarKeepsAwake(state, mon) ? 0 : Math.max(0, state[turnsKey] - toSub);
     // B2b batch 3: Snore and Sleep Talk are EXEMPT from the sleep lock while
     // the mon is still asleep -- source gates the "can't move" on
     // `gCurrentMove != MOVE_SNORE && gCurrentMove != MOVE_SLEEP_TALK`
@@ -7851,13 +7919,17 @@ function singleCauseCancel(ctx, state, actor, moveName, moveData) {
 // outcome of an unlocked Rampage move in two; applyMove only reads the length
 // when the hit actually affected the target. Applied to CALLED moves too: a
 // Metronome that draws Thrash locks into Thrash (gLockedMoves = gCurrentMove).
+// B3 batch 4d: and MOVE_EFFECT_UPROAR draws (Random() & 3) + 2 -- 2 to 5,
+// equally -- the same way, for an Uproar that is not already running.
+const LOCK_DRAWS = { EFFECT_RAMPAGE: ["rampage", [2, 3]], EFFECT_UPROAR: ["uproar", [2, 3, 4, 5]] };
 function rampageSplit(state, actor, moveData, outs) {
-  if (moveData.effect !== "EFFECT_RAMPAGE" || state[actor === "you" ? "youLock" : "oppLock"]?.kind === "rampage") return outs;
+  const draw = LOCK_DRAWS[moveData.effect];
+  if (!draw || state[actor === "you" ? "youLock" : "oppLock"]?.kind === draw[0]) return outs;
+  const share = 1 / draw[1].length;
   const split = [];
   for (const o of outs) {
     if (o.hit !== true) { split.push(o); continue; }
-    split.push({ ...o, p: o.p * 0.5, lockTurns: 2 });
-    split.push({ ...o, p: o.p * 0.5, lockTurns: 3 });
+    for (const n of draw[1]) split.push({ ...o, p: o.p * share, lockTurns: n });
   }
   return split;
 }
@@ -7948,7 +8020,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
       const mon = actor === "you" ? ctx.you : ctx.opp;
       const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
       const toSub = mon.ability === "Early Bird" ? 2 : 1;
-      const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
+      const sleepRemaining = uproarKeepsAwake(state, mon) ? 0 : Math.max(0, state[turnsKey] - toSub);
       if (sleepRemaining === 0) {
         return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false, sleepRemaining }];
       }
@@ -8519,6 +8591,25 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   }
 
   return results;
+}
+
+// B3 batch 4d: ENDTURN_UPROAR for one side whose lock is an Uproar.
+function endTurnUproar(s, side, you, opp) {
+  for (const [sd, mon] of [["you", you], ["opp", opp]]) {
+    const stKey = sd === "you" ? "youStatus" : "oppStatus";
+    if (s[stKey] === "sleep" && mon.ability !== "Soundproof") {
+      s[stKey] = null;
+      s[sd === "you" ? "youSleepTurns" : "oppSleepTurns"] = null;
+      s[sd === "you" ? "youNightmared" : "oppNightmared"] = false; // :1634
+    }
+  }
+  const lockKey = side === "you" ? "youLock" : "oppLock";
+  const n = s[lockKey].n - 1;
+  if (s.turnFlags & (side === "you" ? TF_YOU_UNABLE : TF_OPP_UNABLE) || n === 0) {
+    cancelMultiTurnMoves(s, side);
+  } else {
+    s[lockKey] = { ...s[lockKey], n };
+  }
 }
 
 // B3 batch 3: ENDTURN_THRASH for one side whose lock is a Rampage.
