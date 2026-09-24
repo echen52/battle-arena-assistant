@@ -1838,6 +1838,31 @@ const AI_HANDLERS = {
       return dist;
     },
   },
+  // ── B2b batch 11 ────────────────────────────────────────────────────────
+  // AI_CheckBadMove dispatches EFFECT_TELEPORT straight to Score_Minus10 (:185)
+  // with no routine of its own -- the AI will not pick it at all.
+  EFFECT_TELEPORT: { checkBadMove: () => -10 },
+
+  EFFECT_MAGIC_COAT: {
+    // AI_CV_MagicCoat (:1902-1920). No AI_CBM row. Three blocks, and the middle
+    // one keys on is_first_turn_for AI_USER -- which this engine has as real
+    // state (ctx.userPastFirstTurn, from state.oppMonFirstTurn) rather than a
+    // hardcoded guess -- and it reuses the field that already exists instead of
+    // adding a second name for the same fact.
+    checkViability: (ctx) => {
+      let dist = [{ p: 1, delta: 0 }];
+      if (ctx.targetHpPct <= 30) {
+        dist = combineDist(dist, [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: -1 }]);
+      }
+      if (!ctx.userPastFirstTurn) {
+        // +1 on the 106/256 that do NOT jump past it.
+        return combineDist(dist, [{ p: 150 / 256, delta: 0 }, { p: 106 / 256, delta: 1 }]);
+      }
+      // Not the user's first turn: -1 on the 226/256 that do not jump.
+      return combineDist(dist, [{ p: 30 / 256, delta: 0 }, { p: 226 / 256, delta: -1 }]);
+    },
+  },
+
   // ── B2b batch 10 ────────────────────────────────────────────────────────
   EFFECT_TRICK: {
     // AI_CBM_TrickAndKnockOff (:545-548): -10 into Sticky Hold, which is the
@@ -3544,9 +3569,15 @@ function selectableMoves(moves, s, side, foeMon, who) {
   });
 
   if (legal.length === 0) {
-    throw new Error(`Every move is unselectable for ${who} (${reasons.join("; ")}). Source falls back ` +
-      `to Struggle (AreAllMovesUnusable, src/battle_util.c:1125-1140), which this engine does not ` +
-      `model — port it before this position can be solved.`);
+    // B2b batch 11: STRUGGLE. Source falls back to it when every move is
+    // unusable (AreAllMovesUnusable, src/battle_util.c:1125-1140), and this
+    // engine used to throw here instead. It became REACHABLE in batch 10: Trick
+    // can hand the PLAYER a Choice Band, and a mon Choice-locked into a move
+    // that is then disabled or tormented has nothing else. 23 cells.
+    //
+    // Struggle is already in the move table (50 power, Normal, EFFECT_RECOIL),
+    // so the fallback is the selection rule, not a new move.
+    return ["Struggle"];
   }
   return legal;
 }
@@ -4105,6 +4136,9 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // was. Recycle restores from this, and inferring it from the built mon does
     // not work once the mon's effective item has already been cleared.
     youUsedItem: null, oppUsedItem: null,
+    // B2b batch 11: STATUS2_RAGE. Set by a landed Rage, cleared the moment its
+    // user picks anything else (src/battle_util.c:1974-1980).
+    youRaging: false, oppRaging: false,
     youAbilityOverride: null, oppAbilityOverride: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
@@ -5486,6 +5520,14 @@ const EFFECT_EXECUTORS = {
   // Unreachable in practice -- Metronome always calls something, since its pool
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
+  // -- B2b batch 11 executors ---------------------------------------------
+  EFFECT_TELEPORT: () => "failed",
+  // BattleScript_EffectTeleport (data/battle_scripts_1.s:1120-1133) fails
+  // IMMEDIATELY on `jumpifbattletype BATTLE_TYPE_TRAINER`. Every Arena battle is
+  // a trainer battle, so Teleport can never do anything here -- the same
+  // "inert by ruleset, not unported" shape as Helping Hand and Follow Me, and
+  // stated rather than left to look like an omission.
+
   // -- B2b batch 10 executors ---------------------------------------------
   EFFECT_SKILL_SWAP: (s, actor, ctx) => {
     // Cmd_tryswapabilities (src/battle_script_commands.c:9392-9412): fails when
@@ -5943,6 +5985,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_SPIT_UP",
   // B2b batch 10: Thief's steal is a CERTAIN on-hit effect, applied inline.
   "EFFECT_THIEF",
+  // B2b batch 11: Rage's flag and its MOVEEND_RAGE Attack raise, both inline.
+  "EFFECT_RAGE",
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6392,6 +6436,20 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // a chance secondary -- it happens on every hit. Binding moves are not
   // modelled at all (EFFECT_TRAP is ledgered), so only the two that exist here
   // are cleared, and Spikes never bit in the first place.
+  // B2b batch 11: RAGE. Two halves, in two places.
+  // (1) The flag. MOVE_EFFECT_RAGE is a primary effect of a LANDED Rage
+  //     (data/battle_scripts_1.s:1140-1146 -> src/battle_script_commands.c:2735),
+  //     and it is cleared for any mon that chose a different move this turn
+  //     (src/battle_util.c:1974-1980) -- which is why the clear is keyed on the
+  //     CHOSEN move, not on the flag's age.
+  {
+    const ragingKey = isYou ? "youRaging" : "oppRaging";
+    if (moveData.effect === "EFFECT_RAGE") {
+      if (hit) s[ragingKey] = true;
+    } else if (chosenMoveName !== "Rage") {
+      s[ragingKey] = false;
+    }
+  }
   if (moveData.effect === "EFFECT_THIEF" && hit) {
     // MOVE_EFFECT_STEAL_ITEM (src/battle_script_commands.c:2738-2790), applied
     // inline because it is a CERTAIN on-hit effect of a damaging move -- the
@@ -6688,9 +6746,27 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // THIS hit already zeroed the user's HP first, matching source's
       // script order — the max(0, ...) clamp below makes stacking a no-op).
       const recoilDivisor = RECOIL_FRACTION[moveData.effect];
-      if (recoilDivisor && selfMon.ability !== "Rock Head") {
+      // Struggle recoils through Rock Head: BattleScript_MoveEffectRecoil checks
+      // `jumpifmove MOVE_STRUGGLE` UNCONDITIONALLY, before the Rock Head check
+      // runs at all. This stopped being moot in batch 11, when Struggle became
+      // reachable as the no-legal-move fallback.
+      if (recoilDivisor && (moveName === "Struggle" || selfMon.ability !== "Rock Head")) {
         const recoilDmg = Math.max(1, Math.floor(recoilBasis / recoilDivisor));
         s[selfHpKey] = Math.max(0, s[selfHpKey] - (recoilDmg / selfMon.stats.hp) * 100);
+      }
+
+      // (2) B2b batch 11: RAGE'S ATTACK RAISE, at MOVEEND_RAGE
+      // (src/battle_script_commands.c:4240-4255). It belongs to the TARGET, not
+      // the attacker: a raging mon that is damaged by a damaging move from the
+      // other side gains +1 Attack, capped at +6, and only when the hit
+      // actually did something (TARGET_TURN_DAMAGED and not NO_EFFECT).
+      {
+        const foeRagingKey = isYou ? "oppRaging" : "youRaging";
+        const foeStagesForRage = isYou ? s.oppStages : s.youStages;
+        if (s[foeRagingKey] && moveData.power > 0 && eff !== 0 && dmg > 0
+            && s[foeHpKey] > 0 && foeStagesForRage.atk < 6) {
+          bumpStage(foeStagesForRage, "atk", 1);
+        }
       }
 
       // Drain heal (see DRAIN_EFFECTS above): the USER recovers half the HP
@@ -6837,6 +6913,28 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // Toxic is intentionally exempt: it's locked out of the AI's move pool
       // by the Steel/Poison immunity check before it would ever be chosen,
       // so it never reaches execution in any matchup so far.
+      // B2b batch 11: the four that are left, and why they still throw rather
+      // than degrading. ACCEPTED_UNMODELED_EFFECTS is consulted ONLY by the
+      // power>1 damage-path guard, so a status move cannot be "accepted" into
+      // it -- and degrading a status move means doing NOTHING, which is the
+      // silent-failure class hard constraint 4 forbids. Phase B's acceptance
+      // criterion is "solves OR fails loud with a named cause", and these fail
+      // loud with named causes:
+      //
+      //   EFFECT_MIMIC     2 cells. Replaces Mimic itself with the target's
+      //                    last move for the battle (Cmd_mimicattackcopy).
+      //                    Needs a MOVE-LIST override -- a third mutation axis
+      //                    beside batch 10's ability and item ones.
+      //   EFFECT_ASSIST    1 cell. Calls a random move from the user's PARTY
+      //                    members' movesets (:9484-9520). This engine models
+      //                    one mon per side; the party's moves are not state at
+      //                    all, so there is nothing to draw from.
+      //   EFFECT_TRANSFORM 1 cell. Copies species, stats, types, ability and
+      //                    moves at once, and stats are computed at buildMon.
+      //   EFFECT_BIDE      1 cell (and it throws from the damage guard, not
+      //                    here). A multi-turn lock plus a damage accumulator.
+      //
+      // 5 cells of 1392, all four queued for B3.
       throw new Error(`"${moveName}" (effect: ${moveData.effect}) has no execution logic yet — port it into EFFECT_EXECUTORS.`);
     }
     s[skillKey] += skillDelta(outcome);
