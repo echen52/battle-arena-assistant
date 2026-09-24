@@ -311,9 +311,16 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Body Slam", winProb: 1 },
     causedBy: "item: Thick Club" },
   "Medicham 1": { lead: "Snorlax", ability: null,
-    move: "Shadow Ball", winProb: 0.02274166870117187, // B7c: also holds Focus Band
+    move: "Shadow Ball", winProb: 0.09249908447265623, // B7c: also holds Focus Band
     pre: { move: "Shadow Ball", winProb: 1 },
-    causedBy: "opponent ability: Pure Power" },
+    // HISTORY, never deleted: B7a moved this to 0.02274166870117187 via Pure
+    // Power's doubled Attack. B3 batch 1 moved it again, UP, to the value above:
+    // Medicham 1 carries HI JUMP KICK, and its crash damage on a miss
+    // (DMG_RECOIL_FROM_MISS, capped at the target's maxHP/2) now costs the
+    // opponent real HP on the 10% of turns it misses. The player's odds against
+    // a set whose main attack can hurt its own user go UP -- which is the point
+    // of porting a mechanic that only ever costs its user.
+    causedBy: "opponent ability: Pure Power (B7a), then Hi Jump Kick's crash (B3 batch 1)" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
     move: "Shadow Ball", winProb: 0,
     pre: { move: "Shadow Ball", winProb: 1 },

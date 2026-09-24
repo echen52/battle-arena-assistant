@@ -4139,6 +4139,15 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B2b batch 11: STATUS2_RAGE. Set by a landed Rage, cleared the moment its
     // user picks anything else (src/battle_util.c:1974-1980).
     youRaging: false, oppRaging: false,
+    // B3 batch 1: STATUS2_RECHARGE, carried as the LOCKED MOVE rather than a
+    // flag, because source keeps one: MOVE_EFFECT_RECHARGE writes
+    // gLockedMoves[battler] = gCurrentMove (src/battle_script_commands.c:
+    // 2728-2731). The recharging mon is given NO action menu (src/battle_main.c:
+    // 4160-4165) and "uses" that move again (src/battle_util.c:107-110), which
+    // is what the Mind judge scores (:289). Spent on that attempt, which it
+    // forfeits entirely (CANCELER_RECHARGE, src/battle_util.c:2098-2108).
+    // null | moveName.
+    youMustRecharge: null, oppMustRecharge: null,
     youAbilityOverride: null, oppAbilityOverride: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
@@ -4297,7 +4306,7 @@ function cloneState(s) {
   return { ...s, youStages: { ...s.youStages }, oppStages: { ...s.oppStages } };
 }
 
-function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null) {
+function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null, recharging = false) {
   const who = actor === "you" ? "You" : "Opp";
   // B2b batch 3: a move-calling move shows BOTH names. Reading "Opp uses Sleep
   // Talk" when the damage came from Earthquake makes every trace ambiguous.
@@ -4305,6 +4314,8 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
     const inner = describeAction(actor, calledMove, hit, selfHit, statusPrevented, attractPrevented, hitCount);
     return `${inner.replace(`${who} uses `, `${who} uses ${moveName} -> `)}`;
   }
+  // B3 batch 1: a recharge is also a prevented turn, and must not read as one.
+  if (recharging) return `${who} must recharge`;
   if (statusPrevented) return `${who} is fully paralyzed/frozen and can't move`;
   if (attractPrevented) return `${who} is immobilized by love and can't move`;
   if (selfHit) return `${who} hits itself in confusion`;
@@ -5987,6 +5998,19 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_THIEF",
   // B2b batch 11: Rage's flag and its MOVEEND_RAGE Attack raise, both inline.
   "EFFECT_RAGE",
+  // ── B3 batch 1: six that LEFT the accepted-unmodelled ledger ────────────
+  // Each was ledgered for a reason that had expired. Knock Off needed mutable
+  // items (batch 10). Smelling Salt needed a damage multiplier (batch 9's Spit
+  // Up). The other four needed nothing but the work.
+  "EFFECT_BRICK_BREAK",    // clears both screens BEFORE its own damage
+  "EFFECT_OVERHEAT",       // user SpAtk -2, CERTAIN
+  "EFFECT_SUPERPOWER",     // user Atk -1 and Def -1, CERTAIN
+  "EFFECT_KNOCK_OFF",      // removes the target's item, blocked by Sticky Hold
+  "EFFECT_SMELLINGSALT",   // 2x into paralysis, and cures it
+  "EFFECT_RECOIL_IF_MISS", // crash damage on a miss, capped at target maxHP/2
+  // B3 batch 1 continued: the two that cost their user a TURN rather than HP.
+  "EFFECT_FOCUS_PUNCH",    // priority -3, and loses focus if damaged first
+  "EFFECT_RECHARGE",       // the user forfeits its next action entirely
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6076,18 +6100,10 @@ const HANDLED_EFFECTS = new Set([
 // computed-output change, only visibility. Set counts are the current pool
 // (552 sets); see change #11 report §2.
 const ACCEPTED_UNMODELED_EFFECTS = {
-  EFFECT_BRICK_BREAK:   "removes target's Reflect/Light Screen pre-damage — unmodeled (38 sets; INERT here, target never has screens up)",
-  EFFECT_OVERHEAT:      "user SpA -2 after hit (Overheat, Psycho Boost) — unmodeled (23 sets)",
-  EFFECT_FOCUS_PUNCH:   "fails if user is damaged before moving; priority -3 — unmodeled (12 sets)",
   EFFECT_FAKE_OUT:      "guaranteed flinch on turn 1; priority — unmodeled (9 sets; flinch has no model at all yet)",
-  EFFECT_RECHARGE:      "user loses next turn (Hyper Beam family) — unmodeled (8 sets)",
-  EFFECT_SUPERPOWER:    "user Atk -1 & Def -1 after hit — unmodeled (4 sets)",
   EFFECT_TRAP:          "partial-trap residual damage + switch-block — unmodeled (2 sets)",
   EFFECT_RAMPAGE:       "2-3 turn lock-in then self-confusion (Thrash/Outrage/Petal Dance) — unmodeled (2 sets)",
   EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
-  EFFECT_RECOIL_IF_MISS: "crash damage on miss (Hi Jump Kick) — unmodeled (1 set)",
-  EFFECT_KNOCK_OFF:     "removes target's held item — unmodeled (1 set)",
-  EFFECT_SMELLINGSALT:  "cures target's paralysis (+2x vs paralyzed) — unmodeled (1 set)",
   EFFECT_ROLLOUT:       "5-turn lock-in, escalating power — unmodeled (1 set)",
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
@@ -6182,6 +6198,13 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // wholeness note at that site. `chosenMoveName` keeps it available.
   const chosenMoveName = moveName;
   if (calledMove) moveName = calledMove;
+  // B3 batch 1: a recharging mon's attempt IS its locked move, whatever the
+  // caller passed -- source reads gLockedMoves here, not a selection
+  // (src/battle_util.c:107-110), and the Mind judge scores that (:289).
+  // search() already forces it; this makes a direct resolveTurn caller agree.
+  if (statusPrevented && s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"]) {
+    moveName = s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"];
+  }
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
   const foeMon = isYou ? opp : you;
@@ -6232,6 +6255,9 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   }
 
   if (statusPrevented) {
+    // B3 batch 1: the recharge is SPENT here -- source clears STATUS2_RECHARGE
+    // on the very attempt it blocks, so it costs exactly one turn.
+    s[isYou ? "youMustRecharge" : "oppMustRecharge"] = null;
     // Paralysis full-para / still-frozen: Mind scores off selection
     // regardless (unconditional), no Skill (HITMARKER_OBEYS unset), no
     // damage or effect happens at all.
@@ -6436,6 +6462,18 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // a chance secondary -- it happens on every hit. Binding moves are not
   // modelled at all (EFFECT_TRAP is ledgered), so only the two that exist here
   // are cleared, and Spikes never bit in the first place.
+  // ── B3 batch 1: six accepted-unmodelled mechanics that became cheap ─────
+  // BRICK BREAK. `removelightscreenreflect` (src/battle_script_commands.c:
+  // 9695-9713) runs BEFORE `damagecalc` in the script (data/battle_scripts_1.s:
+  // 2795-2806), so the screens are gone for BRICK BREAK'S OWN damage too --
+  // which is why this sits above the damage branch rather than beside the other
+  // on-hit effects. It clears BOTH screens and both timers, and it does so on a
+  // hit whether or not the target is immune to the damage.
+  if (moveData.effect === "EFFECT_BRICK_BREAK" && hit) {
+    s[isYou ? "oppReflectTurns" : "youReflectTurns"] = null;
+    s[isYou ? "oppLightScreenTurns" : "youLightScreenTurns"] = null;
+  }
+
   // B2b batch 11: RAGE. Two halves, in two places.
   // (1) The flag. MOVE_EFFECT_RAGE is a primary effect of a LANDED Rage
   //     (data/battle_scripts_1.s:1140-1146 -> src/battle_script_commands.c:2735),
@@ -6449,6 +6487,22 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     } else if (chosenMoveName !== "Rage") {
       s[ragingKey] = false;
     }
+  }
+  // B3 batch 1: KNOCK OFF removes the target's item outright (
+  // MOVE_EFFECT_KNOCK_OFF, :2863-2890). Sticky Hold blocks it. This became a
+  // three-line change the moment batch 10 made items mutable -- before that it
+  // had nowhere to write the removal, which is why it was ledgered.
+  // B3 batch 1: RECHARGE. MOVE_EFFECT_RECHARGE | AFFECTS_USER | CERTAIN on a
+  // landed Hyper Beam (src/battle_script_commands.c:2728-2731), which also
+  // locks the move. The turn it costs is spent at the START of the user's next
+  // action, not here.
+  if (moveData.effect === "EFFECT_RECHARGE" && hit) {
+    s[isYou ? "youMustRecharge" : "oppMustRecharge"] = moveName;
+  }
+  if (moveData.effect === "EFFECT_KNOCK_OFF" && hit && foeMon.item
+      && foeMon.ability !== "Sticky Hold") {
+    s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
+    s[isYou ? "oppUsedItem" : "youUsedItem"] = null; // knocked off, not consumed: Recycle cannot get it back
   }
   if (moveData.effect === "EFFECT_THIEF" && hit) {
     // MOVE_EFFECT_STEAL_ITEM (src/battle_script_commands.c:2738-2790), applied
@@ -6555,6 +6609,19 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // splits are unreachable here (Dream Eater is 100 acc and Metagross has no
     // evasion move, and Metagross never carries Substitute), so only the awake-hit
     // case matters; not modeling the miss/sub branches is an accepted limitation.
+    // B3 batch 1: FOCUS PUNCH. BattleScript_EffectFocusPunch's FIRST
+    // instruction after attackcanceler is `jumpifnodamage` (data/
+    // battle_scripts_1.s:2258-2265 -> Cmd_jumpifnodamage, src/
+    // battle_script_commands.c:9340-9347): if the user took physical OR special
+    // damage this turn it loses focus and the move does nothing. Its priority
+    // -3 is already in the move table, so it naturally moves last and this
+    // check is reachable. The engine already tracks per-turn damage taken
+    // (youDamageTaken / oppDamageTaken), which is exactly gProtectStructs'
+    // physicalDmg/specialDmg for this purpose.
+    if (moveData.effect === "EFFECT_FOCUS_PUNCH" && (isYou ? s.youDamageTaken : s.oppDamageTaken)) {
+      s[skillKey] += skillDelta("noEffect");
+      return;
+    }
     // BattleScript_EffectSnore (data/battle_scripts_1.s:2254-2262): jumpifstatus
     // BS_ATTACKER, STATUS1_SLEEP -> SnoreIsAsleep, otherwise attackstring,
     // ppreduce and `goto BattleScript_ButItFailed`. So an AWAKE Snore is a
@@ -6583,6 +6650,15 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // Cmd_stockpiletobasedamage, after the damage is computed. With nothing
     // stored the move fails outright.
     let spitUpMultiplier = 1;
+    // B3 batch 1: Smelling Salt doubles against a PARALYSED target
+    // (BattleScript_EffectSmellingsalt -> SmellingsaltDoubleDmg, which sets
+    // gBattleScripting.dmgMultiplier = 2). Reuses the multiplier batch 9 added
+    // for Spit Up rather than a second mechanism -- source applies both at the
+    // same point, to CalculateBaseDamage's output.
+    if (moveData.effect === "EFFECT_SMELLINGSALT" && s[foeStatusKey] === "paralysis"
+        && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) {
+      spitUpMultiplier = 2;
+    }
     if (moveData.effect === "EFFECT_SPIT_UP") {
       // NOTE the script ends in `adjustsetdamage`, not `adjustnormaldamage`
       // (data/battle_scripts_1.s:2103-2112), so Spit Up takes NO damage roll --
@@ -6604,6 +6680,20 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         if (s[fcKey] !== 5) s[fcKey] += 1;
         furyCutterPower = moveData.power * Math.pow(2, s[fcKey] - 1);
       }
+    }
+    // B3 batch 1: HI JUMP KICK'S CRASH, on the MISS side of the damage path --
+    // the first draft put it in the OHKO branch's miss handling, where Hi Jump
+    // Kick never goes, and the probe read a 0% crash.
+    // BattleScript_MoveMissedDoDamage (data/battle_scripts_1.s:97-112) computes
+    // the move's damage anyway and applies DMG_RECOIL_FROM_MISS
+    // (src/battle_script_commands.c:6747-6753): half of it, minimum 1, capped at
+    // the TARGET's maxHP/2. It is skipped entirely when the target is immune --
+    // the script jumps past the crash on MOVE_RESULT_DOESNT_AFFECT_FOE.
+    if (!hit && moveData.effect === "EFFECT_RECOIL_IF_MISS" && eff !== 0) {
+      const wouldHave = calcDamage(selfMon, foeMon, moveName,
+        battleDamageOptions(ctx, s, actor, moveData));
+      const crash = Math.min(Math.max(1, Math.floor(wouldHave / 2)), Math.floor(foeMon.stats.hp / 2));
+      s[selfHpKey] = Math.max(0, s[selfHpKey] - (crash / selfMon.stats.hp) * 100);
     }
     if (hit) {
       // Reflect/Light Screen: halves damage of the matching category, gated
@@ -6753,6 +6843,25 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       if (recoilDivisor && (moveName === "Struggle" || selfMon.ability !== "Rock Head")) {
         const recoilDmg = Math.max(1, Math.floor(recoilBasis / recoilDivisor));
         s[selfHpKey] = Math.max(0, s[selfHpKey] - (recoilDmg / selfMon.stats.hp) * 100);
+      }
+
+      // B3 batch 1: the CERTAIN self-inflicted stat drops. Both are
+      // MOVE_EFFECT_..._AFFECTS_USER | MOVE_EFFECT_CERTAIN, so they are not
+      // chance secondaries at all -- they happen on every hit, which is what
+      // made "unmodeled" wrong rather than merely incomplete.
+      if (moveData.effect === "EFFECT_OVERHEAT" && dmg > 0) {
+        bumpStage(isYou ? s.youStages : s.oppStages, "spa", -2);
+      }
+      if (moveData.effect === "EFFECT_SUPERPOWER" && dmg > 0) {
+        const selfStages = isYou ? s.youStages : s.oppStages;
+        bumpStage(selfStages, "atk", -1);
+        bumpStage(selfStages, "def", -1);
+      }
+      // SMELLING SALT cures the target's paralysis, and it is CERTAIN too
+      // (MOVE_EFFECT_REMOVE_PARALYSIS | MOVE_EFFECT_CERTAIN, :2822-2841). The
+      // doubling against a paralysed target is handled in the damage options.
+      if (moveData.effect === "EFFECT_SMELLINGSALT" && dmg > 0 && s[foeStatusKey] === "paralysis") {
+        s[foeStatusKey] = null;
       }
 
       // (2) B2b batch 11: RAGE'S ATTACK RAISE, at MOVEEND_RAGE
@@ -7323,6 +7432,14 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
     }
     return out;
+  }
+  if (state[actor === "you" ? "youMustRecharge" : "oppMustRecharge"]) {
+    // B3 batch 1: CANCELER_RECHARGE (src/battle_util.c:2098-2108) sits near the
+    // TOP of the cancel chain -- above flinch, disable, confusion and
+    // paralysis -- so a recharging mon forfeits its turn before any of those
+    // are even consulted, and none of their branches exist. One branch, no
+    // accuracy roll, no status roll.
+    return [{ p: 1, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, recharging: true }];
   }
   if (moveData.effect === "EFFECT_MAGIC_COAT" && isLastToAct) {
     // Cmd_trysetmagiccoat (src/battle_script_commands.c:9085-9098) fails when
@@ -7961,7 +8078,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
     applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null);
-    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null);
+    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.recharging ?? false);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
@@ -8008,7 +8125,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         if (order[0] === "you") { s2.mindYou -= dMind; s2.skillYou -= dSkill; s2.mindOpp += dMind; s2.skillOpp += dSkill; }
         else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
       }
-      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null);
+      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.recharging ?? false);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
       s2.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
@@ -8110,10 +8227,17 @@ function search(ctx, state, turnsRemaining) {
 
   // A charging mon (mid-Dive/Fly/Dig) has no real choice — the game forces
   // the same move again automatically (source-confirmed, no action menu).
-  const oppCandidates = state.oppCharging
-    ? [{ move: state.oppCharging.move, prob: 1 }]
+  // B3 batch 1: so does a RECHARGING one, through the same branch of source
+  // (STATUS2_MULTIPLETURNS || STATUS2_RECHARGE, src/battle_main.c:4160-4165 and
+  // src/battle_util.c:107-110). The AI is not consulted and the player has no
+  // menu; without this the recharge turn's Mind score followed whatever move
+  // the search or the AI happened to pick.
+  const oppForced = state.oppCharging ? state.oppCharging.move : state.oppMustRecharge;
+  const youForced = state.youCharging ? state.youCharging.move : state.youMustRecharge;
+  const oppCandidates = oppForced
+    ? [{ move: oppForced, prob: 1 }]
     : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();
-  const yourMoveChoices = state.youCharging ? [state.youCharging.move]
+  const yourMoveChoices = youForced ? [youForced]
     : selectableMoves(ctx.you.moves, state, "you", ctx.opp, "you");
 
   const options = [];
