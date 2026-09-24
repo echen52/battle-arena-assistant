@@ -648,6 +648,25 @@ const highRiskForDamage = (ctx) => {
   return 0;
 };
 
+// AI_CV_Trick_EffectsToEncourage (data/battle_ai_scripts.s:2344-2352) and its
+// "2" variant (:2354-2356): the hold effects the AI is happy to hand over.
+const TRICK_CONFUSE_HOLD_EFFECTS = new Set([
+  "HOLD_EFFECT_CONFUSE_SPICY", "HOLD_EFFECT_CONFUSE_DRY", "HOLD_EFFECT_CONFUSE_SWEET",
+  "HOLD_EFFECT_CONFUSE_BITTER", "HOLD_EFFECT_CONFUSE_SOUR",
+]);
+// AI_CV_Recycle_ItemsToEncourage (:2366-2372).
+const RECYCLE_ENCOURAGED_HOLD_EFFECTS = new Set([
+  "HOLD_EFFECT_CURE_PAR", "HOLD_EFFECT_CURE_SLP", "HOLD_EFFECT_CURE_PSN",
+  "HOLD_EFFECT_CURE_BRN", "HOLD_EFFECT_CURE_FRZ", "HOLD_EFFECT_CURE_CONFUSION",
+  "HOLD_EFFECT_CURE_STATUS", "HOLD_EFFECT_RESTORE_HP", "HOLD_EFFECT_RESTORE_PCT_HP",
+]);
+// AI_CV_ChangeSelfAbility_AbilitiesToEncourage (:2382-2400) -- the abilities
+// worth stealing or swapping into.
+const CHANGE_SELF_ABILITY_ENCOURAGED = new Set([
+  "Speed Boost", "Battle Armor", "Sand Veil", "Static", "Flash Fire", "Wonder Guard",
+  "Effect Spore", "Swift Swim", "Huge Power", "Rain Dish", "Cute Charm", "Shed Skin",
+]);
+
 const AI_HANDLERS = {
   // -- B2b batch 4: support, status-clearing and status-inflicting --------
   EFFECT_HELPING_HAND: {
@@ -1819,6 +1838,57 @@ const AI_HANDLERS = {
       return dist;
     },
   },
+  // ── B2b batch 10 ────────────────────────────────────────────────────────
+  EFFECT_TRICK: {
+    // AI_CBM_TrickAndKnockOff (:545-548): -10 into Sticky Hold, which is the
+    // ability that blocks the swap in execution too.
+    checkBadMove: (ctx) => (ctx.targetAbility === "Sticky Hold" ? -10 : 0),
+    // AI_CV_Trick (:2322-2353). The AI wants to GIVE AWAY a bad item, and the
+    // two tables that decide "bad" are generated, not retyped: Choice Band
+    // alone in one, plus the confusing berries and Macho Brace in the other.
+    checkViability: (ctx) => {
+      const mine = ctx.userHoldEffect, theirs = ctx.targetHoldEffect;
+      const enc2 = (h) => h === "HOLD_EFFECT_CHOICE_BAND";
+      const enc = (h) => enc2(h) || h === "HOLD_EFFECT_MACHO_BRACE" || TRICK_CONFUSE_HOLD_EFFECTS.has(h);
+      if (enc2(mine)) return enc2(theirs) ? [{ p: 1, delta: -3 }] : [{ p: 1, delta: 5 }];
+      if (enc(mine)) {
+        if (enc(theirs)) return [{ p: 1, delta: -3 }];
+        return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }];
+      }
+      return [{ p: 1, delta: -3 }];
+    },
+  },
+  EFFECT_RECYCLE: {
+    // AI_CBM_Recycle (:554-557): -10 with nothing used up to recycle.
+    checkBadMove: (ctx) => (ctx.userUsedItem ? 0 : -10),
+    // AI_CV_Recycle (:2355-2364): +2 on a 206/256 roll for an encouraged item,
+    // -2 for anything else.
+    checkViability: (ctx) => (RECYCLE_ENCOURAGED_HOLD_EFFECTS.has(ctx.userUsedHoldEffect)
+      ? [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 1 }]
+      : [{ p: 1, delta: -2 }]),
+  },
+  // AI_CV_ChangeSelfAbility (:2366-2380), shared by ROLE PLAY and SKILL SWAP
+  // (:753 and :762 both dispatch to it) -- so it is one object, aliased below.
+  EFFECT_ROLE_PLAY: {
+    checkViability: (ctx) => {
+      const enc = (a) => CHANGE_SELF_ABILITY_ENCOURAGED.has(a);
+      if (enc(ctx.userAbility) || !enc(ctx.targetAbility)) return [{ p: 1, delta: -1 }];
+      return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }];
+    },
+  },
+
+  EFFECT_POISON: {
+    // AI_CheckBadMove dispatches EFFECT_POISON to AI_CBM_Toxic (:148) -- the
+    // SAME routine as Toxic, aliased below rather than copied.
+    // AI_CV_Poison (:1592-1598) is its own, and is NOT AI_CV_Toxic: -1 when the
+    // user is below half or the target is not above half.
+    checkViability: (ctx) => [{ p: 1, delta: (ctx.userHpPct < 50 || ctx.targetHpPct <= 50) ? -1 : 0 }],
+  },
+  EFFECT_LOCK_ON: {
+    // AI_CV_LockOn (:1035-1039): +2 on a 128/256 roll. No AI_CBM row.
+    checkViability: () => [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }],
+  },
+
   // ── B2b batch 9: the remaining status/support effects ───────────────────
   EFFECT_MIST: {
     // AI_CBM_Mist (:1830-1832): -8, not -10, when the user's side already has
@@ -2447,6 +2517,11 @@ AI_HANDLERS.EFFECT_EVASION_UP_2 = AI_HANDLERS.EFFECT_EVASION_UP;                
 // aliases so they cannot stop being equivalent.
 AI_HANDLERS.EFFECT_DEFENSE_DOWN_2 = AI_HANDLERS.EFFECT_DEFENSE_DOWN;             // AI_CBM_DefenseDown / AI_CV_DefenseDown
 AI_HANDLERS.EFFECT_SPEED_DOWN_2 = AI_HANDLERS.EFFECT_SPEED_DOWN;                 // AI_CBM_SpeedDown / AI_CV_SpeedDown
+// B2b batch 10: EFFECT_POISON shares AI_CBM_Toxic (:148) but has its OWN
+// AI_CV_Poison, so only the checkBadMove half is aliased.
+AI_HANDLERS.EFFECT_POISON.checkBadMove = AI_HANDLERS.EFFECT_TOXIC.checkBadMove;
+// AI_CV_ChangeSelfAbility is dispatched for BOTH Role Play and Skill Swap.
+AI_HANDLERS.EFFECT_SKILL_SWAP = AI_HANDLERS.EFFECT_ROLE_PLAY;
 
 // ─────────────────────────────────────────────────────────────────────────
 // 4. DAMAGE CALCULATION (Gen III formula)
@@ -3664,6 +3739,12 @@ function chooseOpponentMoves(opp, you, state) {
     targetSideHasSpikes: state.youSpikesLayers > 0,
     userMudSport: state.oppMudSport,
     userSideMisted: state.oppMistTurns != null,
+    // B2b batch 10. The AI reads hold EFFECTS, not item names, and it reads
+    // them through the same generated table the battle does.
+    userHoldEffect: (itemData(opp.item) || {}).holdEffect ?? null,
+    targetHoldEffect: (itemData(you.item) || {}).holdEffect ?? null,
+    userUsedItem: state.oppUsedItem != null,
+    userUsedHoldEffect: state.oppUsedItem ? ((itemData(state.oppUsedItem) || {}).holdEffect ?? null) : null,
     userStockpile: state.oppStockpile,
     userWaterSport: state.oppWaterSport,
     targetNightmared: state.youNightmared,
@@ -4013,6 +4094,19 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B2b batch 9. gSideTimers.mistTimer (5 turns, src/battle_script_commands.c
     // :7734-7748) and gDisableStructs.stockpileCounter (0-3).
     youMistTurns: null, oppMistTurns: null,
+    // B2b batch 10: STATUS3_ALWAYS_HITS. The flag sits on the TARGET and means
+    // the mon that locked on cannot miss it; 1v1 makes "who locked on" implicit.
+    youAlwaysHitTurns: null, oppAlwaysHitTurns: null,
+    // B2b batch 10: null means "no override". For items, `undefined` means no
+    // override and `null` means "overridden to no item at all" -- Trick can
+    // legitimately leave a mon holding nothing, and that is different from
+    // never having been tricked.
+    // gBattleStruct->usedHeldItems: WHAT was consumed, not just that something
+    // was. Recycle restores from this, and inferring it from the built mon does
+    // not work once the mon's effective item has already been cleared.
+    youUsedItem: null, oppUsedItem: null,
+    youAbilityOverride: null, oppAbilityOverride: null,
+    youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
     youBouncing: false, oppBouncing: false,
     youStockpile: 0, oppStockpile: 0,
@@ -4346,7 +4440,16 @@ function tryCureWithBerry(s, side, mon) {
     s[confKey] = false;
     used = true;
   }
-  if (used) s[consumedKey] = true;
+  if (used) {
+    s[consumedKey] = true;
+    s[side === "you" ? "youUsedItem" : "oppUsedItem"] = mon.item;
+    // B2b batch 10: a consumed berry now also clears the HELD ITEM, because
+    // items became state-mutable in this batch and "consumed" has to mean
+    // "not held any more" for Recycle and Trick to be right. Before the
+    // override existed there was nowhere to write this, and the consumed flag
+    // alone carried the meaning.
+    s[side === "you" ? "youItemOverride" : "oppItemOverride"] = null;
+  }
 }
 
 // B7: EVERY battle hold effect in the ROM, each in EXACTLY ONE bucket. There
@@ -4456,6 +4559,8 @@ function tryEndOfTurnItem(s, side, mon) {
       if (s[consumedKey] || curHp > Math.floor(maxHp / 2)) return;
       s[hpKey] = Math.min(100, s[hpKey] + (d.param / maxHp) * 100);
       s[consumedKey] = true;
+      s[side === "you" ? "youUsedItem" : "oppUsedItem"] = mon.item;
+      s[side === "you" ? "youItemOverride" : "oppItemOverride"] = null;
       return;
     }
     // White Herb. Every stage BELOW default goes back to default; stages ABOVE
@@ -4468,7 +4573,11 @@ function tryEndOfTurnItem(s, side, mon) {
       for (const k of Object.keys(stages)) {
         if (stages[k] < 0) { stages[k] = 0; restored = true; }
       }
-      if (restored) s[consumedKey] = true;
+      if (restored) {
+        s[consumedKey] = true;
+        s[side === "you" ? "youUsedItem" : "oppUsedItem"] = mon.item;
+        s[side === "you" ? "youItemOverride" : "oppItemOverride"] = null;
+      }
       return;
     }
     // Liechi / Salac / Petaya. At hp <= maxHP/param (param is 4, so a quarter),
@@ -5377,6 +5486,84 @@ const EFFECT_EXECUTORS = {
   // Unreachable in practice -- Metronome always calls something, since its pool
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
+  // -- B2b batch 10 executors ---------------------------------------------
+  EFFECT_SKILL_SWAP: (s, actor, ctx) => {
+    // Cmd_tryswapabilities (src/battle_script_commands.c:9392-9412): fails when
+    // BOTH sides have no ability, or EITHER has Wonder Guard. Note it does NOT
+    // fail merely because the two abilities are identical.
+    const isYou = actor === "you";
+    const self = isYou ? ctx.you : ctx.opp;
+    const foe = isYou ? ctx.opp : ctx.you;
+    if (!self.ability && !foe.ability) return "failed";
+    if (self.ability === "Wonder Guard" || foe.ability === "Wonder Guard") return "failed";
+    s[isYou ? "youAbilityOverride" : "oppAbilityOverride"] = foe.ability;
+    s[isYou ? "oppAbilityOverride" : "youAbilityOverride"] = self.ability;
+  },
+  EFFECT_ROLE_PLAY: (s, actor, ctx) => {
+    // Cmd_trycopyability (:9414-9428): copies the TARGET's ability onto the
+    // user; fails if the target has none or has Wonder Guard. One-directional.
+    const isYou = actor === "you";
+    const foe = isYou ? ctx.opp : ctx.you;
+    if (!foe.ability || foe.ability === "Wonder Guard") return "failed";
+    s[isYou ? "youAbilityOverride" : "oppAbilityOverride"] = foe.ability;
+  },
+  EFFECT_TRICK: (s, actor, ctx) => {
+    // Cmd_tryswapitems (:9189-9260). THE ARENA IS ONE OF THE BATTLE TYPES THAT
+    // ALLOWS IT: the "opponent can't swap items with the player" guard is gated
+    // on NOT being LINK | E_READER | FRONTIER | SECRET_BASE | RECORDED_LINK,
+    // and BATTLE_TYPE_ARENA sits inside BATTLE_TYPE_FRONTIER. So an Arena
+    // opponent's Trick works, which is exactly the case that matters here.
+    // Fails when neither side holds anything, and Sticky Hold blocks it.
+    const isYou = actor === "you";
+    const self = isYou ? ctx.you : ctx.opp;
+    const foe = isYou ? ctx.opp : ctx.you;
+    if (!self.item && !foe.item) return "failed";
+    if (foe.ability === "Sticky Hold") return "failed";
+    s[isYou ? "youItemOverride" : "oppItemOverride"] = foe.item ?? null;
+    s[isYou ? "oppItemOverride" : "youItemOverride"] = self.item ?? null;
+  },
+  EFFECT_RECYCLE: (s, actor, ctx) => {
+    // Cmd_tryrecycleitem (:9430-9452): restores the user's USED item, and only
+    // when the user is currently holding nothing. The one consumable this
+    // engine tracks is the status-curing berry (youBerryConsumed), so that is
+    // what can be recycled; any other consumption is not modelled and the move
+    // correctly fails rather than inventing an item.
+    const isYou = actor === "you";
+    const self = isYou ? ctx.you : ctx.opp;
+    const usedKey = isYou ? "youUsedItem" : "oppUsedItem";
+    const consumedKey = isYou ? "youBerryConsumed" : "oppBerryConsumed";
+    const itemKey = isYou ? "youItemOverride" : "oppItemOverride";
+    // Read the HELD item from the state, not from the mon: whether ctx carries
+    // effective mons depends on the caller, and this must be right either way.
+    const held = s[itemKey] !== undefined ? s[itemKey] : self.item;
+    if (!s[usedKey]) return "failed";
+    if (held) return "failed";
+    s[itemKey] = s[usedKey];
+    s[usedKey] = null;
+    s[consumedKey] = false;
+  },
+
+  EFFECT_POISON: (s, actor, ctx) => {
+    // BattleScript_EffectPoison (data/battle_scripts_1.s:1010-1029) is
+    // BattleScript_EffectToxic's script minus the bad-poison counter: Immunity,
+    // Substitute, already-poisoned, Poison/Steel types, any other status,
+    // accuracy, Safeguard. inflictStatus already applies that whole chain,
+    // which is why EFFECT_TOXIC is one line too -- the ONLY difference between
+    // them is the counter, and this is the sibling that never got ported.
+    const isYou = actor === "you";
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    const foeSide = isYou ? "opp" : "you";
+    if (!inflictStatus(s, foeSide, "poison", foeMon.types, foeMon.ability)) return "failed";
+  },
+  EFFECT_LOCK_ON: (s, actor) => {
+    // Cmd_setalwayshitflag (src/battle_script_commands.c:8120-8127) puts a
+    // 2-turn STATUS3_ALWAYS_HITS on the TARGET, meaning "attacks from the user
+    // against THIS mon cannot miss". Two turns because it is decremented at the
+    // end of the turn it is set (src/battle_util.c:1739-1740), so it covers
+    // this turn and the next one.
+    s[actor === "you" ? "oppAlwaysHitTurns" : "youAlwaysHitTurns"] = 2;
+  },
+
   // -- B2b batch 9 executors ----------------------------------------------
   EFFECT_MAGIC_COAT: (s, actor) => {
     // gProtectStructs.bounceMove, set for the rest of THIS turn only. The
@@ -5754,6 +5941,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // Spit Up: the stockpile multiplier is applied inline through calcDamage's
   // baseMultiplier, and the counter is spent there too.
   "EFFECT_SPIT_UP",
+  // B2b batch 10: Thief's steal is a CERTAIN on-hit effect, applied inline.
+  "EFFECT_THIEF",
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -5865,8 +6054,6 @@ const ACCEPTED_UNMODELED_EFFECTS = {
                         "The lock alone would collapse to 2 classes like Disable's; the sleep " +
                         "interaction is the expensive half, and it touches Rest, every sleep move " +
                         "and the sleep counter.",
-  EFFECT_THIEF:         "steals the target's held item (Cmd_removeitem) — unmodeled (1 grid cell); " +
-                        "needs the same state-level mutable item as Trick, and lands with it",
   EFFECT_TRIPLE_KICK:   "three hits at 10/20/30 power, each with its own accuracy check, stopping at " +
                         "the first miss (data/battle_scripts_1.s:2904-2933) — unmodeled (1 cell). The " +
                         "multi-hit machinery here applies ONE damage number N times; this needs a " +
@@ -6205,6 +6392,24 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // a chance secondary -- it happens on every hit. Binding moves are not
   // modelled at all (EFFECT_TRAP is ledgered), so only the two that exist here
   // are cleared, and Spikes never bit in the first place.
+  if (moveData.effect === "EFFECT_THIEF" && hit) {
+    // MOVE_EFFECT_STEAL_ITEM (src/battle_script_commands.c:2738-2790), applied
+    // inline because it is a CERTAIN on-hit effect of a damaging move -- the
+    // executor table only ever runs on the secondary-chance dispatch.
+    //
+    // THE ARENA IS A FRONTIER BATTLE, and that decides this: the guard that
+    // stops an OPPONENT taking the player's item is gated on NOT being
+    // EREADER | FRONTIER | LINK | RECORDED_LINK | SECRET_BASE, and
+    // BATTLE_TYPE_ARENA sits inside BATTLE_TYPE_FRONTIER. So here the steal
+    // really happens, in both directions. It requires the thief to be holding
+    // NOTHING and the target to be holding SOMETHING, and Sticky Hold blocks it.
+    const thiefItem = isYou ? s.youItemOverride !== undefined ? s.youItemOverride : ctx.you.item
+      : s.oppItemOverride !== undefined ? s.oppItemOverride : ctx.opp.item;
+    if (!thiefItem && foeMon.item && foeMon.ability !== "Sticky Hold") {
+      s[isYou ? "youItemOverride" : "oppItemOverride"] = foeMon.item;
+      s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
+    }
+  }
   if (moveData.effect === "EFFECT_RAPID_SPIN" && hit) {
     s[isYou ? "youSpikesLayers" : "oppSpikesLayers"] = 0;
     s[isYou ? "youSeeded" : "oppSeeded"] = false;
@@ -6817,6 +7022,12 @@ function applyEndOfTurnEffects(ctx, s) {
   for (const k of ["youMistTurns", "oppMistTurns"]) {
     if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
   }
+  // B2b batch 10: Lock On's 2-turn window (src/battle_util.c:1739-1740 --
+  // ENDTURN_LOCK_ON decrements it, so it covers the turn it was set and one
+  // more).
+  for (const k of ["youAlwaysHitTurns", "oppAlwaysHitTurns"]) {
+    if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
+  }
 
   // B2b batch 4: Nightmare, maxHP/4 per end-of-turn and ONLY while asleep --
   // source clears STATUS2_NIGHTMARE the moment the mon wakes, so a woken mon
@@ -7301,6 +7512,13 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
         // accuracy === null means "always hits" (e.g. Faint Attack, Swift) —
         // these bypass the accuracy check ENTIRELY, including evasion.
         if (baseAccuracy === null) return [{ p: 1, hit: true }];
+        // B2b batch 10: LOCK ON. Cmd_accuracycheck (:1056-1060) returns a
+        // guaranteed hit while the TARGET carries STATUS3_ALWAYS_HITS from this
+        // attacker -- checked BEFORE the accuracy chain, so evasion, Sand Veil
+        // and BrightPowder are all skipped, not merely outweighed.
+        if (state[actor === "you" ? "oppAlwaysHitTurns" : "youAlwaysHitTurns"] != null) {
+          return [{ p: 1, hit: true }];
+        }
         // B7c: one call, whole chain, uncapped -- Sand Veil is inside it now
         // rather than multiplied onto an already-capped number here.
         const effAcc = accuracyCalc(baseAccuracy, attackerAccStage, targetEvasionStage,
@@ -7498,7 +7716,60 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
 const QUICK_CLAW_RANDOM_SPACE = 65536; // gRandomTurnNumber is a u16
 const quickClawThreshold = (param) => Math.floor((0xFFFF * param) / 100);
 
+// ── B2b batch 10: state-level mutable abilities and items ─────────────────
+// Trick, Skill Swap, Role Play, Recycle and Thief all change something the
+// engine had treated as immutable: a mon's ability or its held item, which live
+// on the BUILT mon and are read from ~70 and ~16 places respectively.
+//
+// Patching those 86 sites would be the wrong shape. The override lives in the
+// STATE (where a per-branch change belongs -- ctx is shared across every branch
+// of the search and must never be mutated), and it is resolved at the two choke
+// points every read flows through: the top of resolveTurn, and the AI's own
+// move choice. Downstream code keeps reading mon.ability and mon.item and is
+// simply handed the effective mon.
+//
+// Identity is preserved when nothing is overridden -- the same object comes
+// back, so the common case costs one property read and allocates nothing.
+// MEMOISED BY (mon, ability, item), and that is load-bearing, not tidiness.
+// A2's roll-class cache is a WeakMap keyed on the mon OBJECTS
+// (_aiRollClassCache), so handing the search a freshly-built clone every turn
+// missed that cache on every lookup. Measured: throughput fell 42.9 -> 16.8
+// solves/sec, concentrated in the sets that consume a berry (a consumed berry
+// now writes an item override, which is what started cloning). With the clones
+// interned per distinct override the identity is stable again and the memo
+// works. The lesson is cheap to state and was expensive to find: introducing a
+// new object identity anywhere upstream of an identity-keyed cache silently
+// disables it.
+const _effectiveMonCache = new WeakMap();
+function effectiveMon(mon, state, side) {
+  const ability = state[side === "you" ? "youAbilityOverride" : "oppAbilityOverride"];
+  const item = state[side === "you" ? "youItemOverride" : "oppItemOverride"];
+  if (ability == null && item === undefined) return mon;
+  let byKey = _effectiveMonCache.get(mon);
+  if (!byKey) { byKey = new Map(); _effectiveMonCache.set(mon, byKey); }
+  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}`;
+  let out = byKey.get(key);
+  if (!out) {
+    out = { ...mon };
+    if (ability != null) out.ability = ability;
+    if (item !== undefined) out.item = item;
+    byKey.set(key, out);
+  }
+  return out;
+}
+
+function effectiveCtx(ctx, state) {
+  const you = effectiveMon(ctx.you, state, "you");
+  const opp = effectiveMon(ctx.opp, state, "opp");
+  if (you === ctx.you && opp === ctx.opp) return ctx;
+  return { ...ctx, you, opp };
+}
+
 function resolveTurn(ctx, state, yourMove, oppMove) {
+  // Resolve the overrides ONCE per turn, here, so that every downstream read of
+  // mon.ability / mon.item sees the swapped values without any of them knowing
+  // the swap exists.
+  ctx = effectiveCtx(ctx, state);
   const { you, opp } = ctx;
   const yourMoveData = MOVES[yourMove];
   const oppMoveData = MOVES[oppMove];
@@ -7743,7 +8014,7 @@ function search(ctx, state, turnsRemaining) {
   // the same move again automatically (source-confirmed, no action menu).
   const oppCandidates = state.oppCharging
     ? [{ move: state.oppCharging.move, prob: 1 }]
-    : chooseOpponentMoves(ctx.opp, ctx.you, state);
+    : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();
   const yourMoveChoices = state.youCharging ? [state.youCharging.move]
     : selectableMoves(ctx.you.moves, state, "you", ctx.opp, "you");
 
