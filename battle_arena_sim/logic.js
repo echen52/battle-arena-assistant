@@ -1819,6 +1819,73 @@ const AI_HANDLERS = {
       return dist;
     },
   },
+  // ── B2b batch 9: the remaining status/support effects ───────────────────
+  EFFECT_MIST: {
+    // AI_CBM_Mist (:1830-1832): -8, not -10, when the user's side already has
+    // it -- discouraged, not forbidden, like Snore's.
+    checkBadMove: (ctx) => (ctx.userSideMisted ? -8 : 0),
+  },
+  EFFECT_STOCKPILE: {
+    // AI_CBM_Stockpile (:2109-2112): -10 at three, the cap.
+    checkBadMove: (ctx) => (ctx.userStockpile >= 3 ? -10 : 0),
+  },
+  EFFECT_SPIT_UP: {
+    // AI_CBM_SpitUpAndSwallow (:2114-2118): -10 if the move cannot affect the
+    // target at all, and -10 with nothing stockpiled.
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      return ctx.userStockpile === 0 ? -10 : 0;
+    },
+    // AI_CV_SpitUp (:1740-1746): +2 at two or more stockpiles, on a 176/256
+    // roll. `if_random_less_than 80` JUMPS past the score on <80/256.
+    checkViability: (ctx) => (ctx.userStockpile < 2
+      ? [{ p: 1, delta: 0 }]
+      : [{ p: 80 / 256, delta: 0 }, { p: 176 / 256, delta: 2 }]),
+  },
+  EFFECT_SWALLOW: {
+    checkBadMove: (ctx) => {
+      if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
+      return ctx.userStockpile === 0 ? -10 : 0;
+    },
+    // AI_CV_Heal, shared verbatim with Recover and Soft-Boiled (:745 dispatches
+    // EFFECT_SWALLOW straight to it) -- the same function object, not a copy.
+    checkViability: healFamilyViability,
+  },
+  EFFECT_MEMENTO: {
+    // AI_CBM_Memento (:2124-2126) FALLS THROUGH into AI_CBM_BatonPass, whose
+    // count_usable_party_mons check is about having something to switch to.
+    // The Arena has a party (the streak team) but no switching, so the
+    // fallthrough's -10 is not reachable from a faint alone; the two stat
+    // checks are what matters here.
+    checkBadMove: (ctx) => {
+      if (ctx.targetStages.atk <= -6) return -10;
+      if (ctx.targetStages.spa <= -6) return -8;
+      return 0;
+    },
+    // AI_CV_SelfKO (:2409-2434), shared with Destiny Bond's family.
+    checkViability: (ctx) => {
+      let dist = [{ p: 1, delta: 0 }];
+      if (!(ctx.targetStages.evasion < 1)) {
+        dist = combineDist(dist, [{ p: 1, delta: -1 }]);
+        if (!(ctx.targetStages.evasion < 4)) {
+          dist = combineDist(dist, [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: -1 }]);
+        }
+      }
+      // Encourage1: a hurt user, or one about to be outsped, wants to spend
+      // itself; a healthy faster one is discouraged on a 206/256 roll.
+      if (ctx.userHpPct >= 80 && !ctx.targetFaster) {
+        return combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -3 }]);
+      }
+      if (ctx.userHpPct > 50) {
+        return combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -1 }]);
+      }
+      dist = combineDist(dist, [{ p: 128 / 256, delta: 1 }, { p: 128 / 256, delta: 0 }]);
+      if (ctx.userHpPct <= 30) {
+        dist = combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 1 }]);
+      }
+      return dist;
+    },
+  },
   EFFECT_PERISH_SONG: {
     // AI_CBM_PerishSong (:447-449) — no AI_CV_PerishSong exists in source.
     checkBadMove: (ctx) => (ctx.targetPerishSonged ? -10 : 0),
@@ -2664,7 +2731,7 @@ function calcDamage(attacker, defender, moveName, {
   screenActive = false, weather = null, defenderForesighted = false,
   attackerStatus = null, defenderStatus = null,
   mudSportActive = false, waterSportActive = false,
-  defenderHpPct = 100, variablePower = null, aiEstimate = false,
+  defenderHpPct = 100, variablePower = null, aiEstimate = false, baseMultiplier = 1,
 } = {}) {
   const move = MOVES[moveName];
   if (move.power === 0) return 0;
@@ -2880,7 +2947,12 @@ function calcDamage(attacker, defender, moveName, {
     preFinal = Math.floor((15 * preFinal) / 10);
   }
 
-  let base = preFinal + 2;
+  // B2b batch 9: Spit Up multiplies CalculateBaseDamage's OUTPUT by the
+  // stockpile counter (Cmd_stockpiletobasedamage, src/battle_script_commands.c
+  // :9002-9022) and only THEN runs typecalc, so the multiplier goes here --
+  // after the +2, before STAB and type. Multiplying the final number instead
+  // would floor in the wrong order and lose a few HP.
+  let base = (preFinal + 2) * baseMultiplier;
 
   const stab = attacker.types.includes(move.type) ? 1.5 : 1;
   const eff = typeEffectiveness(move.type, defender.types, defenderForesighted);
@@ -3591,6 +3663,8 @@ function chooseOpponentMoves(opp, you, state) {
     // B2b batch 4.
     targetSideHasSpikes: state.youSpikesLayers > 0,
     userMudSport: state.oppMudSport,
+    userSideMisted: state.oppMistTurns != null,
+    userStockpile: state.oppStockpile,
     userWaterSport: state.oppWaterSport,
     targetNightmared: state.youNightmared,
     // AI_CV_HealBell's second clause reads the TARGET's PARTY status. An Arena
@@ -3936,6 +4010,12 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // CancelMultiTurnMoves (:887) needs a switch. Notably using a DIFFERENT
     // move does NOT reset it, which is the Gen III behaviour, not an omission.
     youFuryCutter: 0, oppFuryCutter: 0,
+    // B2b batch 9. gSideTimers.mistTimer (5 turns, src/battle_script_commands.c
+    // :7734-7748) and gDisableStructs.stockpileCounter (0-3).
+    youMistTurns: null, oppMistTurns: null,
+    // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
+    youBouncing: false, oppBouncing: false,
+    youStockpile: 0, oppStockpile: 0,
     youWaterSport: false, oppWaterSport: false,
     // STATUS2_NIGHTMARE -- maxHP/4 per end-of-turn, and only while asleep.
     youNightmared: false, oppNightmared: false,
@@ -4527,6 +4607,11 @@ function statDownExecutor(stageKey, amount, blockingAbility) {
     const foeMon = actor === "you" ? ctx.opp : ctx.you;
     const foeSubKey = actor === "you" ? "oppSubstituteHP" : "youSubstituteHP";
     if (s[foeSubKey]) return "failed";
+    // B2b batch 9: Mist. Cmd_statbuffchange (:6958-6968) blocks a stat DECREASE
+    // while the target's side has mistTimer running, unless the change is
+    // `certain` or the move is Curse. Every stat-lowering MOVE in this engine
+    // routes through this one function, which is why the check belongs here.
+    if (s[actor === "you" ? "oppMistTurns" : "youMistTurns"] != null) return "failed";
     if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
     if (blockingAbility && foeMon.ability === blockingAbility) return "failed";
     const foeStages = actor === "you" ? s.oppStages : s.youStages;
@@ -5292,6 +5377,59 @@ const EFFECT_EXECUTORS = {
   // Unreachable in practice -- Metronome always calls something, since its pool
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
+  // -- B2b batch 9 executors ----------------------------------------------
+  EFFECT_MAGIC_COAT: (s, actor) => {
+    // gProtectStructs.bounceMove, set for the rest of THIS turn only. The
+    // failure case (the user moves last) is decided in enumerateActionOutcomes.
+    s[actor === "you" ? "youBouncing" : "oppBouncing"] = true;
+  },
+  EFFECT_MIST: (s, actor) => {
+    // Cmd_setmist (:7734-7748): fails if already up, else a 5-turn side timer.
+    const key = actor === "you" ? "youMistTurns" : "oppMistTurns";
+    if (s[key] != null) return "failed";
+    s[key] = 5;
+  },
+  EFFECT_STOCKPILE: (s, actor) => {
+    // Cmd_stockpile (:8985-9000): at three it sets MOVE_RESULT_MISSED -- a
+    // MISS, not a FAILURE, which is a different Skill outcome. Preserved.
+    const key = actor === "you" ? "youStockpile" : "oppStockpile";
+    if (s[key] === 3) return "missed";
+    s[key] += 1;
+  },
+  EFFECT_SWALLOW: (s, actor, ctx) => {
+    // Cmd_stockpiletohpheal (:9024-9053): maxHP / (1 << (3 - counter)) --
+    // a quarter, a half, then everything -- and the counter is spent either
+    // way. Fails with nothing stored, and fails at full HP WITHOUT healing
+    // while still clearing the counter.
+    const isYou = actor === "you";
+    const key = isYou ? "youStockpile" : "oppStockpile";
+    const hpKey = isYou ? "yourHpPct" : "oppHpPct";
+    const mon = isYou ? ctx.you : ctx.opp;
+    if (s[key] === 0) return "failed";
+    const count = s[key];
+    s[key] = 0;
+    if (s[hpKey] >= 100) return "failed";
+    const heal = Math.max(1, Math.floor(mon.stats.hp / (1 << (3 - count))));
+    s[hpKey] = Math.min(100, s[hpKey] + (heal / mon.stats.hp) * 100);
+  },
+  EFFECT_MEMENTO: (s, actor, ctx) => {
+    // Cmd_trymemento (:9265-9283): fails only when the target is ALREADY at
+    // minimum in BOTH Attack and Special Attack. Otherwise the user's HP goes
+    // to zero and the target drops 2 in each.
+    const isYou = actor === "you";
+    const foeStages = isYou ? s.oppStages : s.youStages;
+    const foeMon = isYou ? ctx.opp : ctx.you;
+    if (foeStages.atk <= -6 && foeStages.spa <= -6) return "failed";
+    s[isYou ? "yourHpPct" : "oppHpPct"] = 0;
+    // The drops themselves still go through the normal blocks -- Substitute,
+    // Clear Body / White Smoke and Mist -- because statbuffchange is what
+    // applies them, and Memento passes STAT_CHANGE_ALLOW_PTR, not `certain`.
+    if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return;
+    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return;
+    if (s[isYou ? "oppMistTurns" : "youMistTurns"] != null) return;
+    if (foeMon.ability !== "Hyper Cutter") bumpStage(foeStages, "atk", -2);
+    bumpStage(foeStages, "spa", -2);
+  },
   // -- B2b batch 6 executors ----------------------------------------------
   EFFECT_SPLASH: () => undefined,
   // BattleScript_EffectSplash (data/battle_scripts_1.s:1830-1839) prints
@@ -5610,6 +5748,12 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // LEFT the accepted-unmodelled ledger in this commit; Razor Wind was never on
   // it and simply threw.
   "EFFECT_RAZOR_WIND", "EFFECT_SKULL_BASH", "EFFECT_SOLAR_BEAM",
+  // B2b batch 9. Rapid Spin's MOVE_EFFECT_RAPIDSPIN is CERTAIN, not a chance
+  // secondary, and is applied inline in the damage path.
+  "EFFECT_RAPID_SPIN",
+  // Spit Up: the stockpile multiplier is applied inline through calcDamage's
+  // baseMultiplier, and the counter is spent there too.
+  "EFFECT_SPIT_UP",
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -5723,6 +5867,10 @@ const ACCEPTED_UNMODELED_EFFECTS = {
                         "and the sleep counter.",
   EFFECT_THIEF:         "steals the target's held item (Cmd_removeitem) — unmodeled (1 grid cell); " +
                         "needs the same state-level mutable item as Trick, and lands with it",
+  EFFECT_TRIPLE_KICK:   "three hits at 10/20/30 power, each with its own accuracy check, stopping at " +
+                        "the first miss (data/battle_scripts_1.s:2904-2933) — unmodeled (1 cell). The " +
+                        "multi-hit machinery here applies ONE damage number N times; this needs a " +
+                        "per-hit power vector, which is a different loop, not a distribution entry.",
 };
 
 // Warn-once dedup — module-scoped so a full 552-set sweep prints at most one
@@ -5742,7 +5890,7 @@ function warnUnmodeledMechanicOnce(effect, moveName) {
 // alternative -- a second, probe-only damage estimate -- is exactly the drift
 // anti-pattern this project exists downstream of, and it would be wrong the
 // moment either copy gained a modifier the other lacked.
-function battleDamageOptions(ctx, s, actor, moveData, variablePower = null) {
+function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, baseMultiplier = 1) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
@@ -5778,6 +5926,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null) {
     // Either side's sport halves that type for EVERYONE (the flag is read off
     // gStatuses3 for both battlers in CalculateBaseDamage), so this is an OR
     // across the two sides, not the attacker's own flag.
+    baseMultiplier,
     mudSportActive: s.youMudSport || s.oppMudSport,
     waterSportActive: s.youWaterSport || s.oppWaterSport,
   };
@@ -6050,6 +6199,17 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // falls through to the normal power>0 damage-dealing branch below
   }
 
+  // B2b batch 9: Rapid Spin frees the USER from Spikes, Leech Seed and any
+  // binding move (Cmd_rapidspinfree via MOVE_EFFECT_RAPIDSPIN,
+  // src/battle_script_commands.c:2818-2821). MOVE_EFFECT_CERTAIN, so it is not
+  // a chance secondary -- it happens on every hit. Binding moves are not
+  // modelled at all (EFFECT_TRAP is ledgered), so only the two that exist here
+  // are cleared, and Spikes never bit in the first place.
+  if (moveData.effect === "EFFECT_RAPID_SPIN" && hit) {
+    s[isYou ? "youSpikesLayers" : "oppSpikesLayers"] = 0;
+    s[isYou ? "youSeeded" : "oppSeeded"] = false;
+  }
+
   // ── B2b batch 5: the two non-damage outcomes of a damaging move ─────────
   if (variablePower === "failed") {
     // Endeavor against a target that is not above the user. The script takes
@@ -6155,6 +6315,24 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // Computed here, where the state lives, and handed to the SINGLE damage
     // function as its power override rather than recomputed inside it.
     let furyCutterPower = variablePower;
+    // B2b batch 9: Spit Up. The counter multiplies the damage and is SPENT
+    // whether or not the move connects meaningfully -- source zeroes it inside
+    // Cmd_stockpiletobasedamage, after the damage is computed. With nothing
+    // stored the move fails outright.
+    let spitUpMultiplier = 1;
+    if (moveData.effect === "EFFECT_SPIT_UP") {
+      // NOTE the script ends in `adjustsetdamage`, not `adjustnormaldamage`
+      // (data/battle_scripts_1.s:2103-2112), so Spit Up takes NO damage roll --
+      // handled by SET_DAMAGE_ROLL_EXEMPT below, beside the other set-damage
+      // moves.
+      const spKey = isYou ? "youStockpile" : "oppStockpile";
+      if (s[spKey] === 0) {
+        s[skillKey] += skillDelta("noEffect");
+        return;
+      }
+      spitUpMultiplier = s[spKey];
+      s[spKey] = 0;
+    }
     if (moveData.effect === "EFFECT_FURY_CUTTER") {
       const fcKey = isYou ? "youFuryCutter" : "oppFuryCutter";
       if (!hit || eff === 0) {
@@ -6170,7 +6348,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // Crits bypass this (gCritMultiplier==1 gate) — moot here since this
       // engine never branches crits (expected-value damage only, HANDOFF §4
       // known gap), so screenActive is always safe to apply when present.
-      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, furyCutterPower));
+      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, furyCutterPower, spitUpMultiplier));
       // Bypass bonus: moves that ignore semi-invulnerability (Surf/Whirlpool
       // vs Dive, Earthquake vs Dig, Twister/Gust vs Fly) double damage;
       // Thunder/Sky Uppercut bypass without the bonus (source-confirmed).
@@ -6440,6 +6618,12 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // — those score Skill as noEffect instead of the default landed/+1.
       const result = executor(s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer);
       if (result === "failed") outcome = "noEffect";
+      // B2b batch 9: "missed" is a THIRD outcome an executor can report, and
+      // the distinction is real in the Arena's Skill scoring. Cmd_stockpile at
+      // three sets MOVE_RESULT_MISSED (src/battle_script_commands.c:8990),
+      // not MOVE_RESULT_FAILED -- a miss, which BattleArena_AddSkillPoints
+      // scores differently from a failure.
+      else if (result === "missed") outcome = "miss";
     } else {
       // A3: the EFFECT_TOXIC exemption that used to live on this branch is GONE.
       // It let Toxic land, score +1 Skill and apply nothing whenever the target
@@ -6621,6 +6805,16 @@ function applyEndOfTurnEffects(ctx, s) {
   // B2: Taunt decay. Cmd_settaunt sets 2; the timer decrements per end-of-turn
   // (ENDTURN_TAUNT, src/battle_util.c:1187) and the lock lifts at 0.
   for (const k of ["youTauntTurns", "oppTauntTurns"]) {
+    if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
+  }
+  // B2b batch 9: the per-turn Magic Coat flag. Cleared here as well as at the
+  // start of resolveTurn so that a stored state never carries a stale bounce.
+  s.youBouncing = false;
+  s.oppBouncing = false;
+
+  // B2b batch 9: Mist's 5-turn side timer (src/battle_util.c:1277-1280,
+  // ENDTURN_MIST -- it clears SIDE_STATUS_MIST when the counter reaches 0).
+  for (const k of ["youMistTurns", "oppMistTurns"]) {
     if (s[k] != null) { s[k] -= 1; if (s[k] <= 0) s[k] = null; }
   }
 
@@ -6820,6 +7014,14 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
     }
     return out;
+  }
+  if (moveData.effect === "EFFECT_MAGIC_COAT" && isLastToAct) {
+    // Cmd_trysetmagiccoat (src/battle_script_commands.c:9085-9098) fails when
+    // `gCurrentTurnActionNumber == gBattlersCount - 1` -- the user is the last
+    // battler to act this turn, so there is nothing left to bounce. In singles
+    // that is exactly "moves second", which only the enumerator knows, so the
+    // failure is decided here rather than in the executor.
+    return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false, variablePower: "failed" }];
   }
   if (moveData.effect === "EFFECT_ENDEAVOR") {
     // BattleScript_EffectEndeavor (data/battle_scripts_1.s:3684-3695) runs
@@ -7378,6 +7580,9 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   const oppMoveData = MOVES[oppMove];
   const results = [];
   state = freshTurnDamageTracking(state);
+  // B2b batch 9: bounceMove is a PER-TURN flag (gProtectStructs is cleared each
+  // turn), so it never survives into the next one.
+  state = { ...state, youBouncing: false, oppBouncing: false };
 
   const firstMove = order[0] === "you" ? yourMove : oppMove;
   const firstMoveData = order[0] === "you" ? yourMoveData : oppMoveData;
@@ -7398,15 +7603,43 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       continue;
     }
 
-    const secondMove = order[1] === "you" ? yourMove : oppMove;
-    const secondMoveData = order[1] === "you" ? yourMoveData : oppMoveData;
+    let secondMove = order[1] === "you" ? yourMove : oppMove;
+    let secondMoveData = order[1] === "you" ? yourMoveData : oppMoveData;
+    // B2b batch 9: MAGIC COAT'S BOUNCE. If the FIRST actor set bounceMove this
+    // turn and the second actor then uses a magic-coat-affected status move,
+    // the move is reflected: it resolves with the second actor as BOTH user and
+    // target (BattleScript_MagicCoatBounce, via the MOVE_TARGET check in
+    // Cmd_attackcanceler). Only FLAG_MAGIC_COAT_AFFECTED moves bounce, which is
+    // a generated flag (move-flags.js), not a hand-kept list.
+    let bounced = false;
+    if (s[order[0] === "you" ? "youBouncing" : "oppBouncing"]
+        && secondMoveData.power === 0
+        && moveFlags(secondMove).magicCoatAffected) {
+      bounced = true;
+    }
     const secondTargetCharging = order[1] === "you" ? s.oppCharging : s.youCharging;
     const secondOutcomes = enumerateActionOutcomes(ctx, s, order[1], secondMove, secondMoveData, secondTargetCharging, true);
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
-      applyMove(ctx, s2, order[1], secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null);
-      const secondLabel = describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null);
+      // A bounced move is applied with the BOUNCER as the actor -- which in this
+      // engine is exactly "it landed on the original user", since every executor
+      // targets the actor's foe. The judging then has to be put back where it
+      // belongs: the move was still USED by the second actor, so its Mind and
+      // Skill deltas are transferred below rather than credited to the bouncer.
+      const applyAs = bounced ? order[0] : order[1];
+      const judgeBefore = bounced
+        ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
+        : null;
+      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null);
+      if (bounced) {
+        // Move the judging back onto the mon that actually chose the move.
+        const dMind = order[0] === "you" ? s2.mindYou - judgeBefore.mindYou : s2.mindOpp - judgeBefore.mindOpp;
+        const dSkill = order[0] === "you" ? s2.skillYou - judgeBefore.skillYou : s2.skillOpp - judgeBefore.skillOpp;
+        if (order[0] === "you") { s2.mindYou -= dMind; s2.skillYou -= dSkill; s2.mindOpp += dMind; s2.skillOpp += dSkill; }
+        else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
+      }
+      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
       s2.turn += 1;
       s2.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
