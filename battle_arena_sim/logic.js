@@ -4148,6 +4148,22 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // forfeits entirely (CANCELER_RECHARGE, src/battle_util.c:2098-2108).
     // null | moveName.
     youMustRecharge: null, oppMustRecharge: null,
+    // gDisableStructs.rechargeTimer: 2 when set, decremented in
+    // TurnValuesCleanUp (src/battle_main.c:4878-4883), and STATUS2_RECHARGE is
+    // dropped when it reaches 0. So a recharge that SLEEP or FREEZE pre-empts
+    // (both sit above CANCELER_RECHARGE) is not carried into a third turn.
+    youRechargeTimer: 0, oppRechargeTimer: 0,
+    // B3 batch 2: STATUS2_FLINCHED. Set by a flinching hit, consumed by
+    // CANCELER_FLINCH, and cleared for everyone at the end of every turn
+    // (src/battle_main.c:3943) -- so it only ever matters within one turn.
+    youFlinched: false, oppFlinched: false,
+    // B3 batch 2: gDisableStructs.isFirstTurn for the PLAYER's mon, the
+    // counterpart of oppMonFirstTurn below. Fake Out's jumpifnotfirstturn
+    // (src/battle_script_commands.c:6786-6794) reads it for whoever uses it.
+    // Set to 2 at battle start (src/battle_main.c:3051), decremented once in
+    // TryDoEventsBeforeFirstTurn (:3901) and again at the end of turn 1
+    // (:3974), so it is nonzero for exactly the first turn.
+    youMonFirstTurn: true,
     youAbilityOverride: null, oppAbilityOverride: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
@@ -4306,7 +4322,7 @@ function cloneState(s) {
   return { ...s, youStages: { ...s.youStages }, oppStages: { ...s.oppStages } };
 }
 
-function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null, recharging = false) {
+function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null, cancelReason = null) {
   const who = actor === "you" ? "You" : "Opp";
   // B2b batch 3: a move-calling move shows BOTH names. Reading "Opp uses Sleep
   // Talk" when the damage came from Earthquake makes every trace ambiguous.
@@ -4314,8 +4330,13 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
     const inner = describeAction(actor, calledMove, hit, selfHit, statusPrevented, attractPrevented, hitCount);
     return `${inner.replace(`${who} uses `, `${who} uses ${moveName} -> `)}`;
   }
-  // B3 batch 1: a recharge is also a prevented turn, and must not read as one.
-  if (recharging) return `${who} must recharge`;
+  // B3 batches 1-2: the single-cause cancelers are prevented turns too, and
+  // must not read as paralysis.
+  if (cancelReason === "recharge") return `${who} must recharge`;
+  if (cancelReason === "flinch") return `${who} flinches`;
+  if (cancelReason === "disabled") return `${who} can't use the disabled ${moveName}`;
+  if (cancelReason === "taunted") return `${who} can't use ${moveName} after the taunt`;
+  if (cancelReason === "imprisoned") return `${who} can't use the sealed ${moveName}`;
   if (statusPrevented) return `${who} is fully paralyzed/frozen and can't move`;
   if (attractPrevented) return `${who} is immobilized by love and can't move`;
   if (selfHit) return `${who} hits itself in confusion`;
@@ -4546,7 +4567,7 @@ const HOLD_EFFECT_DISPOSITION = new Map([
   ["HOLD_EFFECT_SCOPE_LENS", ["deferred", "B6 — crit rate; crits are not enumerated yet"]],
   ["HOLD_EFFECT_LUCKY_PUNCH", ["deferred", "B6 — Chansey crit rate"]],
   ["HOLD_EFFECT_STICK", ["deferred", "B6 — Farfetch'd crit rate"]],
-  ["HOLD_EFFECT_FLINCH", ["deferred", "B4 — King's Rock; flinch has no model yet"]],
+  ["HOLD_EFFECT_FLINCH", ["deferred", "B4 — King's Rock's 10% chance; the flinch it would cause is modelled since B3 batch 2"]],
   ["HOLD_EFFECT_QUICK_CLAW", ["deferred", "B7c — turn order"]],
   ["HOLD_EFFECT_EVASION_UP", ["deferred", "B7c — BrightPowder, the accuracy path"]],
   ["HOLD_EFFECT_FOCUS_BAND", ["deferred", "B7c — a per-hit survival roll"]],
@@ -4703,8 +4724,30 @@ function inflictStatus(s, targetSide, statusType, targetTypes, targetAbility = n
   if (STATUS_IMMUNITY_TYPES[statusType].some((t) => targetTypes.includes(t))) return false;
   if (targetAbility != null && targetAbility === STATUS_IMMUNITY_ABILITIES[statusType]) return false;
   s[statusKey] = statusType;
+  // B3 batch 2: SetMoveEffect calls CancelMultiTurnMoves when it inflicts
+  // SLEEP (src/battle_script_commands.c:2296) or FREEZE (:2392), and for no
+  // other status.
+  if (statusType === "sleep" || statusType === "freeze") cancelMultiTurnMoves(s, targetSide);
   return true;
 }
+
+// B3 batch 2: CancelMultiTurnMoves (src/battle_util.c:877-888), ported as ONE
+// function called from every site source calls it from that this engine can
+// reach -- the recharge, flinch, disabled, taunted, imprisoned and in-love
+// cancelers, a Protect-blocked attack, and sleep/freeze infliction. Of what it
+// clears, this engine models two things: STATUS2_MULTIPLETURNS together with
+// STATUS3_SEMI_INVULNERABLE (a two-turn move's pending release, `xCharging`)
+// and furyCutterCounter. LOCK_CONFUSE, UPROAR, BIDE and rolloutTimer belong to
+// effects still ledgered (Rampage, Uproar, Bide, Rollout), which will need to
+// add their own field here when they land.
+function cancelMultiTurnMoves(s, side) {
+  s[side === "you" ? "youCharging" : "oppCharging"] = null;
+  s[side === "you" ? "youFuryCutter" : "oppFuryCutter"] = 0;
+}
+
+// IsTwoTurnsMove (src/battle_script_commands.c:8196-8207).
+const TWO_TURN_EFFECTS = new Set(["EFFECT_SKULL_BASH", "EFFECT_RAZOR_WIND", "EFFECT_SKY_ATTACK",
+  "EFFECT_SOLAR_BEAM", "EFFECT_SEMI_INVULNERABLE", "EFFECT_BIDE"]);
 
 // Shared executor shape for the whole stat-DECREASE family (Sand-Attack/
 // Flash/SmokeScreen/Screech/Scary Face/Charm/Fake Tears/Sweet Scent) —
@@ -6011,6 +6054,8 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // B3 batch 1 continued: the two that cost their user a TURN rather than HP.
   "EFFECT_FOCUS_PUNCH",    // priority -3, and loses focus if damaged first
   "EFFECT_RECHARGE",       // the user forfeits its next action entirely
+  // B3 batch 2: the flinch is modelled now (CANCELER_FLINCH), so Fake Out is too.
+  "EFFECT_FAKE_OUT",       // turn-1-only, and a CERTAIN flinch
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6100,7 +6145,6 @@ const HANDLED_EFFECTS = new Set([
 // computed-output change, only visibility. Set counts are the current pool
 // (552 sets); see change #11 report §2.
 const ACCEPTED_UNMODELED_EFFECTS = {
-  EFFECT_FAKE_OUT:      "guaranteed flinch on turn 1; priority — unmodeled (9 sets; flinch has no model at all yet)",
   EFFECT_TRAP:          "partial-trap residual damage + switch-block — unmodeled (2 sets)",
   EFFECT_RAMPAGE:       "2-3 turn lock-in then self-confusion (Thrash/Outrage/Petal Dance) — unmodeled (2 sets)",
   EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
@@ -6189,7 +6233,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --
@@ -6205,6 +6249,20 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   if (statusPrevented && s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"]) {
     moveName = s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"];
   }
+  // B3 batch 2: MIND IS SCORED ON THE SELECTED MOVE, not the called one.
+  // BattleArena_AddMindPoints runs in HandleAction_UseMove (src/battle_util.c:
+  // 289) with gCurrentMove still the move the mon chose -- Metronome, Mirror
+  // Move, Sleep Talk -- because the substitution happens later, inside that
+  // move's script. The note above had Arena scoring following the called move;
+  // for Mind that was wrong (Metronome rates 0, a called Earthquake rates 1).
+  // Skill is read off the RESULT flags at Cmd_end, so it does follow the call.
+  const mindMove = calledMove ? chosenMoveName : moveName;
+  // B3 batch 2: whether the foe had a Substitute BEFORE this move. Source keeps
+  // STATUS2_SUBSTITUTE set until the end of the turn even after the doll breaks
+  // (it is cleared in TurnValuesCleanUp, src/battle_main.c:4887-4888), and
+  // SetMoveEffect's gate reads that flag -- so a sub broken by this very hit
+  // still blocks its flinch. This engine nulls a broken sub immediately.
+  const foeHadSubstitute = s[actor === "you" ? "oppSubstituteHP" : "youSubstituteHP"] != null;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
   const foeMon = isYou ? opp : you;
@@ -6255,13 +6313,23 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   }
 
   if (statusPrevented) {
-    // B3 batch 1: the recharge is SPENT here -- source clears STATUS2_RECHARGE
-    // on the very attempt it blocks, so it costs exactly one turn.
-    s[isYou ? "youMustRecharge" : "oppMustRecharge"] = null;
+    if (cancelReason === "recharge") {
+      // B3 batch 1: the recharge is SPENT here -- CANCELER_RECHARGE clears
+      // STATUS2_RECHARGE and the timer on the very attempt it blocks.
+      s[isYou ? "youMustRecharge" : "oppMustRecharge"] = null;
+      s[isYou ? "youRechargeTimer" : "oppRechargeTimer"] = 0;
+    }
+    // B3 batch 2: CANCELER_FLINCH clears the flag it acts on (:2113).
+    if (cancelReason === "flinch") s[isYou ? "youFlinched" : "oppFlinched"] = false;
+    // RECHARGE, FLINCH, DISABLED, TAUNTED and IMPRISONED all call
+    // CancelMultiTurnMoves (src/battle_util.c:2103/:2115/:2127/:2138/:2149).
+    // Sleep and freeze do NOT, and neither does full paralysis -- its call is
+    // commented out in Emerald (:2192-2193, "removed in FRLG and Emerald").
+    if (cancelReason) cancelMultiTurnMoves(s, actor);
     // Paralysis full-para / still-frozen: Mind scores off selection
     // regardless (unconditional), no Skill (HITMARKER_OBEYS unset), no
     // damage or effect happens at all.
-    s[mindKey] += mindDelta(moveName);
+    s[mindKey] += mindDelta(mindMove);
     return;
   }
 
@@ -6269,18 +6337,20 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // CANCELER_IN_LOVE (src/battle_util.c:2200-2218): immobilized by love —
     // Mind scores off selection same as any other prevented turn; no self-
     // damage (unlike confusion's self-hit branch) and no Skill change.
-    s[mindKey] += mindDelta(moveName);
+    // B3 batch 2: and it cancels multi-turn moves (src/battle_util.c:2213).
+    cancelMultiTurnMoves(s, actor);
+    s[mindKey] += mindDelta(mindMove);
     return;
   }
 
   if (selfHit) {
     const dmg = calcConfusionDamage(selfMon);
     s[selfHpKey] = Math.max(0, s[selfHpKey] - (dmg / selfMon.stats.hp) * 100);
-    s[mindKey] += mindDelta(moveName);
+    s[mindKey] += mindDelta(mindMove);
     return;
   }
 
-  s[mindKey] += mindDelta(moveName);
+  s[mindKey] += mindDelta(mindMove);
 
   // Explosion/Self Destruct (effect: "EFFECT_EXPLOSION"): the user's HP is
   // set to 0 UNCONDITIONALLY, confirmed from the real move script
@@ -6310,6 +6380,22 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     // never fires). Skill is genuinely UNCHANGED here — NOT -2 like a
     // normal miss, and NOT +1 like a normal hit. Mind already applied above
     // (unconditional, as always — HITMARKER_OBEYS doesn't gate Mind).
+    // B3 batch 2: Cmd_attackcanceler's Protect branch also calls
+    // CancelMultiTurnMoves (src/battle_script_commands.c:992-996), unless this
+    // is a two-turn move on its CHARGING turn: `!IsTwoTurnsMove(move) ||
+    // STATUS2_MULTIPLETURNS`. So a Fury Cutter chain ends in a Protect.
+    const selfChargingNow = s[isYou ? "youCharging" : "oppCharging"];
+    if (!TWO_TURN_EFFECTS.has(moveData.effect) || selfChargingNow) cancelMultiTurnMoves(s, actor);
+    return;
+  }
+
+  // B3 batch 2: FAKE OUT fails after its user's first turn. The check is
+  // `jumpifnotfirstturn` (src/battle_script_commands.c:6786-6794) and it sits
+  // AFTER attackcanceler in BattleScript_EffectFakeOut (data/battle_scripts_1.s:
+  // 2048-2052) -- so a late Fake Out into Protect reads as PROTECTED (handled
+  // just above), and only otherwise as FAILED, from attackstring.
+  if (moveData.effect === "EFFECT_FAKE_OUT" && !s[isYou ? "youMonFirstTurn" : "oppMonFirstTurn"]) {
+    s[skillKey] += skillDelta("noEffect");
     return;
   }
 
@@ -6498,6 +6584,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // action, not here.
   if (moveData.effect === "EFFECT_RECHARGE" && hit) {
     s[isYou ? "youMustRecharge" : "oppMustRecharge"] = moveName;
+    s[isYou ? "youRechargeTimer" : "oppRechargeTimer"] = 2;
   }
   if (moveData.effect === "EFFECT_KNOCK_OFF" && hit && foeMon.item
       && foeMon.ability !== "Sticky Hold") {
@@ -6849,6 +6936,19 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // MOVE_EFFECT_..._AFFECTS_USER | MOVE_EFFECT_CERTAIN, so they are not
       // chance secondaries at all -- they happen on every hit, which is what
       // made "unmodeled" wrong rather than merely incomplete.
+      // B3 batch 2: FAKE OUT'S FLINCH. MOVE_EFFECT_FLINCH | MOVE_EFFECT_CERTAIN
+      // (data/battle_scripts_1.s:2051) through seteffectwithchance, which needs
+      // a hit that did not come back NO_EFFECT, then SetMoveEffect's gates
+      // (src/battle_script_commands.c:2253-2270): SHIELD DUST blocks it (the
+      // flinch byte is 8, inside the `<= 9` test), a fainted target cannot
+      // take it, and neither can one behind a Substitute; then INNER FOCUS
+      // blocks it at the flinch case itself (:2547-2560). The "target has not
+      // moved yet" test there is implicit here: the flag is cleared at every
+      // turn end, so setting it on a mon that already acted changes nothing.
+      if (moveData.effect === "EFFECT_FAKE_OUT" && dmg > 0 && s[foeHpKey] > 0 && !foeHadSubstitute
+          && foeMon.ability !== "Shield Dust" && foeMon.ability !== "Inner Focus") {
+        s[isYou ? "oppFlinched" : "youFlinched"] = true;
+      }
       if (moveData.effect === "EFFECT_OVERHEAT" && dmg > 0) {
         bumpStage(isYou ? s.youStages : s.oppStages, "spa", -2);
       }
@@ -7324,6 +7424,7 @@ function applyEndOfTurnEffects(ctx, s) {
       if (s.youStatus == null && you.ability !== "Insomnia" && you.ability !== "Vital Spirit") {
         s.youStatus = "sleep";
         s.youSleepTurns = 2;
+        cancelMultiTurnMoves(s, "you"); // ENDTURN_YAWN goes through SetMoveEffect (B3 batch 2)
       }
     }
   }
@@ -7334,6 +7435,7 @@ function applyEndOfTurnEffects(ctx, s) {
       if (s.oppStatus == null && opp.ability !== "Insomnia" && opp.ability !== "Vital Spirit") {
         s.oppStatus = "sleep";
         s.oppSleepTurns = 2;
+        cancelMultiTurnMoves(s, "opp"); // ENDTURN_YAWN goes through SetMoveEffect (B3 batch 2)
       }
     }
   }
@@ -7405,7 +7507,200 @@ function sleepTalkCandidates(ctx, state, actor) {
   }
 }
 
+// ── B3 batch 2: THE CANCELER CHAIN, resolved ONCE, on the SELECTED move ──
+// AtkCanceler_UnableToUseMove (src/battle_util.c:2003-2270) runs its checks in
+// a fixed order and stops at the first one that fires:
+//   ASLEEP -> FROZEN -> TRUANT -> RECHARGE -> FLINCH -> DISABLED -> TAUNTED ->
+//   IMPRISONED -> CONFUSED -> PARALYZED -> IN_LOVE -> BIDE -> THAW
+// and it runs ONCE per action. gBattleStruct->atkCancelerTracker is reset only
+// in HandleAction_UseMove, so when Mirror Move, Metronome or Sleep Talk jumps
+// into a called move's script, that script's own attackcanceler resumes at
+// CANCELER_END and checks nothing.
+//
+// Before this batch the chain lived INSIDE the move body, AFTER a set of early
+// returns (Mirror Move, Metronome, Sleep Talk, Magic Coat, Endeavor), and those
+// returns skipped sleep and freeze entirely: a Mirror Move user asleep for three
+// turns acted, and its sleep counter never ticked. Hoisting the chain in front
+// of the body fixes every such return at once. It also gives the cancelers this
+// engine never ported somewhere to live: FLINCH, and the CANCEL-time halves of
+// Disable, Taunt and Imprison, which were enforced only at selection -- so a
+// faster foe's Disable never stopped the move it had just disabled. Truant is
+// ledgered for B8. Bide is ledgered (throws) for B3.
+//
+// Returns [{ p, outcome }] for an action that is cancelled (the outcome is
+// final) or [{ p, pass: true, thawed, sleepRemaining }] for one that proceeds.
+// The common case -- nothing in the chain can fire -- returned as ONE shared
+// object, so the caller can skip the merge entirely. Measured: without this the
+// hoist cost 12.4% over the Metagross column, spread evenly over sets carrying
+// none of these mechanics, i.e. pure per-node allocation.
+const PASS_GATE = Object.freeze([Object.freeze({ p: 1, pass: true, thawed: false, sleepRemaining: null })]);
+function cancelerGates(ctx, state, actor, moveName, moveData) {
+  {
+    const isYou = actor === "you";
+    const st = state[isYou ? "youStatus" : "oppStatus"];
+    if (st !== "sleep" && st !== "freeze" && st !== "paralysis"
+        && !state[isYou ? "youConfused" : "oppConfused"]
+        && !state[isYou ? "youAttracted" : "oppAttracted"]
+        && !singleCauseCancel(ctx, state, actor, moveName, moveData)) return PASS_GATE;
+  }
+
+  const statusKey = actor === "you" ? "youStatus" : "oppStatus";
+  const status = state[statusKey];
+
+  // Paralysis is NOT handled in this outer switch (see below) — it moved
+  // into the unified confusion/paralysis/love priority chain to match its
+  // real position in the CANCELER_* sequence (a pre-existing ordering bug,
+  // fixed alongside Attract — see the long comment further down).
+  let statusBranches;
+  if (status === "freeze") {
+    if (moveData.effect === "EFFECT_THAW_HIT") {
+      // B2b batch 6. A frozen user of Flame Wheel or Sacred Fire is NOT stopped:
+      // CANCELER_FROZEN explicitly skips its own block for EFFECT_THAW_HIT
+      // (src/battle_util.c:2064-2074, comment and all), and CANCELER_THAW then
+      // unfreezes the user unconditionally (:2249-2258). So there is no 20%
+      // roll here at all -- it acts, and it thaws, every time. One branch.
+      statusBranches = [{ p: 1, prevented: false, thawed: true }];
+    } else {
+      // Random() % 5 == 0 → 20% thaw (then acts normally), else stays frozen
+      // and fully prevented. Re-rolled every turn (no duration counter).
+      statusBranches = [{ p: 0.2, prevented: false, thawed: true }, { p: 0.8, prevented: true, thawed: false }];
+    }
+  } else if (status === "sleep") {
+    // Duration was rolled ONCE at infliction (state.<x>SleepTurns) — NOT
+    // re-rolled every turn like paralysis/freeze above. Decrement happens
+    // here, at the start of the sleeping mon's own action attempt
+    // (src/battle_util.c CANCELER_ASLEEP, :2029-2038). Early Bird doubles
+    // the decrement (2/turn instead of 1, :2030-2033). Reaching 0 ("waking
+    // up") STILL forfeits this turn's move exactly like staying asleep does
+    // — the game routes to BattleScript_MoveUsedWokeUp, a separate
+    // "the mon wakes up" message, not a fallthrough into the chosen move
+    // (:2047-2053) — the mon only becomes available starting NEXT turn.
+    const mon = actor === "you" ? ctx.you : ctx.opp;
+    const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
+    const toSub = mon.ability === "Early Bird" ? 2 : 1;
+    const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
+    // B2b batch 3: Snore and Sleep Talk are EXEMPT from the sleep lock while
+    // the mon is still asleep -- source gates the "can't move" on
+    // `gCurrentMove != MOVE_SNORE && gCurrentMove != MOVE_SLEEP_TALK`
+    // (:2040). A mon that WAKES UP this turn still forfeits it either way.
+    const sleepExempt = sleepRemaining > 0
+      && (moveData.effect === "EFFECT_SLEEP_TALK" || moveData.effect === "EFFECT_SNORE");
+    statusBranches = [{ p: 1, prevented: !sleepExempt, thawed: false, sleepRemaining }];
+  } else {
+    statusBranches = [{ p: 1, prevented: false, thawed: false }];
+  }
+
+  const gates = [];
+  for (const stb of statusBranches) {
+    if (stb.prevented) {
+      gates.push({ p: stb.p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, sleepRemaining: stb.sleepRemaining ?? null } });
+      continue;
+    }
+    // Carried onto every outcome below: a thaw or a sleep-counter tick has
+    // already happened by the time any later canceler fires.
+    const carry = { thawed: stb.thawed, sleepRemaining: stb.sleepRemaining ?? null };
+
+    // RECHARGE -> FLINCH -> DISABLED -> TAUNTED -> IMPRISONED. Each is decided
+    // by state alone, and each ends the chain.
+    const cause = singleCauseCancel(ctx, state, actor, moveName, moveData);
+    if (cause) {
+      gates.push({ p: stb.p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, cancelReason: cause, ...carry } });
+      continue;
+    }
+
+    // Real priority chain (src/battle_util.c AtkCanceler_UnableToUseMove:
+    // CANCELER_CONFUSED -> CANCELER_PARALYZED -> CANCELER_IN_LOVE). The
+    // do-while loop there stops at the FIRST canceler that reports
+    // effect=1, so at most ONE of these three ever fires per turn — they
+    // are NOT independent rolls. Confusion is special: BOTH of its own
+    // outcomes (self-hit AND "acts normally this turn") set effect=1, so
+    // being confused means paralysis/love are never even ROLLED that turn,
+    // regardless of which way the confusion coin flip goes. Paralysis and
+    // love, by contrast, only short-circuit on their OWN "prevented"
+    // outcome — their "you're fine, go ahead" outcome falls through to the
+    // next check in line (confirmed: CANCELER_PARALYZED only sets effect=1
+    // inside the branch that includes its own 25% roll succeeding).
+    // Previously this engine modeled paralysis as the OUTER gate ahead of
+    // confusion (backwards from source) — a pre-existing bug caught while
+    // wiring Attract in, since Attract's own prevention has to slot into
+    // this exact same chain as the third/last check.
+    const confusable = actor === "you" ? state.youConfused : state.oppConfused; // A5: both sides
+    const paralyzed = status === "paralysis";
+    const attracted = actor === "you" ? state.youAttracted : state.oppAttracted; // A5: both sides
+
+    let actionBranches;
+    if (confusable) {
+      actionBranches = [{ p: 0.5, kind: "confuseSelfHit" }, { p: 0.5, kind: "normal" }];
+    } else {
+      actionBranches = [{ p: 1, kind: "normal" }];
+      if (paralyzed) {
+        actionBranches = [{ p: 0.25, kind: "paraBlocked" }, { p: 0.75, kind: "normal" }];
+      }
+      if (attracted) {
+        const next = [];
+        for (const b of actionBranches) {
+          if (b.kind !== "normal") { next.push(b); continue; }
+          next.push({ p: b.p * 0.5, kind: "loveBlocked" });
+          next.push({ p: b.p * 0.5, kind: "normal" });
+        }
+        actionBranches = next;
+      }
+    }
+
+    for (const acb of actionBranches) {
+      const p = stb.p * acb.p;
+      if (acb.kind === "confuseSelfHit") {
+        gates.push({ p, outcome: { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry } });
+      } else if (acb.kind === "paraBlocked") {
+        gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, ...carry } });
+      } else if (acb.kind === "loveBlocked") {
+        gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: false, attractPrevented: true, ...carry } });
+      } else {
+        gates.push({ p, pass: true, ...carry });
+      }
+    }
+  }
+  return gates;
+}
+
+// The five single-cause cancelers between FROZEN and CONFUSED, in source order.
+function singleCauseCancel(ctx, state, actor, moveName, moveData) {
+  const isYou = actor === "you";
+  // CANCELER_RECHARGE (src/battle_util.c:2098-2108).
+  if (state[isYou ? "youMustRecharge" : "oppMustRecharge"]) return "recharge";
+  // CANCELER_FLINCH (:2110-2120). Set by the foe's hit earlier this same turn.
+  if (state[isYou ? "youFlinched" : "oppFlinched"]) return "flinch";
+  // CANCELER_DISABLED (:2122-2132): disabledMove == gCurrentMove. Reachable
+  // only when a FASTER foe disabled the move after it was selected.
+  const disabled = state[isYou ? "youDisabledMove" : "oppDisabledMove"];
+  if (disabled && disabled === moveName) return "disabled";
+  // CANCELER_TAUNTED (:2134-2143): tauntTimer && power == 0 -- the same test
+  // selectableMoves applies at selection, now also at the moment of use.
+  if (state[isYou ? "youTauntTurns" : "oppTauntTurns"] != null && moveData.power === 0) return "taunted";
+  // CANCELER_IMPRISONED (:2145-2154): GetImprisonedMovesCount walks the FOE's
+  // moveset, and the foe holds the flag.
+  const foeMon = isYou ? ctx.opp : ctx.you;
+  if (state[isYou ? "oppImprisoning" : "youImprisoning"] && foeMon.moves.includes(moveName)) return "imprisoned";
+  return null;
+}
+
 function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false, skipStatusGates = false) {
+  // A CALLED move (Mirror Move, Metronome, Sleep Talk) inherits its caller's
+  // canceler result and runs no chain of its own -- see cancelerGates.
+  if (skipStatusGates) return enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, true);
+  const gates = cancelerGates(ctx, state, actor, moveName, moveData);
+  if (gates === PASS_GATE) return enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false);
+  const out = [];
+  for (const g of gates) {
+    if (g.outcome) { out.push({ ...g.outcome, p: g.p }); continue; }
+    for (const o of enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false)) {
+      out.push({ ...o, p: o.p * g.p, thawed: g.thawed || o.thawed, sleepRemaining: o.sleepRemaining ?? g.sleepRemaining });
+    }
+  }
+  return out;
+}
+
+function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct = false, skipStatusGates = false) {
   if (moveData.effect === "EFFECT_MIRROR_MOVE" && !skipStatusGates) {
     // Deterministic: whatever was last used AGAINST this mon, if anything.
     const taken = state[actor === "you" ? "youLastTakenMove" : "oppLastTakenMove"];
@@ -7432,14 +7727,6 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
     }
     return out;
-  }
-  if (state[actor === "you" ? "youMustRecharge" : "oppMustRecharge"]) {
-    // B3 batch 1: CANCELER_RECHARGE (src/battle_util.c:2098-2108) sits near the
-    // TOP of the cancel chain -- above flinch, disable, confusion and
-    // paralysis -- so a recharging mon forfeits its turn before any of those
-    // are even consulted, and none of their branches exist. One branch, no
-    // accuracy roll, no status roll.
-    return [{ p: 1, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, recharging: true }];
   }
   if (moveData.effect === "EFFECT_MAGIC_COAT" && isLastToAct) {
     // Cmd_trysetmagiccoat (src/battle_script_commands.c:9085-9098) fails when
@@ -7501,114 +7788,16 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
     // Awake: falls through and resolves as itself, which fails (the script's
     // own sleep gate, data/battle_scripts_1.s:1311-1316).
   }
-  const statusKey = actor === "you" ? "youStatus" : "oppStatus";
-  const status = state[statusKey];
-
-  // Paralysis is NOT handled in this outer switch (see below) — it moved
-  // into the unified confusion/paralysis/love priority chain to match its
-  // real position in the CANCELER_* sequence (a pre-existing ordering bug,
-  // fixed alongside Attract — see the long comment further down).
-  let statusBranches;
-  if (status === "freeze") {
-    if (moveData.effect === "EFFECT_THAW_HIT") {
-      // B2b batch 6. A frozen user of Flame Wheel or Sacred Fire is NOT stopped:
-      // CANCELER_FROZEN explicitly skips its own block for EFFECT_THAW_HIT
-      // (src/battle_util.c:2064-2074, comment and all), and CANCELER_THAW then
-      // unfreezes the user unconditionally (:2249-2258). So there is no 20%
-      // roll here at all -- it acts, and it thaws, every time. One branch.
-      statusBranches = [{ p: 1, prevented: false, thawed: true }];
-    } else {
-      // Random() % 5 == 0 → 20% thaw (then acts normally), else stays frozen
-      // and fully prevented. Re-rolled every turn (no duration counter).
-      statusBranches = [{ p: 0.2, prevented: false, thawed: true }, { p: 0.8, prevented: true, thawed: false }];
-    }
-  } else if (status === "sleep") {
-    // Duration was rolled ONCE at infliction (state.<x>SleepTurns) — NOT
-    // re-rolled every turn like paralysis/freeze above. Decrement happens
-    // here, at the start of the sleeping mon's own action attempt
-    // (src/battle_util.c CANCELER_ASLEEP, :2029-2038). Early Bird doubles
-    // the decrement (2/turn instead of 1, :2030-2033). Reaching 0 ("waking
-    // up") STILL forfeits this turn's move exactly like staying asleep does
-    // — the game routes to BattleScript_MoveUsedWokeUp, a separate
-    // "the mon wakes up" message, not a fallthrough into the chosen move
-    // (:2047-2053) — the mon only becomes available starting NEXT turn.
-    const mon = actor === "you" ? ctx.you : ctx.opp;
-    const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
-    const toSub = mon.ability === "Early Bird" ? 2 : 1;
-    const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
-    // B2b batch 3: Snore and Sleep Talk are EXEMPT from the sleep lock while
-    // the mon is still asleep -- source gates the "can't move" on
-    // `gCurrentMove != MOVE_SNORE && gCurrentMove != MOVE_SLEEP_TALK`
-    // (:2040). A mon that WAKES UP this turn still forfeits it either way.
-    const sleepExempt = sleepRemaining > 0
-      && (moveData.effect === "EFFECT_SLEEP_TALK" || moveData.effect === "EFFECT_SNORE");
-    statusBranches = [{ p: 1, prevented: !sleepExempt, thawed: false, sleepRemaining }];
-  } else {
-    statusBranches = [{ p: 1, prevented: false, thawed: false }];
-  }
-
-  if (skipStatusGates) statusBranches = [{ p: 1, prevented: false, thawed: false }];
-
+  // B3 batch 2: the canceler chain that used to start here now runs in
+  // cancelerGates(), in front of this body, exactly once per action. What is
+  // left is the move itself, so both branch lists are single pass-through
+  // entries; the loop shape is kept so the per-move code beneath is unchanged.
+  const statusBranches = [{ p: 1, thawed: false }];
   const results = [];
   for (const stb of statusBranches) {
-    if (stb.prevented) {
-      results.push({ p: stb.p, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, sleepRemaining: stb.sleepRemaining ?? null });
-      continue;
-    }
-
-    // Real priority chain (src/battle_util.c AtkCanceler_UnableToUseMove:
-    // CANCELER_CONFUSED -> CANCELER_PARALYZED -> CANCELER_IN_LOVE). The
-    // do-while loop there stops at the FIRST canceler that reports
-    // effect=1, so at most ONE of these three ever fires per turn — they
-    // are NOT independent rolls. Confusion is special: BOTH of its own
-    // outcomes (self-hit AND "acts normally this turn") set effect=1, so
-    // being confused means paralysis/love are never even ROLLED that turn,
-    // regardless of which way the confusion coin flip goes. Paralysis and
-    // love, by contrast, only short-circuit on their OWN "prevented"
-    // outcome — their "you're fine, go ahead" outcome falls through to the
-    // next check in line (confirmed: CANCELER_PARALYZED only sets effect=1
-    // inside the branch that includes its own 25% roll succeeding).
-    // Previously this engine modeled paralysis as the OUTER gate ahead of
-    // confusion (backwards from source) — a pre-existing bug caught while
-    // wiring Attract in, since Attract's own prevention has to slot into
-    // this exact same chain as the third/last check.
-    const confusable = actor === "you" ? state.youConfused : state.oppConfused; // A5: both sides
-    const paralyzed = status === "paralysis";
-    const attracted = actor === "you" ? state.youAttracted : state.oppAttracted; // A5: both sides
-
-    let actionBranches;
-    if (confusable) {
-      actionBranches = [{ p: 0.5, kind: "confuseSelfHit" }, { p: 0.5, kind: "normal" }];
-    } else {
-      actionBranches = [{ p: 1, kind: "normal" }];
-      if (paralyzed) {
-        actionBranches = [{ p: 0.25, kind: "paraBlocked" }, { p: 0.75, kind: "normal" }];
-      }
-      if (attracted) {
-        const next = [];
-        for (const b of actionBranches) {
-          if (b.kind !== "normal") { next.push(b); continue; }
-          next.push({ p: b.p * 0.5, kind: "loveBlocked" });
-          next.push({ p: b.p * 0.5, kind: "normal" });
-        }
-        actionBranches = next;
-      }
-    }
-
+    const actionBranches = [{ p: 1, kind: "normal" }];
     for (const acb of actionBranches) {
       const p = stb.p * acb.p;
-      if (acb.kind === "confuseSelfHit") {
-        results.push({ p, hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
-        continue;
-      }
-      if (acb.kind === "paraBlocked") {
-        results.push({ p, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: stb.thawed, sleepRemaining: null });
-        continue;
-      }
-      if (acb.kind === "loveBlocked") {
-        results.push({ p, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: false, attractPrevented: true, thawed: stb.thawed });
-        continue;
-      }
       if (moveData.effect === "EFFECT_ENDURE" || moveData.effect === "EFFECT_PROTECT") {
         // Endure AND Protect/Detect share the EXACT SAME success-rate roll —
         // both funnel through Cmd_setprotectlike (src/battle_script_commands.c:6503-6536),
@@ -7689,7 +7878,15 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
         // move doesn't bypass it: forced miss, no accuracy roll at all
         // (source-confirmed — MOVE_RESULT_MISSED set unconditionally,
         // scored as a normal -2 miss, NOT the Protect exemption).
-        if (moveData.power > 0 && targetCharging && !INVULN_BYPASS[targetCharging.invulnBit]?.[moveName]) {
+        // B3 batch 2: only a charge that IS semi-invulnerable. SolarBeam, Skull
+        // Bash, Razor Wind and Sky Attack also leave `xCharging` set, with
+        // invulnBit null -- they set STATUS2_MULTIPLETURNS but no STATUS3
+        // semi-invulnerable bit (only EFFECT_SEMI_INVULNERABLE's
+        // Cmd_setsemiinvulnerablebit does), so AccuracyCalcHelper's ON_AIR /
+        // UNDERGROUND / UNDERWATER test cannot fire against them. This gate
+        // used to test `targetCharging` alone, so every such charger was
+        // unhittable for its charge turn.
+        if (moveData.power > 0 && targetCharging?.invulnBit && !INVULN_BYPASS[targetCharging.invulnBit]?.[moveName]) {
           return [{ p: 1, hit: false }];
         }
         // EFFECT_OHKO (Horn Drill/Fissure/Guillotine/Sheer Cold): Cmd_tryKO
@@ -8077,14 +8274,13 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null);
-    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.recharging ?? false);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null);
+    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
     if (firstActorHp <= 0 || secondActorHp <= 0) {
-      s.turn += 1;
-      s.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
+      advanceTurn(s);
       results.push({ p: fo.p, state: s, label: `${firstLabel} (opp never acts — KO)` });
       continue;
     }
@@ -8117,7 +8313,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       const judgeBefore = bounced
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
-      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null);
+      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
         const dMind = order[0] === "you" ? s2.mindYou - judgeBefore.mindYou : s2.mindOpp - judgeBefore.mindOpp;
@@ -8125,15 +8321,33 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         if (order[0] === "you") { s2.mindYou -= dMind; s2.skillYou -= dSkill; s2.mindOpp += dMind; s2.skillOpp += dSkill; }
         else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
       }
-      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.recharging ?? false);
+      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
       if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
-      s2.turn += 1;
-      s2.oppMonFirstTurn = false; // batch-4 decay: any successor turn is past the mon's first turn (see buildStartState)
+      advanceTurn(s2);
       results.push({ p: fo.p * so.p, state: s2, label: `${firstLabel}; ${secondLabel}` });
     }
   }
 
   return results;
+}
+
+// The bookkeeping every successor state needs, in one place (B3 batch 2; the
+// two call sites used to repeat the first two lines by hand).
+function advanceTurn(s) {
+  s.turn += 1;
+  // batch-4 decay: any successor turn is past the mon's first turn (see
+  // buildStartState). B3 batch 2 adds the player's side of the same counter.
+  s.oppMonFirstTurn = false;
+  s.youMonFirstTurn = false;
+  // STATUS2_FLINCHED is cleared for every battler at the end of the turn
+  // (src/battle_main.c:3943).
+  s.youFlinched = false;
+  s.oppFlinched = false;
+  // rechargeTimer (src/battle_main.c:4878-4883). Written out per side on
+  // purpose: this runs on every successor state, and a loop building the key
+  // by string concatenation measured 26 ms of self time on one heavy set.
+  if (s.youRechargeTimer > 0 && --s.youRechargeTimer === 0) s.youMustRecharge = null;
+  if (s.oppRechargeTimer > 0 && --s.oppRechargeTimer === 0) s.oppMustRecharge = null;
 }
 
 function evaluateTerminal(state) {
