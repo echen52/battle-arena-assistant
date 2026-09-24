@@ -4210,6 +4210,12 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // slower (cloneState 0.6 s -> 19 s of a 55 s profile). See
     // test-state-shape.js, which now fails past 128.
     youLock: null, oppLock: null,
+    // B3 batch 5: STATUS2_WRAPPED on this side, with its counter:
+    //   null | { move, n }        (replaced, never mutated)
+    // Set by a landed Wrap/Bind/Fire Spin/Clamp/Whirlpool/Sand Tomb hit, n =
+    // (Random() & 3) + 3 (src/battle_script_commands.c:2611-2635). One field
+    // per side, per the 128-key limit.
+    youWrapped: null, oppWrapped: null,
     // B3 batch 2: gDisableStructs.isFirstTurn for the PLAYER's mon, the
     // counterpart of oppMonFirstTurn below. Fake Out's jumpifnotfirstturn
     // (src/battle_script_commands.c:6786-6794) reads it for whoever uses it.
@@ -5334,6 +5340,8 @@ const EFFECT_EXECUTORS = {
     if (currentHp <= cost) return "failed";
     s[selfHpKey] = Math.max(0, s[selfHpKey] - (cost / selfMon.stats.hp) * 100);
     s[selfSubKey] = cost;
+    // B3 batch 5: and it frees the user from a wrap (:7826).
+    s[isYou ? "youWrapped" : "oppWrapped"] = null;
   },
   EFFECT_REFLECT: (s, actor) => {
     // Cmd_setreflect (src/battle_script_commands.c:6697-6714): fails
@@ -6160,6 +6168,9 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_ROLLOUT",        // 5-hit lock, doubling power
   // B3 batch 4d: the locked-move family, complete.
   "EFFECT_UPROAR",         // 2-5 turn lock, a battle-wide sleep block and wake
+  // B3 batch 5: the residual. Its switch-block is inert here -- the Arena has
+  // no switching -- so the wrap is only its damage and its counter.
+  "EFFECT_TRAP",           // 3-6 turn wrap, maxHP/16 per turn
   // Fury Cutter's escalating power, counter and resets, applied inline in the
   // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
   "EFFECT_FURY_CUTTER",
@@ -6249,7 +6260,6 @@ const HANDLED_EFFECTS = new Set([
 // computed-output change, only visibility. Set counts are the current pool
 // (552 sets); see change #11 report §2.
 const ACCEPTED_UNMODELED_EFFECTS = {
-  EFFECT_TRAP:          "partial-trap residual damage + switch-block — unmodeled (2 sets)",
   EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
   // B2b batch 7 LEDGERED these two rather than porting them, with the reason
   // named and the cost counted, because both need machinery that does not exist
@@ -6742,7 +6752,15 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
     }
   }
-  if (moveData.effect === "EFFECT_RAPID_SPIN" && hit) {
+  if (moveData.effect === "EFFECT_RAPID_SPIN" && hit
+      && typeEffectiveness(moveData.type, foeMon.types, foeForesighted) !== 0) {
+    // Cmd_rapidspinfree (src/battle_script_commands.c:8821-8862) is an if /
+    // else-if chain that pushes the cursor and returns to itself, so it frees
+    // ALL of: the wrap (B3 batch 5 -- it was missing), Leech Seed, Spikes.
+    // B3 batch 5 also added the type check: MOVE_EFFECT_RAPIDSPIN arrives via
+    // seteffectwithchance, which skips a NO_EFFECT hit -- a Rapid Spin into a
+    // Ghost frees nothing, and this used to free everything.
+    s[isYou ? "youWrapped" : "oppWrapped"] = null;
     s[isYou ? "youSpikesLayers" : "oppSpikesLayers"] = 0;
     s[isYou ? "youSeeded" : "oppSeeded"] = false;
   }
@@ -7117,6 +7135,19 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
             `the enumerator's rampageSplit did not run on this path.`);
         }
         s[isYou ? "youLock" : "oppLock"] = { move: moveName, kind: "rampage", n: lockTurns };
+      }
+      // B3 batch 5: THE WRAP. MOVE_EFFECT_WRAP (13) through seteffectwithchance
+      // (100%) on a hit that was not NO_EFFECT; SetMoveEffect's gates then stop
+      // it on a fainted target or one behind a Substitute (the flag holds to
+      // turn end, hence the snapshot). 13 > 9, so Shield Dust does NOT block
+      // it. A target already wrapped keeps its existing counter.
+      if (moveData.effect === "EFFECT_TRAP" && dmg > 0 && s[foeHpKey] > 0 && !foeHadSubstitute
+          && !s[isYou ? "oppWrapped" : "youWrapped"]) {
+        if (![3, 4, 5, 6].includes(lockTurns)) {
+          throw new Error(`"${moveName}" (effect: EFFECT_TRAP) landed without a drawn wrap length -- ` +
+            `the enumerator's rampageSplit did not run on this path.`);
+        }
+        s[isYou ? "oppWrapped" : "youWrapped"] = { move: moveName, n: lockTurns };
       }
       // B3 batch 4d: UPROAR'S LOCK. setmoveeffect MOVE_EFFECT_UPROAR |
       // AFFECTS_USER, applied by seteffectwithchance (100%) to a hit that was
@@ -7503,6 +7534,32 @@ function applyEndOfTurnEffects(ctx, s) {
   if (s.oppHpPct > 0 && s.oppCursed) {
     const d = Math.max(1, Math.floor(opp.stats.hp / 4));
     s.oppHpPct = Math.max(0, s.oppHpPct - (d / opp.stats.hp) * 100);
+  }
+
+  // B3 batch 5: ENDTURN_WRAP (src/battle_util.c:1592-1624), right after CURSE.
+  // The counter drops FIRST; while it is still above 0 the wrapped mon takes
+  // maxHP/16 (min 1), and the turn it reaches 0 it breaks free with no damage.
+  // So a counter of n deals n-1 ticks. BattleScript_WrapTurnDmg sets
+  // HITMARKER_IGNORE_BIDE like every residual (Bide never sees it).
+  if (s.youWrapped && s.yourHpPct > 0) {
+    const n = s.youWrapped.n - 1;
+    if (n > 0) {
+      s.youWrapped = { ...s.youWrapped, n };
+      const d = Math.max(1, Math.floor(you.stats.hp / 16));
+      s.yourHpPct = Math.max(0, s.yourHpPct - (d / you.stats.hp) * 100);
+    } else {
+      s.youWrapped = null;
+    }
+  }
+  if (s.oppWrapped && s.oppHpPct > 0) {
+    const n = s.oppWrapped.n - 1;
+    if (n > 0) {
+      s.oppWrapped = { ...s.oppWrapped, n };
+      const d = Math.max(1, Math.floor(opp.stats.hp / 16));
+      s.oppHpPct = Math.max(0, s.oppHpPct - (d / opp.stats.hp) * 100);
+    } else {
+      s.oppWrapped = null;
+    }
   }
 
   // B2: Taunt decay. Cmd_settaunt sets 2; the timer decrements per end-of-turn
@@ -7923,6 +7980,18 @@ function singleCauseCancel(ctx, state, actor, moveName, moveData) {
 // equally -- the same way, for an Uproar that is not already running.
 const LOCK_DRAWS = { EFFECT_RAMPAGE: ["rampage", [2, 3]], EFFECT_UPROAR: ["uproar", [2, 3, 4, 5]] };
 function rampageSplit(state, actor, moveData, outs) {
+  // B3 batch 5: MOVE_EFFECT_WRAP draws (Random() & 3) + 3 -- 3 to 6, equally
+  // -- for a TARGET not already wrapped. It rides the same split; applyMove
+  // reads the length only when the wrap actually lands.
+  if (moveData.effect === "EFFECT_TRAP") {
+    if (state[actor === "you" ? "oppWrapped" : "youWrapped"]) return outs;
+    const split = [];
+    for (const o of outs) {
+      if (o.hit !== true) { split.push(o); continue; }
+      for (const n of [3, 4, 5, 6]) split.push({ ...o, p: o.p * 0.25, lockTurns: n });
+    }
+    return split;
+  }
   const draw = LOCK_DRAWS[moveData.effect];
   if (!draw || state[actor === "you" ? "youLock" : "oppLock"]?.kind === draw[0]) return outs;
   const share = 1 / draw[1].length;
