@@ -7651,11 +7651,18 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     // re-rolled every turn like paralysis/freeze above. Decrement happens
     // here, at the start of the sleeping mon's own action attempt
     // (src/battle_util.c CANCELER_ASLEEP, :2029-2038). Early Bird doubles
-    // the decrement (2/turn instead of 1, :2030-2033). Reaching 0 ("waking
-    // up") STILL forfeits this turn's move exactly like staying asleep does
-    // — the game routes to BattleScript_MoveUsedWokeUp, a separate
-    // "the mon wakes up" message, not a fallthrough into the chosen move
-    // (:2047-2053) — the mon only becomes available starting NEXT turn.
+    // the decrement (2/turn instead of 1, :2030-2033).
+    //
+    // B3 batch 4a: A MON THAT WAKES UP ACTS THAT SAME TURN. This comment used
+    // to say the opposite -- that BattleScript_MoveUsedWokeUp was "not a
+    // fallthrough into the chosen move". It is one: the waking branch calls
+    // BattleScriptPushCursor() first (:2049), and BattleScript_MoveUsedWokeUp
+    // ends in `return` (data/battle_scripts_1.s:3723-3728), which pops back to
+    // the same attackcanceler; the chain then resumes at the canceler AFTER
+    // ASLEEP. Only the STILL-asleep branch ends the action (MoveUsedIsAsleep,
+    // with HITMARKER_UNABLE_TO_USE_MOVE, :2040-2045). So a 2-turn sleep, an
+    // Early Bird, or any counter that reaches 0 had been costing one turn too
+    // many.
     const mon = actor === "you" ? ctx.you : ctx.opp;
     const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
     const toSub = mon.ability === "Early Bird" ? 2 : 1;
@@ -7663,10 +7670,10 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     // B2b batch 3: Snore and Sleep Talk are EXEMPT from the sleep lock while
     // the mon is still asleep -- source gates the "can't move" on
     // `gCurrentMove != MOVE_SNORE && gCurrentMove != MOVE_SLEEP_TALK`
-    // (:2040). A mon that WAKES UP this turn still forfeits it either way.
+    // (:2040). A mon that wakes up is simply awake, and uses its move.
     const sleepExempt = sleepRemaining > 0
       && (moveData.effect === "EFFECT_SLEEP_TALK" || moveData.effect === "EFFECT_SNORE");
-    statusBranches = [{ p: 1, prevented: !sleepExempt, thawed: false, sleepRemaining }];
+    statusBranches = [{ p: 1, prevented: sleepRemaining > 0 && !sleepExempt, thawed: false, sleepRemaining }];
   } else {
     statusBranches = [{ p: 1, prevented: false, thawed: false }];
   }
@@ -7853,15 +7860,17 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     const statusNow = state[actor === "you" ? "youStatus" : "oppStatus"];
     if (statusNow === "sleep") {
       // CANCELER_ASLEEP (src/battle_util.c:2015-2053) in order: DECREMENT
-      // first, then decide. A mon that WAKES UP forfeits the turn like any
-      // other waker, even with Sleep Talk selected; only a mon that is STILL
-      // asleep afterwards gets the Snore / Sleep Talk exemption from the lock.
+      // first, then decide. Only a mon that is STILL asleep afterwards gets
+      // the Snore / Sleep Talk exemption from the lock. B3 batch 4a: a mon that
+      // WAKES UP is awake by the time Sleep Talk's script runs, so the script's
+      // own sleep check (data/battle_scripts_1.s:1311-1316) fails it -- it used
+      // to be modelled as a forfeited turn, which is a different Skill result.
       const mon = actor === "you" ? ctx.you : ctx.opp;
       const turnsKey = actor === "you" ? "youSleepTurns" : "oppSleepTurns";
       const toSub = mon.ability === "Early Bird" ? 2 : 1;
       const sleepRemaining = Math.max(0, state[turnsKey] - toSub);
       if (sleepRemaining === 0) {
-        return [{ p: 1, hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, thawed: false, sleepRemaining }];
+        return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false, sleepRemaining }];
       }
       const candidates = sleepTalkCandidates(ctx, state, actor);
       if (candidates.length > 0) {

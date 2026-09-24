@@ -171,10 +171,10 @@ export const CURRENT = {
   "Marowak 2": { move: "Explosion", winProb: 0.5 }, // B7a: Thick Club doubles its Attack
   "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 },
   // A4/A6's confusion-sensitive set
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.5800000000000001 },
+  "Gengar 1": { move: "Shadow Ball", winProb: 0.64 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5800000000000001 (Hypnosis)
   "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9783547376864591 },
   "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8143718750000001 },
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.589053488498264 },
+  "Lapras 1": { move: "Meteor Mash", winProb: 0.6130758843315973 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.589053488498264 (Sing)
   "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
   "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
   "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
@@ -182,7 +182,7 @@ export const CURRENT = {
   "Spenser Silver Slaking": { move: "Explosion", winProb: 0.415625 },
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
   "Heracross 2": { move: "Explosion", winProb: 0.5 },
-  "Venusaur 3": { move: "Meteor Mash", winProb: 0.5964432373046875 },
+  "Venusaur 3": { move: "Meteor Mash", winProb: 0.6831619873046876 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5964432373046875 (Sleep Powder)
   "Lucy Silver Milotic": { move: "Shadow Ball", winProb: 0.9859237670898438 },
   "Tucker Gold Swampert": { move: "Earthquake", winProb: 0.52921875 },
   "Regirock 2": { move: "Meteor Mash", winProb: 0.40152383887764 }, // B7c: holds Quick Claw
@@ -196,7 +196,7 @@ export const CURRENT_CELLS = {
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
   "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 },
-  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9260616024472976 }, // B7c: Blissey 1 holds BrightPowder
+  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9351849809890322 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing)
 };
 
 // Full opponent AI distributions at fresh turn 1, for the roll-sensitive sets.
@@ -232,7 +232,7 @@ export const CURRENT_DIST = {
 // canonical Metagross lead most of these sets evaluate to a flat 1.0, which
 // locks nothing; the panel leads separate them.
 export const B2B1 = {
-  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.04666666666666666 },
+  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.06416666666666666 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.04666666666666666 (Hypnosis)
   "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.03202128648757935 },
   "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.0713143221859218 }, // B7c: holds Quick Claw
   "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49061960451908687 }, // B7a: Poison Barb
