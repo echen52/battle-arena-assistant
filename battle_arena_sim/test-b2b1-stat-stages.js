@@ -23,7 +23,7 @@
 // the exported applyMove so their real state writes are observed, not assumed.
 import {
   AI_HANDLERS, applyMove, buildMon, buildStartState, typeEffectiveness,
-  calcDamage, analyzeMatchup, search,
+  calcDamage, analyzeMatchup, search, vf,
 } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { FRONTIER_POOL } from "./frontier-pool.js";
@@ -186,7 +186,7 @@ console.log("-- PART 2: the executors write the state source says they write --"
   {
     const s = fresh();
     applyMove(ctx, s, "opp", "Focus Energy", true, false);
-    ok(s.oppFocusEnergy === true, "Focus Energy must set STATUS2_FOCUS_ENERGY");
+    ok(vf(s, "oppFocusEnergy"), "Focus Energy must set STATUS2_FOCUS_ENERGY");
     const skillAfterFirst = s.skillOpp;
     applyMove(ctx, s, "opp", "Focus Energy", true, false);
     ok(s.skillOpp < skillAfterFirst,

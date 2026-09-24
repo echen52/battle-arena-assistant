@@ -20,7 +20,7 @@
 //           baseline collapses today because AtStart is unreachable.
 
 import { freshMatchState, buildOverrides, solve, resolveOpponentBySetName } from "../site/ui-logic.js";
-import { buildMon, buildStartState, search } from "./logic.js";
+import { buildMon, buildStartState, search, vf, VF } from "./logic.js";
 
 const metagross = { species: "Metagross", level: 50, nature: "Adamant", evs: { atk: 252, spd: 4, spe: 252 }, ability: "Clear Body", item: "Cheri Berry", moves: ["Meteor Mash", "Earthquake", "Shadow Ball", "Explosion"] };
 const umbreon4 = { species: "Umbreon", level: 50, nature: "Bold", evs: { hp: 170, def: 170, spd: 170 }, ability: "Synchronize", item: "Leftovers", moves: ["Confuse Ray", "Toxic", "Faint Attack", "Double Team"] };
@@ -109,7 +109,9 @@ console.log("\n── PART 1b: engine seeds the 24 deferred inputs to their docu
 
   const badDefaults = [];
   for (const d of DEFERRED_INPUT_KEYS) {
-    if (base[d.key] !== d.default) badDefaults.push({ ...d, got: base[d.key] });
+    // B3 batch 7a: six per-side flags live in volFlags now; read them through it.
+    const got = d.key in VF ? vf(base, d.key) : base[d.key];
+    if (got !== d.default) badDefaults.push({ ...d, got });
   }
 
   if (badDefaults.length === 0) {

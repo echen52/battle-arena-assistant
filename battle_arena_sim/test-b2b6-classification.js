@@ -14,7 +14,7 @@
 //     EFFECT_PAY_DAY     touches gPaydayMoney and nothing else
 //     EFFECT_ATTACK_DOWN_HIT  an ordinary chance secondary
 import {
-  AI_HANDLERS, buildMon, buildStartState, resolveTurn, applyMove, calcDamage, skillDelta,
+  AI_HANDLERS, buildMon, buildStartState, resolveTurn, applyMove, calcDamage, skillDelta, vf, VF,
 } from "./logic.js";
 
 let failures = 0;
@@ -94,7 +94,7 @@ console.log("-- PART 3: Mud Sport halves Electric for EVERYONE, not just its use
   const ctx = { you, opp };
   const s = buildStartState({ you, opp });
   applyMove(ctx, s, "opp", "Mud Sport", true, false);
-  ok(s.oppMudSport === true, "Mud Sport must set the flag");
+  ok(vf(s, "oppMudSport"), "Mud Sport must set the flag");
   const b4 = s.skillOpp;
   applyMove(ctx, s, "opp", "Mud Sport", true, false);
   ok(s.skillOpp - b4 === skillDelta("noEffect"), "and fail if used again -- no stacking, no timer");
@@ -104,7 +104,7 @@ console.log("-- PART 3: Mud Sport halves Electric for EVERYONE, not just its use
   // src/battle_util.c:3112-3120).
   const zapper = mk("Raichu", ["Thunderbolt", "Body Slam", "Rest", "Quick Attack"], { ability: "Static" });
   const plain = buildStartState({ you: zapper, opp });
-  const sported = { ...plain, oppMudSport: true };
+  const sported = { ...plain, volFlags: plain.volFlags | VF.oppMudSport }; // B3 batch 7a: the flag is a volFlags bit
   const dmgPlain = resolveTurn({ you: zapper, opp }, plain, "Thunderbolt", "Rest")[0].state.oppHpPct;
   const dmgSport = resolveTurn({ you: zapper, opp }, sported, "Thunderbolt", "Rest")[0].state.oppHpPct;
   ok(dmgSport > dmgPlain,

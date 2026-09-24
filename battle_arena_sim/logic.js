@@ -3729,7 +3729,7 @@ function chooseOpponentMoves(opp, you, state) {
     // the vanilla bug preserved in that handler).
     targetForesighted: state.youForesighted,
     userForesighted: state.oppForesighted,
-    userFocusEnergy: state.oppFocusEnergy, // AI_CBM_FocusEnergy's STATUS2_FOCUS_ENERGY check
+    userFocusEnergy: vf(state, "oppFocusEnergy"), // AI_CBM_FocusEnergy's STATUS2_FOCUS_ENERGY check
     userIngrained: state.oppIngrained,
     targetLeechSeeded: state.youSeeded,
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
@@ -3794,7 +3794,7 @@ function chooseOpponentMoves(opp, you, state) {
     targetLastTakenMove: state.youLastTakenMove,
     // B2b batch 4.
     targetSideHasSpikes: state.youSpikesLayers > 0,
-    userMudSport: state.oppMudSport,
+    userMudSport: vf(state, "oppMudSport"),
     userSideMisted: state.oppMistTurns != null,
     // B2b batch 10. The AI reads hold EFFECTS, not item names, and it reads
     // them through the same generated table the battle does.
@@ -3803,7 +3803,7 @@ function chooseOpponentMoves(opp, you, state) {
     userUsedItem: state.oppUsedItem != null,
     userUsedHoldEffect: state.oppUsedItem ? ((itemData(state.oppUsedItem) || {}).holdEffect ?? null) : null,
     userStockpile: state.oppStockpile,
-    userWaterSport: state.oppWaterSport,
+    userWaterSport: vf(state, "oppWaterSport"),
     targetNightmared: state.youNightmared,
     // AI_CV_HealBell's second clause reads the TARGET's PARTY status. An Arena
     // matchup has no reserve party here, so it defaults false -- same stated
@@ -3849,7 +3849,7 @@ function chooseOpponentMoves(opp, you, state) {
     // Not modeled yet — no switching mechanic in Arena to prevent, and none
     // of Toxic-poison/Curse-status/Perish Song/Infatuation are tracked as
     // their own flags. Defaults false, same convention as other gaps.
-    targetCantEscape: false, targetPerishSonged: state.youPerishSonged,
+    targetCantEscape: false, targetPerishSonged: vf(state, "youPerishSonged"),
     // A6: `targetInfatuated: false` USED TO BE REPEATED HERE, ~74 lines after
     // the real assignment above. In a JS object literal the later key wins, so
     // the live wiring at the earlier line was dead and the flag was always
@@ -4140,7 +4140,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B2b batch 6. STATUS3_MUDSPORT / STATUS3_WATERSPORT sit on the USER and
     // halve Electric / Fire POWER for everyone (src/pokemon.c:3215-3218), which
     // calcDamage has read since B7a -- these are the flags that were missing.
-    youMudSport: false, oppMudSport: false,
+    // (folded into volFlags -- B3 batch 7a)
     // B2b batch 7. gDisableStructs.furyCutterCounter, 0..5. In an Arena match
     // the ONLY thing that resets it is a Fury Cutter that misses or has no
     // effect -- source's other two reset sites are item use and a failed run
@@ -4193,6 +4193,12 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // One field instead of four because of the 128-key limit (test-state-
     // shape.js): batch 3 left one key of headroom.
     turnFlags: 0,
+    // B3 batch 7a: six permanent-until-cleared volatile flags per side, as one
+    // bitmask (VF below): Mud Sport, Water Sport, Focus Energy, Minimize,
+    // Defense Curl, Perish Song. Read and written through vf()/setVf(); a
+    // legacy override key (e.g. youDefenseCurled: true) is translated by
+    // buildStartState. One field instead of twelve: the 128-key limit.
+    volFlags: 0,
     // B3 batch 3: the LOCKED-MOVE family, as ONE field per side:
     //   null | { move, kind: "rampage" | "rollout" | "bide" | "uproar", n, dmg? }
     // `move` is gLockedMoves under STATUS2_MULTIPLETURNS (the two-turn charge
@@ -4241,7 +4247,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
     youBouncing: false, oppBouncing: false,
     youStockpile: 0, oppStockpile: 0,
-    youWaterSport: false, oppWaterSport: false,
+    // (folded into volFlags -- B3 batch 7a)
     // STATUS2_NIGHTMARE -- maxHP/4 per end-of-turn, and only while asleep.
     youNightmared: false, oppNightmared: false,
     // STATUS3_IMPRISONED_OTHERS sits on the USER and blocks the FOE from moves
@@ -4263,14 +4269,14 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // STATUS2_FOCUS_ENERGY -- raises the crit stage by 2. Crits are enumerated
     // in B6, so this is recorded state whose damage consumer arrives there; it
     // already has a live consumer in AI_CBM_FocusEnergy's already-set check.
-    youFocusEnergy: false, oppFocusEnergy: false,
+    // (folded into volFlags -- B3 batch 7a)
     // STATUS2_MINIMIZE -- doubles EFFECT_FLINCH_MINIMIZE_HIT (Stomp/
     // Extrasensory), a CHANCE_SECONDARY effect not rolled until B4.
-    youMinimized: false, oppMinimized: false,
+    // (folded into volFlags -- B3 batch 7a)
     // STATUS2_DEFENSE_CURL -- doubles EFFECT_ROLLOUT's power; Rollout is still
     // in ACCEPTED_UNMODELED (B3). Tracked so porting Rollout does not have to
     // rediscover it, and so nothing here fails silently.
-    youDefenseCurled: false, oppDefenseCurled: false,
+    // (folded into volFlags -- B3 batch 7a)
     youAttracted: false, oppAttracted: false,
     youStages: freshStages(), oppStages: freshStages(),
     youStatus: null, oppStatus: null, // null | "paralysis" | "freeze" | "burn" | "poison" | "sleep"
@@ -4317,7 +4323,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // (Soundproof/already-set exempts a side at cast time — see
     // EFFECT_EXECUTORS.EFFECT_PERISH_SONG for why no countdown/faint field
     // is needed here at all).
-    youPerishSonged: false, oppPerishSonged: false,
+    // (folded into volFlags -- B3 batch 7a)
     // Batch 4: the opponent mon's PER-MON first-turn-out state
     // (gDisableStructs.isFirstTurn, the input the batch-1 STOP was blocked
     // on). true = the mon was just sent out / switched in this turn —
@@ -4340,6 +4346,18 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   // caller-supplied stage free to win as it always has.
   applyIntimidateOnSwitchIn(base, you, opp);
   if (!overrides) return base; // unchanged path — byte-identical to before overrides existed
+  // B3 batch 7a: a legacy per-flag key becomes its volFlags bit instead of an
+  // undeclared property (which would also break the state's shape).
+  if (Object.keys(overrides).some((k) => k in VF)) {
+    const rest = { ...overrides };
+    let bits = rest.volFlags ?? base.volFlags;
+    for (const k of Object.keys(VF)) {
+      if (!(k in rest)) continue;
+      bits = rest[k] ? (bits | VF[k]) : (bits & ~VF[k]);
+      delete rest[k];
+    }
+    overrides = { ...rest, volFlags: bits };
+  }
   return {
     ...base,
     ...overrides,
@@ -4741,8 +4759,8 @@ function tryEndOfTurnItem(s, side, mon) {
     case "HOLD_EFFECT_CRITICAL_UP": {
       if (s[consumedKey]) return;
       const feKey = side === "you" ? "youFocusEnergy" : "oppFocusEnergy";
-      if (curHp > Math.floor(maxHp / d.param) || s[feKey]) return;
-      s[feKey] = true;
+      if (curHp > Math.floor(maxHp / d.param) || vf(s, feKey)) return;
+      setVf(s, feKey, true);
       s[consumedKey] = true;
       return;
     }
@@ -5654,11 +5672,11 @@ const EFFECT_EXECUTORS = {
     // inert here regardless of which turn it's used on — verified, not a
     // shortcut — and only the "already perish-songed" flag needs tracking.
     const { you, opp } = ctx;
-    const youEligible = !s.youPerishSonged && you.ability !== "Soundproof";
-    const oppEligible = !s.oppPerishSonged && opp.ability !== "Soundproof";
+    const youEligible = !vf(s, "youPerishSonged") && you.ability !== "Soundproof";
+    const oppEligible = !vf(s, "oppPerishSonged") && opp.ability !== "Soundproof";
     if (!youEligible && !oppEligible) return "failed";
-    if (youEligible) s.youPerishSonged = true;
-    if (oppEligible) s.oppPerishSonged = true;
+    if (youEligible) setVf(s, "youPerishSonged", true);
+    if (oppEligible) setVf(s, "oppPerishSonged", true);
   },
   EFFECT_ACCURACY_DOWN: statDownExecutor("accuracy", 1, "Keen Eye"),
   // ── B2b batch 8: the nine the family sweep found missing ────────────────
@@ -5851,13 +5869,13 @@ const EFFECT_EXECUTORS = {
     // battle -- there is no timer. src/battle_main.c:3176 keeps it across a
     // switch, which is moot here.
     const key = actor === "you" ? "youMudSport" : "oppMudSport";
-    if (s[key]) return "failed";
-    s[key] = true;
+    if (vf(s, key)) return "failed";
+    setVf(s, key, true);
   },
   EFFECT_WATER_SPORT: (s, actor) => {
     const key = actor === "you" ? "youWaterSport" : "oppWaterSport";
-    if (s[key]) return "failed";
-    s[key] = true;
+    if (vf(s, key)) return "failed";
+    setVf(s, key, true);
   },
   // -- B2b batch 4 executors ----------------------------------------------
   EFFECT_HELPING_HAND: () => "failed",
@@ -5993,7 +6011,7 @@ const EFFECT_EXECUTORS = {
     // normally (no MOVE_RESULT_FAILED), which is what bumpStage's silent clamp
     // already reproduces. The curl bit only feeds EFFECT_ROLLOUT's power
     // doubling, still in ACCEPTED_UNMODELED (B3) -- tracked, not dropped.
-    s[actor === "you" ? "youDefenseCurled" : "oppDefenseCurled"] = true;
+    setVf(s, actor === "you" ? "youDefenseCurled" : "oppDefenseCurled", true);
     bumpStage(actor === "you" ? s.youStages : s.oppStages, "def", 1);
   },
   EFFECT_DEFENSE_DOWN: statDownExecutor("def", 1, null),
@@ -6022,7 +6040,7 @@ const EFFECT_EXECUTORS = {
     // two of later generations. The minimize bit only doubles
     // EFFECT_FLINCH_MINIMIZE_HIT (Stomp/Extrasensory), a CHANCE_SECONDARY
     // effect not rolled until B4 -- tracked, no consumer yet.
-    s[actor === "you" ? "youMinimized" : "oppMinimized"] = true;
+    setVf(s, actor === "you" ? "youMinimized" : "oppMinimized", true);
     bumpStage(actor === "you" ? s.youStages : s.oppStages, "evasion", 1);
   },
   EFFECT_FOCUS_ENERGY: (s, actor) => {
@@ -6033,8 +6051,8 @@ const EFFECT_EXECUTORS = {
     // already has a LIVE consumer today in AI_CBM_FocusEnergy's own check,
     // which is why the flag is real state and not a stub.
     const key = actor === "you" ? "youFocusEnergy" : "oppFocusEnergy";
-    if (s[key]) return "failed";
-    s[key] = true;
+    if (vf(s, key)) return "failed";
+    setVf(s, key, true);
   },
   EFFECT_BELLY_DRUM: (s, actor, ctx) => {
     // Cmd_maxattackhalvehp (src/battle_script_commands.c): halfHp =
@@ -6336,8 +6354,8 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
     // gStatuses3 for both battlers in CalculateBaseDamage), so this is an OR
     // across the two sides, not the attacker's own flag.
     baseMultiplier,
-    mudSportActive: s.youMudSport || s.oppMudSport,
-    waterSportActive: s.youWaterSport || s.oppWaterSport,
+    mudSportActive: vf(s, "youMudSport") || vf(s, "oppMudSport"),
+    waterSportActive: vf(s, "youWaterSport") || vf(s, "oppWaterSport"),
   };
 }
 
@@ -6968,7 +6986,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
         const timer = (s[lockKey]?.kind === "rollout" ? s[lockKey].n : 5) - 1;
         s[lockKey] = timer === 0 ? null : { move: moveName, kind: "rollout", n: timer };
         furyCutterPower = moveData.power * Math.pow(2, 5 - timer - 1)
-          * (s[isYou ? "youDefenseCurled" : "oppDefenseCurled"] ? 2 : 1);
+          * (vf(s, isYou ? "youDefenseCurled" : "oppDefenseCurled") ? 2 : 1);
       }
     }
     // B3 batch 1: HI JUMP KICK'S CRASH, on the MISS side of the damage path --
@@ -8868,6 +8886,24 @@ function bideAccumulate(ctx, s, pre) {
   }
 }
 
+// B3 batch 7a: the bits of state.volFlags, keyed by the field names they
+// replace so call sites and overrides read the same way they always did.
+const VF = {
+  youMudSport: 1, oppMudSport: 2, youWaterSport: 4, oppWaterSport: 8,
+  youFocusEnergy: 16, oppFocusEnergy: 32, youMinimized: 64, oppMinimized: 128,
+  youDefenseCurled: 256, oppDefenseCurled: 512, youPerishSonged: 1024, oppPerishSonged: 2048,
+};
+function vf(s, name) {
+  const bit = VF[name];
+  if (bit === undefined) throw new Error(`vf: "${name}" is not a volFlags bit`);
+  return (s.volFlags & bit) !== 0;
+}
+function setVf(s, name, on) {
+  const bit = VF[name];
+  if (bit === undefined) throw new Error(`setVf: "${name}" is not a volFlags bit`);
+  s.volFlags = on ? (s.volFlags | bit) : (s.volFlags & ~bit);
+}
+
 // B3 batch 4b: the bits of state.turnFlags (see buildStartState).
 const TF_YOU_FLINCHED = 1, TF_OPP_FLINCHED = 2, TF_YOU_UNABLE = 4, TF_OPP_UNABLE = 8;
 
@@ -9102,6 +9138,8 @@ export {
   // assert on the roll classes directly instead of re-deriving them.
   enumerateAiRollOutcomes, AI_SIM_ROLLS, buildAiDamageState,
   buildStartState, resolveTurn, search, printTree,
+  // B3 batch 7a: the volFlags accessor, for tests that inspect a folded flag.
+  vf, VF,
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
   // Change #11 guard tables — exported so the coverage test pins them to the
   // live pool rather than duplicating them.
