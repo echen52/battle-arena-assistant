@@ -169,6 +169,35 @@ function typeEffectiveness(moveType, defTypes, foresighted = false) {
 // checkBadMove runs first (AI_CheckBadMove); checkViability runs after
 // AI_TryToFaint (which is generic and applied automatically for any
 // damaging move — see scoreOpponentMove below).
+// B2b batch 7: the OTHER two-turn moves -- charge first, attack second, with no
+// invulnerability in between. Every one of them runs the SAME machinery as
+// Fly/Dig (BattleScriptFirstChargingTurn, data/battle_scripts_1.s:6-18, setting
+// STATUS2_MULTIPLETURNS); they differ only in what the charge turn does on the
+// side. So they are handled by the same code path here, with a null invuln bit.
+//
+//   EFFECT_RAZOR_WIND   nothing extra                    :1200-1205
+//   EFFECT_SKY_ATTACK   nothing extra (+ a flinch %)     :2091-2096
+//   EFFECT_SKULL_BASH   +1 Defence on the CHARGE turn    :2062-2075
+//   EFFECT_SOLAR_BEAM   SKIPS the charge entirely in sun :1207-1217
+//
+// Solar Beam and Sky Attack were previously in ACCEPTED_UNMODELED_EFFECTS,
+// "resolves as a free 1-turn hit" -- which made a 120-power and a 140-power
+// move strictly better than they are. Razor Wind was not ledgered at all and
+// threw. Both dispositions are replaced by the real mechanic.
+const CHARGE_EFFECTS = new Set([
+  "EFFECT_RAZOR_WIND", "EFFECT_SKY_ATTACK", "EFFECT_SKULL_BASH", "EFFECT_SOLAR_BEAM",
+]);
+
+// Solar Beam's sun check runs BEFORE the charge decision and is explicitly
+// nullified by Cloud Nine / Air Lock (:1207-1210 jumpifabilitypresent, both
+// abilities, before the weather test) -- which is exactly what effectiveWeather
+// already computes for every other weather consumer in this file.
+function chargeTurnRequired(moveData, weather) {
+  if (!CHARGE_EFFECTS.has(moveData.effect)) return false;
+  if (moveData.effect === "EFFECT_SOLAR_BEAM" && weather === "sun") return false;
+  return true;
+}
+
 // Semi-invulnerable moves (Dive/Fly/Dig/Bounce — all share EFFECT_SEMI_INVULNERABLE)
 // map to a specific gStatuses3 invulnerability bit. Bounce additionally
 // tries to paralyze on its attack turn (not modeled — none of our current
@@ -2538,6 +2567,14 @@ function variablePowerFor(move, attacker, defender, attackerHpPct, variablePower
       const curHp = Math.round((attackerHpPct / 100) * maxHp);
       return Math.max(1, Math.floor((curHp * move.power) / maxHp));
     }
+    // Fury Cutter's escalating power is computed in applyMove, where the
+    // counter lives, and arrives here the same way Magnitude's draw does.
+    case "EFFECT_FURY_CUTTER":
+      if (variablePower === null) {
+        throw new Error(`calcDamage: ${moveName} (EFFECT_FURY_CUTTER) needs its counter-derived power ` +
+          `from applyMove and got none.`);
+      }
+      return variablePower;
     case "EFFECT_MAGNITUDE":
     case "EFFECT_PRESENT": {
       // An enumerated draw, never a live one. Present's heal arm never reaches
@@ -3825,6 +3862,13 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // halve Electric / Fire POWER for everyone (src/pokemon.c:3215-3218), which
     // calcDamage has read since B7a -- these are the flags that were missing.
     youMudSport: false, oppMudSport: false,
+    // B2b batch 7. gDisableStructs.furyCutterCounter, 0..5. In an Arena match
+    // the ONLY thing that resets it is a Fury Cutter that misses or has no
+    // effect -- source's other two reset sites are item use and a failed run
+    // (src/battle_util.c:317, :518), neither of which exists here, and
+    // CancelMultiTurnMoves (:887) needs a switch. Notably using a DIFFERENT
+    // move does NOT reset it, which is the Gen III behaviour, not an omission.
+    youFuryCutter: 0, oppFuryCutter: 0,
     youWaterSport: false, oppWaterSport: false,
     // STATUS2_NIGHTMARE -- maxHP/4 per end-of-turn, and only while asleep.
     youNightmared: false, oppNightmared: false,
@@ -5166,6 +5210,13 @@ const EFFECT_EXECUTORS = {
   // is never empty -- but present so the no-executor guard cannot fire on it.
   EFFECT_METRONOME: () => "failed",
   // -- B2b batch 6 executors ----------------------------------------------
+  EFFECT_SPLASH: () => undefined,
+  // BattleScript_EffectSplash (data/battle_scripts_1.s:1830-1839) prints
+  // STRINGID_BUTNOTHINGHAPPENED and gotos MoveEnd -- it sets NO MOVE_RESULT
+  // flag, so it is a LANDED move that does nothing, not a failure. Returning
+  // "failed" here would wrongly cost the user its Skill point. Splash appears
+  // in AI_CV's "encouraged when target is asleep" table but has no CBM or CV
+  // row of its own, which is why it needs no AI handler.
   // EFFECT_SNORE has no executor ENTRY on purpose: a damaging move's executor
   // only ever runs through the secondary-chance dispatch, so a "fails while
   // awake" rule written here would be dead code. It lives inline in the damage
@@ -5471,6 +5522,14 @@ const INLINE_HANDLED_EFFECTS = new Set([
   // inline from INVULN_BYPASS in the damage path. Nothing was missing but the
   // classification, which is why this entry adds no behaviour.
   "EFFECT_GUST",
+  // B2b batch 7: the two-turn charge family, handled by the same two blocks as
+  // EFFECT_SEMI_INVULNERABLE (see CHARGE_EFFECTS). Solar Beam and Sky Attack
+  // LEFT the accepted-unmodelled ledger in this commit; Razor Wind was never on
+  // it and simply threw.
+  "EFFECT_RAZOR_WIND", "EFFECT_SKULL_BASH", "EFFECT_SOLAR_BEAM",
+  // Fury Cutter's escalating power, counter and resets, applied inline in the
+  // damage path (Cmd_furycuttercalc, src/battle_script_commands.c:8580-8602).
+  "EFFECT_FURY_CUTTER",
 ]);
 
 // CHANCE_SECONDARY: effects whose ONLY consequence beyond damage is a
@@ -5511,6 +5570,11 @@ const CHANCE_SECONDARY_EFFECTS = new Set([
   // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
   // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
   "EFFECT_SNORE",
+  // B2b batch 7. Each of these has its mandatory half modelled and a chance
+  // secondary left, which is this class:
+  "EFFECT_SKY_ATTACK",   // the 2-turn charge is modelled; the flinch % is not
+  "EFFECT_POISON_TAIL",  // poison %; its high crit rate is B6, like Blaze Kick
+  "EFFECT_TWISTER",      // flinch %; its 2x vs an airborne target is inline
 ]);
 
 // DAMAGE_MAGNITUDE_ONLY: power>1 effects that deal ordinary power-based damage
@@ -5554,7 +5618,6 @@ const HANDLED_EFFECTS = new Set([
 const ACCEPTED_UNMODELED_EFFECTS = {
   EFFECT_BRICK_BREAK:   "removes target's Reflect/Light Screen pre-damage — unmodeled (38 sets; INERT here, target never has screens up)",
   EFFECT_OVERHEAT:      "user SpA -2 after hit (Overheat, Psycho Boost) — unmodeled (23 sets)",
-  EFFECT_SOLAR_BEAM:    "2-turn charge unless sun — unmodeled, resolves as a free 1-turn hit (15 sets)",
   EFFECT_FOCUS_PUNCH:   "fails if user is damaged before moving; priority -3 — unmodeled (12 sets)",
   EFFECT_FAKE_OUT:      "guaranteed flinch on turn 1; priority — unmodeled (9 sets; flinch has no model at all yet)",
   EFFECT_RECHARGE:      "user loses next turn (Hyper Beam family) — unmodeled (8 sets)",
@@ -5563,10 +5626,20 @@ const ACCEPTED_UNMODELED_EFFECTS = {
   EFFECT_RAMPAGE:       "2-3 turn lock-in then self-confusion (Thrash/Outrage/Petal Dance) — unmodeled (2 sets)",
   EFFECT_FUTURE_SIGHT:  "damage lands 2 turns later, not now — unmodeled (1 set; timing wrong)",
   EFFECT_RECOIL_IF_MISS: "crash damage on miss (Hi Jump Kick) — unmodeled (1 set)",
-  EFFECT_SKY_ATTACK:    "2-turn charge (+30% flinch) — unmodeled (1 set)",
   EFFECT_KNOCK_OFF:     "removes target's held item — unmodeled (1 set)",
   EFFECT_SMELLINGSALT:  "cures target's paralysis (+2x vs paralyzed) — unmodeled (1 set)",
   EFFECT_ROLLOUT:       "5-turn lock-in, escalating power — unmodeled (1 set)",
+  // B2b batch 7 LEDGERED these two rather than porting them, with the reason
+  // named and the cost counted, because both need machinery that does not exist
+  // yet and neither is cheap:
+  EFFECT_UPROAR:        "2-5 turn move lock (Random()&3+2, src/battle_script_commands.c:2569-2576) " +
+                        "PLUS a battle-wide sleep block and a wake-up of anything already asleep " +
+                        "(src/battle_util.c:1625-1642, :2017-2024) — unmodeled (12 grid cells). " +
+                        "The lock alone would collapse to 2 classes like Disable's; the sleep " +
+                        "interaction is the expensive half, and it touches Rest, every sleep move " +
+                        "and the sleep counter.",
+  EFFECT_THIEF:         "steals the target's held item (Cmd_removeitem) — unmodeled (1 grid cell); " +
+                        "needs the same state-level mutable item as Trick, and lands with it",
 };
 
 // Warn-once dedup — module-scoped so a full 552-set sweep prints at most one
@@ -5856,6 +5929,27 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
 
   const selfChargingKey = isYou ? "youCharging" : "oppCharging";
 
+  // B2b batch 7: the non-invulnerable charge moves take the SAME two blocks as
+  // EFFECT_SEMI_INVULNERABLE below -- charge, then attack -- so they are folded
+  // into the same condition rather than copied under it.
+  const chargesThisTurn = chargeTurnRequired(moveData, effectiveWeather(s, you, opp));
+  if (chargesThisTurn && !s[selfChargingKey]) {
+    // Charge-initiation turn. No accuracy check, no damage, and no
+    // invulnerability -- invulnBit is null, which is the whole difference from
+    // Fly and Dig.
+    s[selfChargingKey] = { move: moveName, invulnBit: null };
+    // Skull Bash raises the user's Defence ON THE CHARGE TURN
+    // (data/battle_scripts_1.s:2067-2069), before the hit ever lands.
+    if (moveData.effect === "EFFECT_SKULL_BASH") {
+      bumpStage(isYou ? s.youStages : s.oppStages, "def", 1);
+    }
+    s[skillKey] += skillDelta("landed");
+    return;
+  }
+  if (chargesThisTurn && s[selfChargingKey]) {
+    s[selfChargingKey] = null;
+    // falls through to the normal damage branch below
+  }
   if (moveData.effect === "EFFECT_SEMI_INVULNERABLE" && !s[selfChargingKey]) {
     // Charge-initiation turn: no accuracy check, no damage. Mind scores
     // automatically (mindDelta above already ran); Skill falls through to
@@ -5972,13 +6066,28 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     const defStatKey = moveData.category === "physical" ? "def" : "spd";
     const eff = typeEffectiveness(moveData.type, foeMon.types, foeForesighted);
     const foeEndureKey = isYou ? "oppEndureActive" : "youEndureActive";
+    // B2b batch 7: Cmd_furycuttercalc (src/battle_script_commands.c:8580-8602).
+    // The counter resets on NO_EFFECT and otherwise climbs to a cap of 5, and
+    // the power is base * 2^(counter-1) -- 10/20/40/80/160 for Fury Cutter.
+    // Computed here, where the state lives, and handed to the SINGLE damage
+    // function as its power override rather than recomputed inside it.
+    let furyCutterPower = variablePower;
+    if (moveData.effect === "EFFECT_FURY_CUTTER") {
+      const fcKey = isYou ? "youFuryCutter" : "oppFuryCutter";
+      if (!hit || eff === 0) {
+        s[fcKey] = 0;
+      } else {
+        if (s[fcKey] !== 5) s[fcKey] += 1;
+        furyCutterPower = moveData.power * Math.pow(2, s[fcKey] - 1);
+      }
+    }
     if (hit) {
       // Reflect/Light Screen: halves damage of the matching category, gated
       // on the DEFENDER'S side having it up (src/pokemon.c:3267-3273/3318-3324).
       // Crits bypass this (gCritMultiplier==1 gate) — moot here since this
       // engine never branches crits (expected-value damage only, HANDOFF §4
       // known gap), so screenActive is always safe to apply when present.
-      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, variablePower));
+      let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, furyCutterPower));
       // Bypass bonus: moves that ignore semi-invulnerability (Surf/Whirlpool
       // vs Dive, Earthquake vs Dig, Twister/Gust vs Fly) double damage;
       // Thunder/Sky Uppercut bypass without the bonus (source-confirmed).
@@ -6836,6 +6945,12 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
       }
 
       const alreadyCharging = state[actor === "you" ? "youCharging" : "oppCharging"];
+      if (chargeTurnRequired(moveData, effectiveWeather(state, ctx.you, ctx.opp)) && !alreadyCharging) {
+        // B2b batch 7. Same as the semi-invulnerable case below: source's
+        // charge turn has no accuracy check at all.
+        results.push({ p: p, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, endureTriggered: false });
+        continue;
+      }
       if (moveData.effect === "EFFECT_SEMI_INVULNERABLE" && !alreadyCharging) {
         // Charge-initiation turn: no accuracy check at all in source — always
         // "succeeds" in starting the charge (barring the status-prevention
