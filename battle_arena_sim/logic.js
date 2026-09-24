@@ -346,6 +346,33 @@ function speedDownFamilyViability(ctx) {
 // physical" type (source comment flags this type list as an apparent bug —
 // Flying/Poison/Ghost are left out — preserved as-is, not "corrected", since
 // this is real AI behavior, not our own approximation).
+// AI_CV_SpAtkDown (data/battle_ai_scripts.s:1153-1180) is AI_CV_AttackDown
+// (:1093-1120) with two substitutions and one QUIRK, so the two are built from
+// one function here rather than written twice:
+//   the mid-chain stage gate reads STAT_SPATK instead of STAT_ATK
+//   the type list is the SPECIAL list instead of the physical one
+//   THE QUIRK: the FIRST gate reads STAT_ATK in BOTH routines. The Special
+//   Attack handler opens by checking the target's ATTACK stage. Reproduced, not
+//   corrected -- the same standard as every other preserved oddity here.
+// Source's own comment on the physical list notes it "seems likely" to have
+// been meant as "is the target a physical type" and that Flying, Poison and
+// Ghost were left out; the special list below is the one the ROM ships.
+const SP_ATK_DOWN_SPECIAL_TYPICAL_TYPES = ["Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"];
+function statDownOffenseFamilyViability(ctx, stageKey, typicalTypes) {
+  let dist = [{ p: 1, delta: 0 }];
+  // THE QUIRK: `atk`, deliberately, for both members of this family.
+  if (ctx.targetStages.atk !== 0) {
+    dist = combineDist(dist, [{ p: 1, delta: -1 }]);
+    if (ctx.userHpPct <= 90) dist = combineDist(dist, [{ p: 1, delta: -1 }]);
+  }
+  const skipRoll = ctx.targetStages[stageKey] > -3;
+  if (!skipRoll) dist = combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -2 }]);
+  if (ctx.targetHpPct <= 70) dist = combineDist(dist, [{ p: 1, delta: -2 }]);
+  const typical = ctx.targetTypes.some((t) => typicalTypes.includes(t));
+  if (!typical) dist = combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -2 }]);
+  return dist;
+}
+
 const ATTACK_DOWN_PHYSICAL_TYPICAL_TYPES = ["Normal", "Fighting", "Ground", "Rock", "Bug", "Steel"];
 function attackDownFamilyViability(ctx) {
   let dist = [{ p: 1, delta: 0 }];
@@ -1658,34 +1685,26 @@ const AI_HANDLERS = {
     },
     checkViability: accuracyDownFamilyViability,
   },
-  EFFECT_DEFENSE_DOWN_2: {
-    checkBadMove: (ctx) => {
-      if (ctx.targetStages.def <= -6) return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
-    },
-    checkViability: (ctx) => statDownDefenseFamilyViability(ctx, "def"),
-  },
-  EFFECT_SPEED_DOWN_2: {
-    // AI_CBM_SpeedDown (:287-290) — same shared tail, plus a Speed Boost check
-    // not present on the other stat-down handlers.
-    checkBadMove: (ctx) => {
-      if (ctx.targetStages.spe <= -6) return -10;
-      if (ctx.targetAbility === "Speed Boost") return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
-    },
-    checkViability: speedDownFamilyViability,
-  },
   EFFECT_ATTACK_DOWN_2: {
-    // AI_CBM_AttackDown's shared tail does NOT check Hyper Cutter at all
-    // (confirmed absent from data/battle_ai_scripts.s's CheckIfAbilityBlocksStatChange)
-    // even though Hyper Cutter DOES block the actual stat change in execution
-    // (src/battle_script_commands.c:4145) — a real, source-confirmed AI blind
-    // spot, preserved here rather than "fixed" (matches this engine's existing
-    // convention of preserving other AI blind spots, e.g. weather scoring).
+    // CORRECTED IN B2b BATCH 8. The comment this replaced said Hyper Cutter is
+    // "confirmed absent" from AI_CBM_AttackDown and called the omission a
+    // preserved AI blind spot. That was half right and therefore wrong: the
+    // shared TAIL (CheckIfAbilityBlocksStatChange, :308-312) does not check it,
+    // but AI_CBM_AttackDown itself does, two lines before the goto --
+    //
+    //   AI_CBM_AttackDown:                              (:277-281)
+    //     if_stat_level_equal AI_TARGET, STAT_ATK, MIN_STAT_STAGE, Score_Minus10
+    //     get_ability AI_TARGET
+    //     if_equal ABILITY_HYPER_CUTTER, Score_Minus10
+    //     goto CheckIfAbilityBlocksStatChange
+    //
+    // So the AI is NOT blind to Hyper Cutter here, and the engine was inventing
+    // a blind spot rather than preserving one. Found by the family sweep that
+    // opened this batch, not by reading -- which is the amendment 9 argument in
+    // one example.
     checkBadMove: (ctx) => {
       if (ctx.targetStages.atk <= -6) return -10;
+      if (ctx.targetAbility === "Hyper Cutter") return -10;
       if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
       return 0;
     },
@@ -1772,6 +1791,32 @@ const AI_HANDLERS = {
     checkViability: (ctx) => {
       if (ctx.userHpPct < 50) return [{ p: 1, delta: -1 }];
       return [{ p: 1, delta: ctx.targetTypes.includes("Fire") ? 1 : -1 }];
+    },
+  },
+  // ── B2b batch 8: the nine stat-stage effects that had no port ───────────
+  // Found by sweeping the FAMILY rather than by hitting one of them: 28 of
+  // source's stat-stage effects, 19 ported, 9 missing -- Attack Down among
+  // them, while Attack Down 2 and every other neighbour was present.
+  EFFECT_SPECIAL_ATTACK_DOWN: {
+    // AI_CBM_SpAtkDown (:292-294): min-stage, then the shared tail. No
+    // ability of its own, unlike Attack Down's Hyper Cutter.
+    checkBadMove: (ctx) => {
+      if (ctx.targetStages.spa <= -6) return -10;
+      return abilityBlocksStatChange(ctx);
+    },
+    checkViability: (ctx) => statDownOffenseFamilyViability(ctx, "spa", SP_ATK_DOWN_SPECIAL_TYPICAL_TYPES),
+  },
+  EFFECT_ACCURACY_UP: {
+    // AI_CBM_AccUp (:269-271): -10 only at max. AI_CV_AccuracyUp (:1027-1034):
+    // a stage-gated -2 roll, then an HP-gated -2.
+    checkBadMove: (ctx) => (ctx.userAccStage >= 6 ? -10 : 0),
+    checkViability: (ctx) => {
+      let dist = [{ p: 1, delta: 0 }];
+      if (!(ctx.userAccStage < 3)) {
+        dist = combineDist(dist, [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: -2 }]);
+      }
+      if (ctx.userHpPct <= 70) dist = combineDist(dist, [{ p: 1, delta: -2 }]);
+      return dist;
     },
   },
   EFFECT_PERISH_SONG: {
@@ -2313,6 +2358,28 @@ AI_HANDLERS.EFFECT_SPECIAL_ATTACK_UP_2 = AI_HANDLERS.EFFECT_SPECIAL_ATTACK_UP;
 AI_HANDLERS.EFFECT_DEFENSE_UP_2 = AI_HANDLERS.EFFECT_DEFENSE_UP;
 AI_HANDLERS.EFFECT_SPECIAL_DEFENSE_UP_2 = AI_HANDLERS.EFFECT_SPECIAL_DEFENSE_UP;
 AI_HANDLERS.EFFECT_SPEED_UP_2 = AI_HANDLERS.EFFECT_SPEED_UP;
+
+// B2b batch 8 extends that to every OTHER pair source dispatches to one
+// routine. Verified row by row in both tables rather than assumed from the
+// naming: AI_CheckBadMove :113-146 and AI_CheckViability :664-701 each list the
+// "_2" variant against the SAME label as its base. Aliases, not copies -- a
+// copy is how a clause lands in one member of a family and not the other.
+AI_HANDLERS.EFFECT_ATTACK_DOWN = AI_HANDLERS.EFFECT_ATTACK_DOWN_2;               // AI_CBM_AttackDown / AI_CV_AttackDown
+AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN_2 = AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN; // AI_CBM_SpAtkDown / AI_CV_SpAtkDown
+AI_HANDLERS.EFFECT_SPECIAL_DEFENSE_DOWN = AI_HANDLERS.EFFECT_SPECIAL_DEFENSE_DOWN_2; // AI_CBM_SpDefDown / AI_CV_SpDefDown
+AI_HANDLERS.EFFECT_ACCURACY_DOWN_2 = AI_HANDLERS.EFFECT_ACCURACY_DOWN;           // AI_CBM_AccDown / AI_CV_AccuracyDown
+AI_HANDLERS.EFFECT_EVASION_DOWN_2 = AI_HANDLERS.EFFECT_EVASION_DOWN;             // AI_CBM_EvasionDown / AI_CV_EvasionDown
+AI_HANDLERS.EFFECT_ACCURACY_UP_2 = AI_HANDLERS.EFFECT_ACCURACY_UP;               // AI_CBM_AccUp / AI_CV_AccuracyUp
+AI_HANDLERS.EFFECT_EVASION_UP_2 = AI_HANDLERS.EFFECT_EVASION_UP;                 // AI_CBM_EvasionUp / AI_CV_EvasionUp
+// These last two were already ported TWICE -- EFFECT_DEFENSE_DOWN_2 and
+// EFFECT_SPEED_DOWN_2 existed as separately hand-written objects, using
+// DIFFERENT viability functions from their bases for what source dispatches to
+// one routine. Measured across 2,250 contexts each (every combination of stage,
+// both HP axes, speed order, three abilities and three type lines): 0
+// disagreements, so the copies were equivalent -- this time. Collapsed to
+// aliases so they cannot stop being equivalent.
+AI_HANDLERS.EFFECT_DEFENSE_DOWN_2 = AI_HANDLERS.EFFECT_DEFENSE_DOWN;             // AI_CBM_DefenseDown / AI_CV_DefenseDown
+AI_HANDLERS.EFFECT_SPEED_DOWN_2 = AI_HANDLERS.EFFECT_SPEED_DOWN;                 // AI_CBM_SpeedDown / AI_CV_SpeedDown
 
 // ─────────────────────────────────────────────────────────────────────────
 // 4. DAMAGE CALCULATION (Gen III formula)
@@ -5192,6 +5259,22 @@ const EFFECT_EXECUTORS = {
     if (oppEligible) s.oppPerishSonged = true;
   },
   EFFECT_ACCURACY_DOWN: statDownExecutor("accuracy", 1, "Keen Eye"),
+  // ── B2b batch 8: the nine the family sweep found missing ────────────────
+  // Amounts and blocking abilities from the same two source sites as their
+  // ported siblings: the stat and stage come from each move's script
+  // (setstatchanger), and the ability blocks from Cmd_statbuffchange
+  // (src/battle_script_commands.c:4142-4145 -- Hyper Cutter for Attack, Keen
+  // Eye for accuracy, Clear Body / White Smoke for all of them, which
+  // statDownExecutor already applies to every member).
+  EFFECT_ATTACK_DOWN: statDownExecutor("atk", 1, "Hyper Cutter"),
+  EFFECT_ACCURACY_DOWN_2: statDownExecutor("accuracy", 2, "Keen Eye"),
+  EFFECT_EVASION_DOWN_2: statDownExecutor("evasion", 2, null),
+  EFFECT_SPECIAL_ATTACK_DOWN: statDownExecutor("spa", 1, null),
+  EFFECT_SPECIAL_ATTACK_DOWN_2: statDownExecutor("spa", 2, null),
+  EFFECT_SPECIAL_DEFENSE_DOWN: statDownExecutor("spd", 1, null),
+  EFFECT_ACCURACY_UP: (s, actor) => bumpStage(actor === "you" ? s.youStages : s.oppStages, "accuracy", 1),
+  EFFECT_ACCURACY_UP_2: (s, actor) => bumpStage(actor === "you" ? s.youStages : s.oppStages, "accuracy", 2),
+  EFFECT_EVASION_UP_2: (s, actor) => bumpStage(actor === "you" ? s.youStages : s.oppStages, "evasion", 2),
   EFFECT_DEFENSE_DOWN_2: statDownExecutor("def", 2, null),
   EFFECT_SPEED_DOWN_2: statDownExecutor("spe", 2, null),
   EFFECT_ATTACK_DOWN_2: statDownExecutor("atk", 2, "Hyper Cutter"),
