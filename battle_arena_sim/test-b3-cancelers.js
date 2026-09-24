@@ -38,7 +38,7 @@ console.log("-- PART 1: Fake Out flinches, on the first turn only --");
   const b = brs[0];
   ok(/You flinches/.test(b.label), `the slower mon must flinch (label: ${b.label})`);
   ok(b.state.oppHpPct === 100, "the flinched Body Slam must do nothing");
-  ok(b.state.youFlinched === false, "the flag must not survive the turn (src/battle_main.c:3943)");
+  ok((b.state.turnFlags & 1) === 0, "the flag must not survive the turn (src/battle_main.c:3943)");
   // Mind is still scored for the move it SELECTED (HandleAction_UseMove, before
   // the canceler); Skill is not (HITMARKER_OBEYS is never set).
   ok(b.state.mindYou === mindDelta("Body Slam"), "the flinched mon still scores Mind for Body Slam");
@@ -182,12 +182,12 @@ console.log("-- PART 7: a recharge that sleep pre-empts expires with its timer -
   // is stopped by SLEEP, its counter ticks, and the recharge is not spent --
   // but rechargeTimer runs out at the end of that turn, so it is gone after.
   const hb = mk("Snorlax", ["Hyper Beam", "Body Slam", "Rest", "Splash"], { ability: "Thick Fat" });
-  const st = start(slow, hb, { oppMustRecharge: "Hyper Beam", oppRechargeTimer: 1, oppStatus: "sleep", oppSleepTurns: 3 });
+  const st = start(slow, hb, { oppRecharge: { move: "Hyper Beam", timer: 1 }, oppStatus: "sleep", oppSleepTurns: 3 });
   const brs = turn(slow, hb, st, "Splash", "Hyper Beam");
   ok(brs.every((b) => !/must recharge/.test(b.label)), "sleep, not the recharge, must be what stops it");
   ok(brs.every((b) => b.state.oppSleepTurns === 2), "the sleep counter must tick");
-  ok(brs.every((b) => b.state.oppMustRecharge === null), "the recharge must expire with its timer at turn end");
-  console.log(`   ${brs[0].label}; recharge afterwards: ${brs[0].state.oppMustRecharge}`);
+  ok(brs.every((b) => b.state.oppRecharge === null), "the recharge must expire with its timer at turn end");
+  console.log(`   ${brs[0].label}; recharge afterwards: ${JSON.stringify(brs[0].state.oppRecharge)}`);
 }
 
 console.log();

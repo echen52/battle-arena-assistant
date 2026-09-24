@@ -4150,21 +4150,31 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // 4160-4165) and "uses" that move again (src/battle_util.c:107-110), which
     // is what the Mind judge scores (:289). Spent on that attempt, which it
     // forfeits entirely (CANCELER_RECHARGE, src/battle_util.c:2098-2108).
-    // null | moveName.
-    youMustRecharge: null, oppMustRecharge: null,
-    // gDisableStructs.rechargeTimer: 2 when set, decremented in
+    // `timer` is gDisableStructs.rechargeTimer: 2 when set, decremented in
     // TurnValuesCleanUp (src/battle_main.c:4878-4883), and STATUS2_RECHARGE is
-    // dropped when it reaches 0. So a recharge that SLEEP or FREEZE pre-empts
+    // dropped when it reaches 0 -- so a recharge that SLEEP or FREEZE pre-empts
     // (both sit above CANCELER_RECHARGE) is not carried into a third turn.
-    youRechargeTimer: 0, oppRechargeTimer: 0,
-    // B3 batch 2: STATUS2_FLINCHED. Set by a flinching hit, consumed by
-    // CANCELER_FLINCH, and cleared for everyone at the end of every turn
-    // (src/battle_main.c:3943) -- so it only ever matters within one turn.
-    youFlinched: false, oppFlinched: false,
+    //   null | { move, timer }        (replaced, never mutated)
+    // Deliberately NOT part of `xLock`: CancelMultiTurnMoves does not clear
+    // STATUS2_RECHARGE, and a freeze inflicted between the beam and the
+    // recharge turn would otherwise wipe it.
+    youRecharge: null, oppRecharge: null,
+    // B3 batch 4b: the per-turn flags, as one bitmask (TF_* below). All four
+    // are cleared together at the end of every turn by advanceTurn.
+    //   TF_YOU_FLINCHED / TF_OPP_FLINCHED -- STATUS2_FLINCHED, set by a
+    //     flinching hit, consumed by CANCELER_FLINCH, cleared for everyone at
+    //     turn end (src/battle_main.c:3943).
+    //   TF_YOU_UNABLE / TF_OPP_UNABLE -- the subset of WasUnableToUseMove
+    //     (src/battle_util.c:890-904) that does NOT already cancel at its
+    //     canceler: full paralysis, a confusion self-hit, a target not
+    //     affected. ENDTURN_THRASH reads it.
+    // One field instead of four because of the 128-key limit (test-state-
+    // shape.js): batch 3 left one key of headroom.
+    turnFlags: 0,
     // B3 batch 3: the LOCKED-MOVE family, as ONE field per side:
     //   null | { move, kind: "rampage" | "rollout", n }
     // `move` is gLockedMoves under STATUS2_MULTIPLETURNS (the two-turn charge
-    // keeps its own `xCharging`, recharge its own `xMustRecharge`); a locked mon
+    // keeps its own `xCharging`, recharge its own `xRecharge`); a locked mon
     // gets no action menu (src/battle_main.c:4160-4165) and re-uses it. `n` is
     // STATUS2_LOCK_CONFUSE's counter for Rampage (2 or 3 when set,
     // src/battle_script_commands.c:2851-2862) and gDisableStructs.rolloutTimer
@@ -4178,11 +4188,6 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // slower (cloneState 0.6 s -> 19 s of a 55 s profile). See
     // test-state-shape.js, which now fails past 128.
     youLock: null, oppLock: null,
-    // Per-turn: the subset of WasUnableToUseMove (src/battle_util.c:890-904)
-    // that does NOT already cancel at its canceler -- full paralysis, a
-    // confusion self-hit, and a target the move did not affect. ENDTURN_THRASH
-    // reads it. Cleared by advanceTurn.
-    youUnableThisTurn: false, oppUnableThisTurn: false,
     // B3 batch 2: gDisableStructs.isFirstTurn for the PLAYER's mon, the
     // counterpart of oppMonFirstTurn below. Fake Out's jumpifnotfirstturn
     // (src/battle_script_commands.c:6786-6794) reads it for whoever uses it.
@@ -6277,8 +6282,8 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // caller passed -- source reads gLockedMoves here, not a selection
   // (src/battle_util.c:107-110), and the Mind judge scores that (:289).
   // search() already forces it; this makes a direct resolveTurn caller agree.
-  if (statusPrevented && s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"]) {
-    moveName = s[actor === "you" ? "youMustRecharge" : "oppMustRecharge"];
+  if (statusPrevented && s[actor === "you" ? "youRecharge" : "oppRecharge"]) {
+    moveName = s[actor === "you" ? "youRecharge" : "oppRecharge"].move;
   }
   // B3 batch 2: MIND IS SCORED ON THE SELECTED MOVE, not the called one.
   // BattleArena_AddMindPoints runs in HandleAction_UseMove (src/battle_util.c:
@@ -6347,11 +6352,10 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     if (cancelReason === "recharge") {
       // B3 batch 1: the recharge is SPENT here -- CANCELER_RECHARGE clears
       // STATUS2_RECHARGE and the timer on the very attempt it blocks.
-      s[isYou ? "youMustRecharge" : "oppMustRecharge"] = null;
-      s[isYou ? "youRechargeTimer" : "oppRechargeTimer"] = 0;
+      s[isYou ? "youRecharge" : "oppRecharge"] = null;
     }
     // B3 batch 2: CANCELER_FLINCH clears the flag it acts on (:2113).
-    if (cancelReason === "flinch") s[isYou ? "youFlinched" : "oppFlinched"] = false;
+    if (cancelReason === "flinch") s.turnFlags &= ~(isYou ? TF_YOU_FLINCHED : TF_OPP_FLINCHED);
     // RECHARGE, FLINCH, DISABLED, TAUNTED and IMPRISONED all call
     // CancelMultiTurnMoves (src/battle_util.c:2103/:2115/:2127/:2138/:2149).
     // Sleep and freeze do NOT, and neither does full paralysis -- its call is
@@ -6359,7 +6363,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     if (cancelReason) cancelMultiTurnMoves(s, actor);
     // B3 batch 3: full paralysis does not cancel at its canceler, but it is in
     // WasUnableToUseMove (prlzImmobility), which ENDTURN_THRASH reads.
-    if (!cancelReason && s[selfStatusKey] === "paralysis") s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true;
+    if (!cancelReason && s[selfStatusKey] === "paralysis") s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE;
     // Paralysis full-para / still-frozen: Mind scores off selection
     // regardless (unconditional), no Skill (HITMARKER_OBEYS unset), no
     // damage or effect happens at all.
@@ -6378,7 +6382,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   }
 
   if (selfHit) {
-    s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true; // confusionSelfDmg (B3 batch 3)
+    s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE; // confusionSelfDmg (B3 batch 3)
     const dmg = calcConfusionDamage(selfMon);
     s[selfHpKey] = Math.max(0, s[selfHpKey] - (dmg / selfMon.stats.hp) * 100);
     s[mindKey] += mindDelta(mindMove);
@@ -6618,8 +6622,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   // locks the move. The turn it costs is spent at the START of the user's next
   // action, not here.
   if (moveData.effect === "EFFECT_RECHARGE" && hit) {
-    s[isYou ? "youMustRecharge" : "oppMustRecharge"] = moveName;
-    s[isYou ? "youRechargeTimer" : "oppRechargeTimer"] = 2;
+    s[isYou ? "youRecharge" : "oppRecharge"] = { move: moveName, timer: 2 };
   }
   if (moveData.effect === "EFFECT_KNOCK_OFF" && hit && foeMon.item
       && foeMon.ability !== "Sticky Hold") {
@@ -6805,7 +6808,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     }
     // B3 batch 3: typecalc sets targetNotAffected on a no-effect hit, and it is
     // in WasUnableToUseMove -- so a Thrash into a Ghost breaks its own lock.
-    if (hit && eff === 0) s[isYou ? "youUnableThisTurn" : "oppUnableThisTurn"] = true;
+    if (hit && eff === 0) s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE;
     // B3 batch 3: ROLLOUT / ICE BALL (Cmd_rolloutdamagecalculation, src/
     // battle_script_commands.c:8536-8569). The script's accuracycheck jumps to
     // the very next instruction on a miss, so a MISS still reaches the command,
@@ -7005,7 +7008,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // turn end, so setting it on a mon that already acted changes nothing.
       if (moveData.effect === "EFFECT_FAKE_OUT" && dmg > 0 && s[foeHpKey] > 0 && !foeHadSubstitute
           && foeMon.ability !== "Shield Dust" && foeMon.ability !== "Inner Focus") {
-        s[isYou ? "oppFlinched" : "youFlinched"] = true;
+        s.turnFlags |= isYou ? TF_OPP_FLINCHED : TF_YOU_FLINCHED;
       }
       // B3 batch 3: RAMPAGE'S LOCK. confuseifrepeatingattackends queues
       // MOVE_EFFECT_THRASH | AFFECTS_USER only while LOCK_CONFUSE is clear
@@ -7755,9 +7758,9 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
 function singleCauseCancel(ctx, state, actor, moveName, moveData) {
   const isYou = actor === "you";
   // CANCELER_RECHARGE (src/battle_util.c:2098-2108).
-  if (state[isYou ? "youMustRecharge" : "oppMustRecharge"]) return "recharge";
+  if (state[isYou ? "youRecharge" : "oppRecharge"]) return "recharge";
   // CANCELER_FLINCH (:2110-2120). Set by the foe's hit earlier this same turn.
-  if (state[isYou ? "youFlinched" : "oppFlinched"]) return "flinch";
+  if (state.turnFlags & (isYou ? TF_YOU_FLINCHED : TF_OPP_FLINCHED)) return "flinch";
   // CANCELER_DISABLED (:2122-2132): disabledMove == gCurrentMove. Reachable
   // only when a FASTER foe disabled the move after it was selected.
   const disabled = state[isYou ? "youDisabledMove" : "oppDisabledMove"];
@@ -8441,7 +8444,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 function endTurnThrash(s, side, mon) {
   const lockKey = side === "you" ? "youLock" : "oppLock";
   const n = s[lockKey].n - 1;
-  if (s[side === "you" ? "youUnableThisTurn" : "oppUnableThisTurn"]) {
+  if (s.turnFlags & (side === "you" ? TF_YOU_UNABLE : TF_OPP_UNABLE)) {
     cancelMultiTurnMoves(s, side);
   } else if (n === 0) {
     s[lockKey] = null;
@@ -8451,6 +8454,9 @@ function endTurnThrash(s, side, mon) {
     s[lockKey] = { ...s[lockKey], n };
   }
 }
+
+// B3 batch 4b: the bits of state.turnFlags (see buildStartState).
+const TF_YOU_FLINCHED = 1, TF_OPP_FLINCHED = 2, TF_YOU_UNABLE = 4, TF_OPP_UNABLE = 8;
 
 // The bookkeeping every successor state needs, in one place (B3 batch 2; the
 // two call sites used to repeat the first two lines by hand).
@@ -8462,15 +8468,12 @@ function advanceTurn(s) {
   s.youMonFirstTurn = false;
   // STATUS2_FLINCHED is cleared for every battler at the end of the turn
   // (src/battle_main.c:3943).
-  s.youFlinched = false;
-  s.oppFlinched = false;
-  s.youUnableThisTurn = false;
-  s.oppUnableThisTurn = false;
+  s.turnFlags = 0;
   // rechargeTimer (src/battle_main.c:4878-4883). Written out per side on
   // purpose: this runs on every successor state, and a loop building the key
   // by string concatenation measured 26 ms of self time on one heavy set.
-  if (s.youRechargeTimer > 0 && --s.youRechargeTimer === 0) s.youMustRecharge = null;
-  if (s.oppRechargeTimer > 0 && --s.oppRechargeTimer === 0) s.oppMustRecharge = null;
+  if (s.youRecharge) s.youRecharge = s.youRecharge.timer > 1 ? { ...s.youRecharge, timer: s.youRecharge.timer - 1 } : null;
+  if (s.oppRecharge) s.oppRecharge = s.oppRecharge.timer > 1 ? { ...s.oppRecharge, timer: s.oppRecharge.timer - 1 } : null;
 }
 
 function evaluateTerminal(state) {
@@ -8571,8 +8574,8 @@ function search(ctx, state, turnsRemaining) {
   // the search or the AI happened to pick.
   // B3 batch 3: and so does a mon locked into Rampage or Rollout
   // (STATUS2_MULTIPLETURNS, the same branch again).
-  const oppForced = state.oppCharging ? state.oppCharging.move : (state.oppMustRecharge || state.oppLock?.move);
-  const youForced = state.youCharging ? state.youCharging.move : (state.youMustRecharge || state.youLock?.move);
+  const oppForced = state.oppCharging ? state.oppCharging.move : (state.oppRecharge?.move || state.oppLock?.move);
+  const youForced = state.youCharging ? state.youCharging.move : (state.youRecharge?.move || state.youLock?.move);
   const oppCandidates = oppForced
     ? [{ move: oppForced, prob: 1 }]
     : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();

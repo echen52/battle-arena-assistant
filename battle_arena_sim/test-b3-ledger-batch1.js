@@ -148,7 +148,7 @@ console.log("-- PART 6: the two that cost a TURN rather than HP --");
   const hb = mk("Snorlax", ["Hyper Beam", "Body Slam", "Rest", "Earthquake"], { ability: "Thick Fat" });
   const hctx = { you, opp: hb };
   const fired = resolveTurn(hctx, buildStartState({ you, opp: hb }), IDLE, "Hyper Beam")[0];
-  ok(fired.state.oppMustRecharge === "Hyper Beam",
+  ok(fired.state.oppRecharge?.move === "Hyper Beam",
     "a landed Hyper Beam must leave its user needing to recharge, LOCKED to that move (gLockedMoves)");
   const hpAfterBeam = fired.state.yourHpPct;
   const next = resolveTurn(hctx, fired.state, IDLE, "Body Slam");
@@ -158,7 +158,7 @@ console.log("-- PART 6: the two that cost a TURN rather than HP --");
   // recharging mon doing nothing.
   ok(next.every((b) => b.state.yourHpPct === hpAfterBeam),
     "the recharging mon must do nothing at all, on every branch");
-  ok(next.every((b) => b.state.oppMustRecharge === null),
+  ok(next.every((b) => b.state.oppRecharge === null),
     "...and the recharge must be spent on that one turn");
   // Mind is scored on the LOCKED move, again: HandleAction_UseMove sets
   // gCurrentMove = gLockedMoves (src/battle_util.c:107-110) and then banks
@@ -181,7 +181,7 @@ console.log("-- PART 6: the two that cost a TURN rather than HP --");
   const beamer = mk("Snorlax", ["Hyper Beam", "Body Slam", "Growl", "Shadow Ball"], { ability: "Thick Fat" });
   const foe = mk("Machamp", ["Cross Chop", "Rest", "Rock Slide", "Bulk Up"], { ability: "Guts" });
   const youFired = resolveTurn({ you: beamer, opp: foe }, buildStartState({ you: beamer, opp: foe }), "Hyper Beam", "Rest")
-    .find((b) => b.state.youMustRecharge === "Hyper Beam");
+    .find((b) => b.state.youRecharge?.move === "Hyper Beam");
   ok(youFired, "(probe check) the PLAYER's Hyper Beam must set the lock too");
   const youTree = search({ you: beamer, opp: foe }, youFired.state, 1);
   ok(youTree.allOptions.length === 1 && youTree.allOptions[0].move === "Hyper Beam",
