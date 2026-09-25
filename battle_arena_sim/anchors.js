@@ -197,7 +197,7 @@ export const CURRENT_CELLS = {
   "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8934663712683204 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.8540164087233308)
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9696678585476344 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9640729692247177)
-  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7976496123258271 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7912195234978198)
+  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7979486889790162 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7912195234978198); B6-1b: the AI reads HP as source's TRUNCATED integer percentage (zeroing only the truncation restores 0.7976496123258271)
   "Snorlax|Blissey 1": { move: "Earthquake", winProb: 0.9351897271082135 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322; B4a (chance status secondaries) -- Body Slam's 30% paralysis now rolls and the advice FLIPS to Earthquake by 1 ULP (zeroing Body Slam alone restores Body Slam 0.9351897271082136)
 };
 

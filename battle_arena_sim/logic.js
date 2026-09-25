@@ -3265,7 +3265,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
     const simDmg = () => (simDmgMemo === undefined
       ? (simDmgMemo = aiCalcDamage(user, target, moveName, aiState, myRoll))
       : simDmgMemo);
-    const targetHp = Math.round((ctx.targetHpPct / 100) * target.stats.hp);
+    const targetHp = ctx.targetHp ?? Math.round((ctx.targetHpPct / 100) * target.stats.hp);
     // Cmd_if_can_faint (src/battle_ai_script_commands.c:1743-1750) opens with
     // `if (power < 2) { /* always take the non-KO branch */ }`, BEFORE ever
     // calling AI_CalcDmg — a move whose STATIC TABLE power is the 1-placeholder
@@ -3617,7 +3617,7 @@ function selectableMoves(moves, s, side, foeMon, who) {
 
 function enumerateAiRollOutcomes(opp, you, ctx) {
   const st = requireAiDamageState(ctx, "enumerateAiRollOutcomes");
-  const targetHp = Math.round((ctx.targetHpPct / 100) * you.stats.hp);
+  const targetHp = ctx.targetHp ?? Math.round((ctx.targetHpPct / 100) * you.stats.hp);
   const relevant = opp.moves.filter((m) => MOVES[m] && MOVES[m].power > 1);
   const hpRelevant = relevant.some((m) => HP_DEPENDENT_POWER_MOVES.has(m));
   let byYou = _aiRollClassCache.get(opp);
@@ -3701,10 +3701,22 @@ function computeAiRollOutcomes(opp, you, st, targetHp, relevant) {
 // scoring randomness (see scoreOpponentMoveDist). Replaces the old
 // "just take the deterministic argmax" approach, which silently assumed
 // away real randomness that's actually part of several handlers.
+// B6-1b: the AI reads HP as source's `(u32)(100 * hp / maxHP)` -- an INTEGER,
+// truncated (Cmd_if_hp_less_than / _more_than / _equal / _not_equal,
+// src/battle_ai_script_commands.c:713-780). The engine used to hand it the
+// float percentage, so a mon on 70.5% was "above 70" here and at 70 in the ROM.
+function aiHpPercent(pct, maxHp) {
+  const hp = Math.round((pct * maxHp) / 100);
+  return Math.floor((100 * hp) / maxHp);
+}
 function chooseOpponentMoves(opp, you, state) {
   const ctx = {
-    userHpPct: state.oppHpPct,
-    targetHpPct: state.yourHpPct,
+    userHpPct: aiHpPercent(state.oppHpPct, opp.stats.hp),
+    targetHpPct: aiHpPercent(state.yourHpPct, you.stats.hp),
+    // The target's ABSOLUTE HP, for the two damage-vs-HP comparisons
+    // (if_can_faint and the roll enumeration) -- which read gBattleMons[].hp
+    // itself, not the truncated percentage.
+    targetHp: Math.round((state.yourHpPct / 100) * you.stats.hp),
     // A6: targetConfused was hardcoded false. It was written when only Confuse
     // Ray could confuse and the flag was called metagrossConfused; it then
     // stayed false through every later change, so four handler branches that
