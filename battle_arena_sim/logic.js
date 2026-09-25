@@ -3106,7 +3106,8 @@ function calcDamage(attacker, defender, moveName, {
   // representable, and Math.floor(dmg * (r/100)) can land one below
   // floor(dmg*r/100). (Same one-ULP class as the Body truncation in
   // sim-audit.md §3.3.) The float `rollFrac` path is UNCHANGED and remains what
-  // the battle-damage path uses — widening that one is ledger #6, not A2.
+  // the battle-damage path uses: 0.925, a LABELLED point estimate of the
+  // 85-100 roll (amendment 15 -- enumerating it cost ~10x on top of crits).
   dmg = rollPercent != null
     ? Math.floor((dmg * rollPercent) / 100)
     : Math.floor(dmg * rollFrac);
@@ -6379,9 +6380,8 @@ const EFFECT_EXECUTORS = {
     // BattleScript_EffectFocusEnergy (data/battle_scripts_1.s:885-895): fails
     // outright (jumpifstatus2 -> ButItFailed) when STATUS2_FOCUS_ENERGY is
     // already set, else setfocusenergy. The flag raises the crit stage by 2;
-    // crits are enumerated in B6, so the damage consumer arrives there. It
-    // already has a LIVE consumer today in AI_CBM_FocusEnergy's own check,
-    // which is why the flag is real state and not a stub.
+    // its damage consumer is critChanceFor (B6-2), and AI_CBM_FocusEnergy's
+    // own check reads it too.
     const key = actor === "you" ? "youFocusEnergy" : "oppFocusEnergy";
     if (vf(s, key)) return "failed";
     setVf(s, key, true);
@@ -6465,7 +6465,7 @@ const PURE_DAMAGE_EFFECTS = new Set([
   "EFFECT_EARTHQUAKE",     // Dig double-damage bypass handled via INVULN_BYPASS
   "EFFECT_ALWAYS_HIT",     // accuracy bypass handled (accuracy: null)
   "EFFECT_QUICK_ATTACK",   // +1 priority handled in turn-order resolution
-  "EFFECT_HIGH_CRITICAL",  // crits not modeled by design (HANDOFF §4); AI scoring ported #9
+  "EFFECT_HIGH_CRITICAL",  // the +1 crit stage is critChanceFor's (B6-2); AI scoring ported #9
   "EFFECT_RETURN",         // friendship-based power handled in calcDamage
   "EFFECT_FRUSTRATION",    // friendship-based power handled in calcDamage
   "EFFECT_SKY_UPPERCUT",   // hits-through-Fly bypass; inert here (target never Flies)
@@ -6631,8 +6631,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
   const foeStatusKey = isYou ? "oppStatus" : "youStatus";
   // Reflect/Light Screen: halves damage of the matching category, gated on the
   // DEFENDER'S side having it up (src/pokemon.c:3267-3273 / 3318-3324). Crits
-  // bypass this (the gCritMultiplier == 1 gate) -- moot while crits are not
-  // branched (B6), so applying it whenever present is safe today.
+  // bypass this (the gCritMultiplier == 1 gate): `crit` below turns it off.
   const foeReflect = isYou ? s.oppReflectTurns : s.youReflectTurns;
   const foeLightScreen = isYou ? s.oppLightScreenTurns : s.youLightScreenTurns;
   return {
@@ -7535,9 +7534,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     if (hit) {
       // Reflect/Light Screen: halves damage of the matching category, gated
       // on the DEFENDER'S side having it up (src/pokemon.c:3267-3273/3318-3324).
-      // Crits bypass this (gCritMultiplier==1 gate) — moot here since this
-      // engine never branches crits (expected-value damage only, HANDOFF §4
-      // known gap), so screenActive is always safe to apply when present.
+      // Crits bypass this (gCritMultiplier==1 gate): battleDamageOptions turns
+      // screenActive off for a crit hit (B6-2; critDmg below).
       let dmg = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, furyCutterPower, spitUpMultiplier));
       // Bypass bonus: moves that ignore semi-invulnerability (Surf/Whirlpool
       // vs Dive, Earthquake vs Dig, Twister/Gust vs Fly) double damage;
