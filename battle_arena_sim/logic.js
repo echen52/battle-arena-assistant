@@ -1755,6 +1755,9 @@ const AI_HANDLERS = {
   // not assumed: it appears nowhere in data/battle_ai_scripts.s. So it scores
   // on the defaults alone.
   EFFECT_MIMIC: {},
+  // B3 batch 7d: EFFECT_TRANSFORM has NO row in either dispatch table either --
+  // absent from data/battle_ai_scripts.s entirely.
+  EFFECT_TRANSFORM: {},
   // B3 batch 4c: BIDE. AI_CBM_HighRiskForDamage (dispatched :123) and
   // AI_CV_Bide (:1284-1288, dispatched :675): -2 unless the user is above 90%
   // (`if_hp_more_than AI_USER, 90` -- strictly more). Its membership of the
@@ -4250,6 +4253,12 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // B3 batch 7c: a MOVESET override (Mimic), null | [4 moves], replaced never
     // mutated -- resolved by effectiveMon like the ability and item overrides.
     youMoves: null, oppMoves: null,
+    // B3 batch 7d: STATUS2_TRANSFORMED, carrying what Cmd_transformdataexecution
+    // copied (every BattlePokemon byte before `pp`, include/pokemon.h:260-281):
+    //   null | { species, types, ability, stats, moves, genderDist }
+    // `stats` are the five non-HP stats (HP, level, item, status are NOT copied).
+    // Resolved by effectiveMon UNDER the ability / moveset / item overrides.
+    youTransform: null, oppTransform: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
     youBouncing: false, oppBouncing: false,
@@ -6565,6 +6574,33 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     return;
   }
 
+  // B3 batch 7d: TRANSFORM (Cmd_transformdataexecution, src/battle_script_
+  // commands.c:7764-7806). Fails (MOVE_RESULT_FAILED, -2) if the target is
+  // already transformed or semi-invulnerable. Otherwise the user takes the
+  // target's species, types, ability, non-HP stats, moves AND CURRENT STAT
+  // STAGES, and loses its own Disable and mimicked moves. It also sets
+  // gChosenMove = MOVE_UNAVAILABLE, so the user's LAST MOVE is unavailable:
+  // a Disable, Encore or Mimic aimed at it next finds nothing. +1.
+  if (moveData.effect === "EFFECT_TRANSFORM") {
+    const foeTf = s[isYou ? "oppTransform" : "youTransform"];
+    const foeCharging = s[isYou ? "oppCharging" : "youCharging"];
+    if (foeTf || foeCharging?.invulnBit) { s[skillKey] += skillDelta("noEffect"); return; }
+    const { hp: _hp, ...nonHp } = foeMon.stats;
+    s[isYou ? "youTransform" : "oppTransform"] = {
+      species: foeMon.species, types: [...foeMon.types], ability: foeMon.ability,
+      stats: nonHp, moves: [...foeMon.moves], genderDist: foeMon.genderDist,
+    };
+    const foeSt = isYou ? s.oppStages : s.youStages;
+    if (isYou) s.youStages = { ...foeSt }; else s.oppStages = { ...foeSt };
+    s[isYou ? "youDisabledMove" : "oppDisabledMove"] = null;
+    s[isYou ? "youDisableTurns" : "oppDisableTurns"] = null;
+    s[isYou ? "youMoves" : "oppMoves"] = null;           // mimickedMoves = 0
+    s[isYou ? "youAbilityOverride" : "oppAbilityOverride"] = null; // the copied ability replaces any swap
+    s[selfLastMoveKey] = null;                          // gChosenMove = MOVE_UNAVAILABLE
+    s[skillKey] += skillDelta("landed");
+    return;
+  }
+
   // B3 batch 7c: MIMIC (data/battle_scripts_1.s:1134-1145, Cmd_mimicattackcopy
   // src/battle_script_commands.c:7844-7883), in the script's order, every
   // failure through ButItFailed (-2): a Substitute on the target; the accuracy
@@ -6577,7 +6613,7 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   if (moveData.effect === "EFFECT_MIMIC") {
     const copy = s[isYou ? "oppLastMove" : "youLastMove"];
     const known = selfMon.moves;
-    if (foeHadSubstitute || !hit || copy == null
+    if (foeHadSubstitute || !hit || copy == null || s[isYou ? "youTransform" : "oppTransform"]
         || ["Metronome", "Struggle", "Sketch", "Mimic"].includes(copy) || known.includes(copy)) {
       s[skillKey] += skillDelta("noEffect");
       return;
@@ -8148,6 +8184,11 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     }
     return out;
   }
+  if (moveData.effect === "EFFECT_TRANSFORM") {
+    // B3 batch 7d: BattleScript_EffectTransform (data/battle_scripts_1.s:947-956)
+    // has no accuracycheck and the move's flags are 0 -- one branch.
+    return [{ p: 1, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false }];
+  }
   if (moveData.effect === "EFFECT_MIMIC") {
     // B3 batch 7c: `accuracycheck ..., NO_ACC_CALC_CHECK_LOCK_ON` (src/
     // battle_script_commands.c:1103-1110): no accuracy roll at all. A Lock-On
@@ -8625,13 +8666,20 @@ function effectiveMon(mon, state, side) {
   const ability = state[side === "you" ? "youAbilityOverride" : "oppAbilityOverride"];
   const item = state[side === "you" ? "youItemOverride" : "oppItemOverride"];
   const moves = state[side === "you" ? "youMoves" : "oppMoves"];
-  if (ability == null && item === undefined && moves == null) return mon;
+  const tf = state[side === "you" ? "youTransform" : "oppTransform"];
+  if (ability == null && item === undefined && moves == null && tf == null) return mon;
   let byKey = _effectiveMonCache.get(mon);
   if (!byKey) { byKey = new Map(); _effectiveMonCache.set(mon, byKey); }
-  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}`;
+  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}|${tf ? tf.species + ":" + tf.moves.join(",") + ":" + tf.ability : ""}`;
   let out = byKey.get(key);
   if (!out) {
     out = { ...mon };
+    // B3 batch 7d: Transform first -- the later overrides sit on top of it.
+    if (tf) {
+      out.species = tf.species; out.types = tf.types; out.ability = tf.ability;
+      out.moves = tf.moves; out.genderDist = tf.genderDist;
+      out.stats = { ...tf.stats, hp: mon.stats.hp };
+    }
     if (ability != null) out.ability = ability;
     if (item !== undefined) out.item = item;
     if (moves != null) out.moves = moves;

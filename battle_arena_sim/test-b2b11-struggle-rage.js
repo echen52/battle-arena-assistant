@@ -134,8 +134,9 @@ console.log("-- PART 4: what is left, and it is named --");
   // These effects still throw, deliberately. The test asserts the LIST, so that
   // another cannot join it quietly -- and an effect leaves it only by being
   // ported, with its own test. HISTORY: four at batch 11; EFFECT_BIDE left in
-  // B3 batch 4c (test-b3-bide.js); EFFECT_MIMIC in B3 batch 7c (test-b3-mimic.js).
-  const STILL_THROWING = ["EFFECT_ASSIST", "EFFECT_TRANSFORM"];
+  // B3 batch 4c (test-b3-bide.js); EFFECT_MIMIC in B3 batch 7c (test-b3-mimic.js);
+  // EFFECT_TRANSFORM in B3 batch 7d (test-b3-transform.js).
+  const STILL_THROWING = ["EFFECT_ASSIST"];
   const you = mk("Snorlax", [IDLE, "Body Slam", "Growl", "Shadow Ball"]);
   const byEffect = {
     EFFECT_MIMIC: "Mimic", EFFECT_ASSIST: "Assist", EFFECT_TRANSFORM: "Transform", EFFECT_BIDE: "Bide",
