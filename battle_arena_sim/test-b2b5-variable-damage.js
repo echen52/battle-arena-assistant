@@ -24,7 +24,9 @@ const mk = (species, moves, over = {}) => buildMon({
   species, level: 50, nature: "Adamant", evs: { hp: 252, atk: 252 },
   ability: "Pressure", item: null, moves, friendship: 255, ...over,
 });
-const you = mk("Snorlax", ["Body Slam", "Earthquake", "Shadow Ball", "Ice Beam"]);
+// B6-2: Shell Armor -- this file measures the opponent's damage DRAWS against
+// the player, and Magnitude/Present can crit, which would split every draw.
+const you = mk("Snorlax", ["Body Slam", "Earthquake", "Shadow Ball", "Ice Beam"], { ability: "Shell Armor" });
 const maxHp = you.stats.hp;
 // HP the probe starts the player at, in whole HP, the way source counts it.
 const START_PCT = 80;
@@ -36,7 +38,8 @@ const branchesFor = (move, species, overrides = {}) => {
   const s = buildStartState({ you, opp, overrides: { yourHpPct: START_PCT, oppHpPct: 60, ...overrides } });
   // B4: the probe move is Earthquake, not Body Slam -- Body Slam's 30% paralysis
   // would split every branch in two, orthogonally to what this file measures.
-  return { opp, branches: resolveTurn({ you, opp }, s, "Earthquake", move), state: s };
+  // B6-2: now Splash -- Earthquake can crit, which split every branch in two.
+  return { opp, branches: resolveTurn({ you, opp }, s, "Splash", move), state: s };
 };
 
 console.log("-- PART 1: set damage -- a fixed number, no roll, no STAB, no type mult --");

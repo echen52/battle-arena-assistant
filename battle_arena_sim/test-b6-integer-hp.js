@@ -24,7 +24,9 @@ console.log("-- PART 1: an exactly lethal hit faints --");
   // Walk the recorded line: Flamethrower / Thunder Wave, then Flamethrower /
   // Thunderbolt -- which leaves Ampharos on exactly 47 HP.
   let st = buildStartState({ you, opp });
-  const pick = (brs, re) => brs.find((b) => re.test(b.label) && !/MISSES|paralyzed/.test(b.label) && b.state.youStatus !== "burn" && b.state.oppStatus !== "burn");
+  // B6-2: the NON-crit branch -- the one leaving the MOST HP on each side.
+  const pick = (brs, re) => brs.filter((b) => re.test(b.label) && !/MISSES|paralyzed/.test(b.label) && b.state.youStatus !== "burn" && b.state.oppStatus !== "burn")
+    .sort((a, b) => (b.state.oppHpPct + b.state.yourHpPct) - (a.state.oppHpPct + a.state.yourHpPct))[0];
   st = pick(resolveTurn({ you, opp }, st, "Flamethrower", "Thunder Wave"), /Thunder Wave/).state;
   st = pick(resolveTurn({ you, opp }, st, "Flamethrower", "Thunderbolt"), /Thunderbolt \(hits\)/).state;
   ok(Math.round((st.oppHpPct * opp.stats.hp) / 100) === 47, `(probe check) Ampharos is on 47 HP (${(st.oppHpPct * opp.stats.hp) / 100})`);

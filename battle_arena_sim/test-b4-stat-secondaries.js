@@ -26,7 +26,8 @@ const start = (you, opp, o = {}) => buildStartState({ you, opp, overrides: o });
 const turn = (you, opp, st, ym, om) => resolveTurn({ you, opp }, st, ym, om);
 const prob = (brs, f) => brs.filter(f).reduce((a, b) => a + b.p, 0);
 
-const wall = mk("Blissey", ["Splash", "Soft-Boiled", "Growl", "Protect"], { ability: "Natural Cure", evs: { hp: 252, def: 252, spd: 252 } });
+// B6-2: Shell Armor, so a crit does not split the branch counts asserted here.
+const wall = mk("Blissey", ["Splash", "Soft-Boiled", "Growl", "Protect"], { ability: "Shell Armor", evs: { hp: 252, def: 252, spd: 252 } });
 const run = (atk, move, tgt = wall, o = {}) => turn(atk, tgt, start(atk, tgt, o), move, "Splash");
 const pStage = (brs, side, k, v) => prob(brs, (b) => b.state[side + "Stages"][k] === v);
 

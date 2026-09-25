@@ -70,7 +70,7 @@ export const ANCHOR = {
   lead: "Metagross",
   set: "Umbreon 4",
   move: "Meteor Mash",
-  winProb: 0.9151343785835914,
+  winProb: 0.9057599196787075,
 };
 
 // Never deleted. Each row is (value, class, why).
@@ -89,6 +89,8 @@ export const ANCHOR_HISTORY = [
   ["0.9067329423180334", "B7a", "unchanged — Metagross holds Cheri Berry and Umbreon 4 Leftovers; neither is a damage modifier, and neither mon has a modifier ability"],
   ["0.9067329423180334", "B7b..B4c", "unchanged — no item effect, ability or chance secondary of either mon reaches it"],
   ["0.9151343785835914", "B4d-pre", "MOVED — Umbreon 4's Confuse Ray now WEARS OFF: confusion lasts 2-5 turns (CANCELER_CONFUSED); zeroing only the snap-out chances restores 0.9067329423180334"],
+  ["0.9151343785835914", "C1, B6-1a..1d", "unchanged — headless search, integer HP, the AI's integer HP percentage and the transposition table leave it bit for bit"],
+  ["0.9057599196787075", "B6-2", "MOVED — critical hits, exact (Cmd_critcalc); the crits-off engine reproduces the pre-crit universe byte for byte"],
 ];
 
 // B7a moved three OTHER recorded values, each with a named mechanism. Kept here
@@ -156,49 +158,49 @@ export const A6_PRE = {
 export const CURRENT = {
   // A2's roll-sensitive set
   "Entei 1": { move: "Explosion", winProb: 0.046614478031794235 },
-  "Rhydon 1": { move: "Earthquake", winProb: 0.2583394646841043 }, // B7c: holds Quick Claw
-  "Rhydon 3": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
-  "Rhydon 4": { move: "Earthquake", winProb: 0.03589395753741264 }, // B7c: holds Quick Claw
-  "Houndoom 1": { move: "Earthquake", winProb: 0.11759039545588663 }, // B7c: holds Focus Band
+  "Rhydon 1": { move: "Earthquake", winProb: 0.29616676691898647 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.2583394646841043
+  "Rhydon 3": { move: "Earthquake", winProb: 0.08420545496232806 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.03589395753741264
+  "Rhydon 4": { move: "Earthquake", winProb: 0.08420545496232806 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.03589395753741264
+  "Houndoom 1": { move: "Earthquake", winProb: 0.12247320795588662 }, // B7c: holds Focus Band; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.11759039545588663
   "Rapidash 1": { move: "Earthquake", winProb: 0.0009765625 }, // B7a: Charcoal
   "Anabel Silver Entei": { move: "Explosion", winProb: 0.5 },
   "Exploud 3": { move: "Explosion", winProb: 0.5 },
   "Donphan 1": { move: "Explosion", winProb: 0.5 },
   // A9's state-sensitive set
-  "Quagsire 3": { move: "Explosion", winProb: 0.5 }, // B7c: holds Quick Claw -- and the advice FLIPS
-  "Swampert 1": { move: "Meteor Mash", winProb: 0.5000737108290196 },
-  "Snorlax 2": { move: "Meteor Mash", winProb: 0.8027441776394845 },
+  "Quagsire 3": { move: "Explosion", winProb: 0.4996093809604645 }, // B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5
+  "Swampert 1": { move: "Explosion", winProb: 0.5 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5000737108290196 Meteor Mash, the advice FLIPS
+  "Snorlax 2": { move: "Meteor Mash", winProb: 0.8146986831037795 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8027441776394845
   "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
-  "Snorlax 7": { move: "Meteor Mash", winProb: 0.6360831557907413 }, // B7c: holds Quick Claw
+  "Snorlax 7": { move: "Meteor Mash", winProb: 0.6562622044263354 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6360831557907413
   "Marowak 2": { move: "Explosion", winProb: 0.5 }, // B7a: Thick Club doubles its Attack
-  "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 },
+  "Suicune 1": { move: "Meteor Mash", winProb: 0.5092947876077426 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5159383055241743
   // A4/A6's confusion-sensitive set
   "Gengar 1": { move: "Shadow Ball", winProb: 0.649375 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5800000000000001 (Hypnosis); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.64)
-  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9837660532648443 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9783547376864591)
-  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8479656250000001 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.8143718750000001)
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.6209323947482639 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.589053488498264 (Sing); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.6130758843315973)
-  "Cradily 1": { move: "Meteor Mash", winProb: 0.9856756127472637 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9831834216220691)
-  "Starmie 6": { move: "Shadow Ball", winProb: 0.8593750000000001 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7821180555555556)
-  "Tauros 1": { move: "Meteor Mash", winProb: 0.5597958984375 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5167382812500002)
-  "Articuno 5": { move: "Meteor Mash", winProb: 0.9727478477299578 }, // B7c: holds Focus Band (a 1-ULP move); B4a (chance status secondaries) -- its BLIZZARD now freezes 10% (zeroing Blizzard alone restores 0.9694799148701365); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.9665761405443762)
-  "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.6746125561523437 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS; B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5478714843750001)
+  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.981852105022881 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9783547376864591); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9837660532648443
+  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8343867306113244 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.8143718750000001); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8479656250000001
+  "Lapras 1": { move: "Meteor Mash", winProb: 0.6231751209100089 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.589053488498264 (Sing); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.6130758843315973); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6209323947482639
+  "Cradily 1": { move: "Meteor Mash", winProb: 0.9851338144817644 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9831834216220691); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9856756127472637
+  "Starmie 6": { move: "Shadow Ball", winProb: 0.8181546529134114 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7821180555555556); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8593750000000001
+  "Tauros 1": { move: "Meteor Mash", winProb: 0.5573471899108887 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5167382812500002); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5597958984375
+  "Articuno 5": { move: "Meteor Mash", winProb: 0.9713734935012814 }, // B7c: holds Focus Band (a 1-ULP move); B4a (chance status secondaries) -- its BLIZZARD now freezes 10% (zeroing Blizzard alone restores 0.9694799148701365); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.9665761405443762); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9727478477299578
+  "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.6407034222412108 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS; B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5478714843750001); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6746125561523437
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
-  "Heracross 2": { move: "Explosion", winProb: 0.5 },
-  "Venusaur 3": { move: "Meteor Mash", winProb: 0.6831619873046876 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5964432373046875 (Sleep Powder)
-  "Lucy Silver Milotic": { move: "Shadow Ball", winProb: 0.9859237670898438 },
-  "Tucker Gold Swampert": { move: "Earthquake", winProb: 0.52921875 },
-  "Regirock 2": { move: "Meteor Mash", winProb: 0.40152383887764 }, // B7c: holds Quick Claw
-  "Golem 1": { move: "Meteor Mash", winProb: 0.9630743324033422 }, // B7c: holds Quick Claw -- and the advice FLIPS
+  "Heracross 2": { move: "Explosion", winProb: 0.49032943944136304 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5
+  "Venusaur 3": { move: "Meteor Mash", winProb: 0.6928590240478518 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5964432373046875 (Sleep Powder); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6831619873046876
+  "Lucy Silver Milotic": { move: "Shadow Ball", winProb: 0.9059897259451317 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9859237670898438
+  "Tucker Gold Swampert": { move: "Earthquake", winProb: 0.5314903259277344 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.52921875
+  "Regirock 2": { move: "Meteor Mash", winProb: 0.4142447724693017 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.40152383887764
+  "Golem 1": { move: "Meteor Mash", winProb: 0.9558105218525705 }, // B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9630743324033422
 };
 
 // Cross-lead cells, keyed "Lead|Set". A3's poison-sensitive set.
 export const CURRENT_CELLS = {
-  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9824447945293759 }, // B7a: the lead's own Thick Fat; B4a (chance status secondaries) -- Articuno's BLIZZARD freezes the lead 10% (zeroing it alone restores 0.985365207225065)
-  "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
-  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8934663712683204 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.8540164087233308)
-  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9696678585476344 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9640729692247177)
-  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7979486889790162 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7912195234978198); B6-1b: the AI reads HP as source's TRUNCATED integer percentage (zeroing only the truncation restores 0.7976496123258271)
-  "Snorlax|Blissey 1": { move: "Earthquake", winProb: 0.9351897271082135 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322; B4a (chance status secondaries) -- Body Slam's 30% paralysis now rolls and the advice FLIPS to Earthquake by 1 ULP (zeroing Body Slam alone restores Body Slam 0.9351897271082136)
+  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9815140801362997 }, // B7a: the lead's own Thick Fat; B4a (chance status secondaries) -- Articuno's BLIZZARD freezes the lead 10% (zeroing it alone restores 0.985365207225065); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9824447945293759
+  "Starmie|Brandon Silver Registeel": { move: "Surf", winProb: 0.8717222521498547 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8888926973180181 Thunderbolt, the advice FLIPS
+  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8785664721368601 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.8540164087233308); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8934663712683204
+  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9680102818301773 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9640729692247177); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9696678585476344
+  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.786438025378394 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7912195234978198); B6-1b: the AI reads HP as source's TRUNCATED integer percentage (zeroing only the truncation restores 0.7976496123258271); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7979486889790162
+  "Snorlax|Blissey 1": { move: "Earthquake", winProb: 0.9351897271082136 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322; B4a (chance status secondaries) -- Body Slam's 30% paralysis now rolls and the advice FLIPS to Earthquake by 1 ULP (zeroing Body Slam alone restores Body Slam 0.9351897271082136); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9351897271082135
 };
 
 // Full opponent AI distributions at fresh turn 1, for the roll-sensitive sets.
@@ -234,16 +236,16 @@ export const CURRENT_DIST = {
 // canonical Metagross lead most of these sets evaluate to a flat 1.0, which
 // locks nothing; the panel leads separate them.
 export const B2B1 = {
-  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.22766666666666663 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.04666666666666666 (Hypnosis); B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.06416666666666666)
-  "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.10653279296875003 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.03202128648757935)
-  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.14194615494034907 }, // B7c: holds Quick Claw; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.0713143221859218)
-  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.47852166204156843 }, // B7a: Poison Barb; B4a (chance status secondaries) -- Muk's SLUDGE BOMB poisons the Starmie lead 30% (zeroing it alone restores 0.49061960451908687)
-  "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9831071881352187 }, // B4a (chance status secondaries) -- Linoone's SECRET POWER paralyses the lead 30% -- the Arena is BUILDING (zeroing Secret Power alone restores 0.9934374999999998, 1 ULP from the recorded 0.9934374999999999)
-  "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.5519999999999999 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.3474999999999999)
-  "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0 },
-  "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.6599771976470946 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.5142531394958496)
-  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9602825520833332 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.99658203125); B4c: Dunsparce's HEADBUTT flinches -- 30% doubled to 60% by SERENE GRACE (zeroing Headbutt alone restores 0.9965820312499999)
-  "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9972992078463234 }, // B4a (chance status secondaries) -- Dragonair's DRAGONBREATH paralyses the lead 30% (zeroing it alone restores 0.9999999999999998, 1 ULP from the recorded 1)
+  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.2503780204174971 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.04666666666666666 (Hypnosis); B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.06416666666666666); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.22766666666666663
+  "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.11731655160731753 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.03202128648757935); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.10653279296875003
+  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.14733127058363185 }, // B7c: holds Quick Claw; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.0713143221859218); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.14194615494034907
+  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.5005753974758989 }, // B7a: Poison Barb; B4a (chance status secondaries) -- Muk's SLUDGE BOMB poisons the Starmie lead 30% (zeroing it alone restores 0.49061960451908687); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.47852166204156843
+  "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9825835560876208 }, // B4a (chance status secondaries) -- Linoone's SECRET POWER paralyses the lead 30% -- the Arena is BUILDING (zeroing Secret Power alone restores 0.9934374999999998, 1 ULP from the recorded 0.9934374999999999); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9831071881352187
+  "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.45874999999999994 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.3474999999999999); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5519999999999999
+  "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.05859375 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0
+  "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.6722930896095931 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.5142531394958496); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6599771976470946
+  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9536272124449411 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.99658203125); B4c: Dunsparce's HEADBUTT flinches -- 30% doubled to 60% by SERENE GRACE (zeroing Headbutt alone restores 0.9965820312499999); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9602825520833332
+  "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9973791672951644 }, // B4a (chance status secondaries) -- Dragonair's DRAGONBREATH paralyses the lead 30% (zeroing it alone restores 0.9999999999999998, 1 ULP from the recorded 1); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9972992078463234
   "Caterpie 1":            { tier:  3, lead: "Snorlax", effect: "EFFECT_SPEED_DOWN",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
 };
 
@@ -254,10 +256,10 @@ export const B2B1 = {
 // Every one of these five was a recorded throw before B2a.
 export const B2A = {
   "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch", winProb: 0.08000000000000002 }, // B8b: Espeon 3 has SYNCHRONIZE -- a Thunderbolt paralysis (the modelled 10%) now paralyses the Gengar lead back; was Thunderbolt 0.025, and the advice FLIPS; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Shadow Ball (zeroing Ice Punch alone restores Shadow Ball 0)
-  "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.7263982421875 }, // B4a (chance status secondaries) -- Ninetales' HEAT WAVE burns the lead 10% (zeroing it alone restores 0.74333125)
+  "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.7408304488658906 }, // B4a (chance status secondaries) -- Ninetales' HEAT WAVE burns the lead 10% (zeroing it alone restores 0.74333125); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7263982421875
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
-  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9076023913187656 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt; B4a (chance status secondaries) -- the lead's ICE PUNCH now freezes 10% (zeroing Ice Punch alone restores 0.9043094452878824); B4b: the Gengar lead's PSYCHIC now drops SpD 10% (zeroing Psychic alone restores 0.9069523193525368)
-  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Ice Punch", winProb: 0.05376000000000003 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.00625); B4b: SHADOW BALL and PSYCHIC jointly (the lead's two SpD drops, Dusclops' own Shadow Ball shares the flag) -- zeroing both restores 0.05120000000000002; Shadow Ball alone gives 0.05248
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.8934018248982764 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt; B4a (chance status secondaries) -- the lead's ICE PUNCH now freezes 10% (zeroing Ice Punch alone restores 0.9043094452878824); B4b: the Gengar lead's PSYCHIC now drops SpD 10% (zeroing Psychic alone restores 0.9069523193525368); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9076023913187656
+  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Ice Punch", winProb: 0.05562500000000003 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.00625); B4b: SHADOW BALL and PSYCHIC jointly (the lead's two SpD drops, Dusclops' own Shadow Ball shares the flag) -- zeroing both restores 0.05120000000000002; Shadow Ball alone gives 0.05248; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.05376000000000003
 };
 
 // -- MODIFIER_ANCHORS -- promoted from B7a's movers, per amendment 2 --------
@@ -309,11 +311,11 @@ export const B2A = {
 // knowing the adapter's tie-break. Default IV tier throughout.
 export const MODIFIER_ANCHORS = {
   "Marowak 3": { lead: "Snorlax", ability: "Rock Head",
-    move: "Body Slam", winProb: 0.3059548611111111, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.008506944444444442)
+    move: "Body Slam", winProb: 0.3435007731119792, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.008506944444444442); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.3059548611111111
     pre: { move: "Body Slam", winProb: 1 },
     causedBy: "item: Thick Club" },
   "Medicham 1": { lead: "Snorlax", ability: null,
-    move: "Body Slam", winProb: 0.136091639881134, // B7c: also holds Focus Band; B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0.09249908447265623)
+    move: "Body Slam", winProb: 0.1428662134218216, // B7c: also holds Focus Band; B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0.09249908447265623); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.136091639881134
     pre: { move: "Shadow Ball", winProb: 1 },
     // HISTORY, never deleted: B7a moved this to 0.02274166870117187 via Pure
     // Power's doubled Attack. B3 batch 1 moved it again, UP, to the value above:
@@ -324,35 +326,35 @@ export const MODIFIER_ANCHORS = {
     // of porting a mechanic that only ever costs its user.
     causedBy: "opponent ability: Pure Power (B7a), then Hi Jump Kick's crash (B3 batch 1)" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
-    move: "Body Slam", winProb: 0.5036181587219238, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0); B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.51)
+    move: "Body Slam", winProb: 0.48185661713809164, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0); B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.51); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5036181587219238
     pre: { move: "Shadow Ball", winProb: 1 },
     // B7a moved this via Choice Band's 1.5x Attack, to 0.07823631286621092.
     // B2b batch 2 added Choice Band's MOVE LOCK and moved it again, to 0 --
     // locking this opponent into its turn-1 pick is, here, strictly good for it.
     causedBy: "item: Choice Band -- 1.5x Attack (B7a), then its move lock (B2b batch 2)" },
   "Ampharos 1": { lead: "Gengar", ability: null,
-    move: "Ice Punch", winProb: 0.12651531436934088, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.07934632632522814); B4b: the Gengar lead's PSYCHIC drops SpD 10% (zeroing it alone restores 0.12588574655303236)
+    move: "Ice Punch", winProb: 0.12999020391651075, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.07934632632522814); B4b: the Gengar lead's PSYCHIC drops SpD 10% (zeroing it alone restores 0.12588574655303236); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.12651531436934088
     pre: { move: "Psychic", winProb: 0.49334131133415177 },
     causedBy: "item: Magnet" },
   "Regice 3": { lead: "Snorlax", ability: null,
-    move: "Body Slam", winProb: 0.9806468547878902, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.98062091876287)
+    move: "Shadow Ball", winProb: 0.9459675342620718, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.98062091876287); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9806468547878902 Body Slam, the advice FLIPS
     pre: { move: "Shadow Ball", winProb: 0.8157545010610819 },
     causedBy: "lead ability: Thick Fat" },
   "Ursaring 5": { lead: "Gengar", ability: null,
-    move: "Ice Punch", winProb: 0.27343, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Psychic (zeroing Ice Punch alone restores Psychic 0.21024999999999996)
+    move: "Ice Punch", winProb: 0.30729604858398435, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Psychic (zeroing Ice Punch alone restores Psychic 0.21024999999999996); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.27343
     pre: { move: "Thunderbolt", winProb: 0.314569140625 },
     // Choice Band's lock (B2b batch 2) moved this back UP from 0.166375 --
     // the opposite direction to Aerodactyl 2 above, because being locked into
     // its turn-1 pick costs THIS opponent its follow-up.
     causedBy: "item AND ability: Choice Band + Guts, then the Choice lock (B2b batch 2)" },
   "Scizor 4": { lead: "Starmie", ability: null,
-    move: "Surf", winProb: 0.6735178101572199, // B4b: Scizor's SILVER WIND raises all five 10% (zeroing it alone restores 0.6736855928174657)
+    move: "Surf", winProb: 0.6518239395648722, // B4b: Scizor's SILVER WIND raises all five 10% (zeroing it alone restores 0.6736855928174657); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6735178101572199
     pre: { move: "Surf", winProb: 0.7852604166666668 },
     // B7a moved this via Swarm (causally verified). B7c then moved it again,
     // because Scizor 4 also holds a BrightPowder. Both movements named.
     causedBy: "opponent ability: Swarm (B7a), then its BrightPowder (B7c)" },
   "Venusaur 2": { lead: "Starmie", ability: null,
-    move: "Ice Beam", winProb: 0.6306290589435553,
+    move: "Ice Beam", winProb: 0.6565558956729439, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.6306290589435553
     pre: { move: "Ice Beam", winProb: 0.7748116731927341 },
     // Same shape as Scizor 4: Overgrow in B7a, its BrightPowder in B7c.
     causedBy: "opponent ability: Overgrow (B7a), then its BrightPowder (B7c)" },
@@ -361,7 +363,7 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Earthquake", winProb: 0.0625 },
     causedBy: "item: Charcoal" },
   "Blastoise 1": { lead: "Metagross", ability: null,
-    move: "Earthquake", winProb: 0.7523888888888889,
+    move: "Earthquake", winProb: 0.7447998046875001, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7523888888888889
     pre: { move: "Earthquake", winProb: 0.8666666666666667 },
     // B7a moved this to 0.8179444444444444 via Torrent (causally verified).
     // B7b then moved it AGAIN, to the value above, because Blastoise 1 also
@@ -370,15 +372,15 @@ export const MODIFIER_ANCHORS = {
     // hidden by swapping in a cleaner set.
     causedBy: "opponent ability: Torrent (B7a), then its Shell Bell (B7b)" },
   "Muk 1": { lead: "Snorlax", ability: "Stench",
-    move: "Earthquake", winProb: 0.969875040250244, // B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9618722223090354; B4a (chance status secondaries) -- JOINTLY the lead's BODY SLAM (30% paralysis) and Muk's SLUDGE BOMB (30% poison): zeroing either alone gives 0.9702445626603784 / 0.9719920314178362, neither restores 0.972399478253943
+    move: "Shadow Ball", winProb: 0.9351303771720166, // B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9618722223090354; B4a (chance status secondaries) -- JOINTLY the lead's BODY SLAM (30% paralysis) and Muk's SLUDGE BOMB (30% poison): zeroing either alone gives 0.9702445626603784 / 0.9719920314178362, neither restores 0.972399478253943; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.969875040250244 Earthquake, the advice FLIPS
     pre: { move: "Earthquake", winProb: 0.9816982673274147 },
     causedBy: "item: Poison Barb" },
   "Miltank 3": { lead: "Starmie", ability: null,
-    move: "Ice Beam", winProb: 0.13888000000000003,
+    move: "Thunderbolt", winProb: 0.1529533863067627, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.13888000000000003 Ice Beam, the advice FLIPS
     pre: { move: "Ice Beam", winProb: 0.15360000000000004 },
     causedBy: "opponent ability: Thick Fat" },
   "Charizard 4": { lead: "Gengar", ability: null,
-    move: "Ice Punch", winProb: 0.45662500000000006, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.424140625)
+    move: "Thunderbolt", winProb: 0.4601318359375, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.424140625); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.45662500000000006 Ice Punch, the advice FLIPS
     pre: { move: "Thunderbolt", winProb: 0.42414062500000005 },
     causedBy: "opponent ability: Blaze" },
 };
@@ -396,11 +398,11 @@ export const MODIFIER_ANCHORS = {
 // Petaya or Liechi carrier survives to a quarter HP against it. Their only
 // guards are those unit probes.
 export const B7B_ANCHORS = {
-  "Metagross 7": { lead: "Starmie", item: "Shell Bell", move: "Ice Beam", winProb: 0.10944000000000002,
+  "Metagross 7": { lead: "Starmie", item: "Shell Bell", move: "Thunderbolt", winProb: 0.1501068115234375, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.10944000000000002 Ice Beam, the advice FLIPS
     pre: { move: "Surf", winProb: 1 } },
-  "Noland Gold† Metang": { lead: "Gengar", item: "Sitrus Berry", move: "Thunderbolt", winProb: 0.5676417495727539, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% (zeroing it alone restores 0.5435139236450196)
+  "Noland Gold† Metang": { lead: "Gengar", item: "Sitrus Berry", move: "Thunderbolt", winProb: 0.5744353888585464, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% (zeroing it alone restores 0.5435139236450196); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5676417495727539
     pre: { move: "Thunderbolt", winProb: 0.9999999999999999 } },
-  "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.7723437500000001, // B4a (chance status secondaries) -- Entei's FIRE BLAST burns the lead 10% (zeroing it alone restores 0.828125)
+  "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.7571563720703125, // B4a (chance status secondaries) -- Entei's FIRE BLAST burns the lead 10% (zeroing it alone restores 0.828125); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7723437500000001
     pre: { move: "Earthquake", winProb: 1 } },
 };
 
@@ -416,16 +418,16 @@ export const B7B_ANCHORS = {
 // test-b7c-accuracy-chain.js PARTS 1-3, which pin each multiplier and the
 // uncapped ordering by value rather than by hit rate.
 export const B7C_ANCHORS = {
-  "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.7452, // B4a (chance status secondaries) -- Registeel's ICE PUNCH freezes the lead 10% (zeroing it alone restores 0.8099999999999999)
+  "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.7160624999999999, // B4a (chance status secondaries) -- Registeel's ICE PUNCH freezes the lead 10% (zeroing it alone restores 0.8099999999999999); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7452
     pre: { move: "Earthquake", winProb: 1 } },
   // B7c moved this Dragon Claw 0.9301677280002171 -> Earthquake 0.7479850977404471
   // via its BrightPowder. Intimidate then moved it AGAIN -- it is a Salamence
   // cell and the Salamence lead carries Intimidate -- and the recommended move
   // flipped BACK to Dragon Claw. Both movements named rather than one hidden.
-  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.8590899118509061, // B4c: the lead's ROCK SLIDE flinches 30% and the advice FLIPS back to Earthquake (zeroing Rock Slide alone restores Dragon Claw 0.8507291838563511)
+  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Dragon Claw", winProb: 0.8261465673196424, // B4c: the lead's ROCK SLIDE flinches 30% and the advice FLIPS back to Earthquake (zeroing Rock Slide alone restores Dragon Claw 0.8507291838563511); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8590899118509061 Earthquake, the advice FLIPS
     pre: { move: "Dragon Claw", winProb: 0.9301677280002171 },
     b7cWas: { move: "Earthquake", winProb: 0.7479850977404471 } },
-  "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.7478928000000001, // B4a (chance status secondaries) -- Alakazam's THUNDERPUNCH paralyses the lead 10% (zeroing it alone restores 0.8231904000000001)
+  "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.7055564625, // B4a (chance status secondaries) -- Alakazam's THUNDERPUNCH paralyses the lead 10% (zeroing it alone restores 0.8231904000000001); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.7478928000000001
     pre: { move: "Surf", winProb: 1 } },
 };
 
@@ -443,16 +445,16 @@ export const B7C_ANCHORS = {
 // Body blocks it outright, the other two because they attack specially and a
 // -1 Attack changes nothing for them.
 export const INTIMIDATE_ANCHORS = {
-  "Granbull 2": { lead: "Salamence", move: "Rock Slide", winProb: 0.15740568000000005, // B4c: the lead's ROCK SLIDE flinches 30% -- the reversal is no longer complete, and the advice FLIPS from Earthquake (zeroing Rock Slide alone restores Earthquake 0)
+  "Granbull 2": { lead: "Salamence", move: "Rock Slide", winProb: 0.24058690567016602, // B4c: the lead's ROCK SLIDE flinches 30% -- the reversal is no longer complete, and the advice FLIPS from Earthquake (zeroing Rock Slide alone restores Earthquake 0); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.15740568000000005
     pre: { move: "Earthquake", winProb: 1 },
     why: "the LEAD's own Intimidate -- a complete reversal" },
-  "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0.09, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% -- the first non-zero odds this cell has had since Intimidate (zeroing Body Slam alone restores 0)
+  "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0.18352127075195312, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% -- the first non-zero odds this cell has had since Intimidate (zeroing Body Slam alone restores 0); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.09
     pre: { move: "Body Slam", winProb: 1 },
     why: "an Intimidate OPPONENT dropping a physical lead's Attack" },
-  "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.81, // B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.9)
+  "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.724603271484375, // B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.9); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.81
     pre: { move: "Rock Slide", winProb: 0 },
     why: "moves in the PLAYER's favour -- the drop is on the opponent" },
-  "Granbull 1": { lead: "Metagross", move: "Earthquake", winProb: 1,
+  "Granbull 1": { lead: "Metagross", move: "Earthquake", winProb: 0.9999980725466031, // B6-2: crits -- a crit by or on Granbull now exists; Intimidate still moves NOTHING here (Clear Body), which is what this anchor pins; was 1
     pre: { move: "Earthquake", winProb: 1 },
     why: "IMMUNITY ANCHOR: Granbull 1 has Intimidate and Metagross has Clear Body, so this cell must NOT move" },
 };

@@ -28,7 +28,9 @@ const turn = (you, opp, state, yourMove, oppMove) => resolveTurn({ you, opp }, s
 
 // A slow, bulky target with a damaging move, so "it did nothing" is visible
 // as the Fake Out user's HP staying at 100.
-const slow = mk("Snorlax", ["Body Slam", "Growl", "Rest", "Splash"], { ability: "Thick Fat" });
+// B6-2: Shell Armor, so Fake Out's own crit does not split the branch counts
+// this file asserts on (crits are test-b6-crits.js's business).
+const slow = mk("Snorlax", ["Body Slam", "Growl", "Rest", "Splash"], { ability: "Shell Armor" });
 
 console.log("-- PART 1: Fake Out flinches, on the first turn only --");
 {

@@ -27,8 +27,10 @@ const cfg = (n, tier) => {
 console.log("-- PART 1: headless == retained, bit for bit --");
 {
   const cells = [
+    // B6-2: the two heaviest cells (Skitty 1, Aggron 3) left this list -- their
+    // RETAINED tree no longer fits the default heap with crits (phase-b-log).
     ["Metagross", "Umbreon 4", null], ["Snorlax", "Aerodactyl 2", 31], ["Salamence", "Kingdra 1", 31],
-    ["Starmie", "Alakazam 4", 31], ["Arcanine", "Skitty 1", 3], ["Gengar", "Aggron 3", 31],
+    ["Starmie", "Alakazam 4", 31], ["Gengar", "Delcatty 2", 21],
     ["Snorlax", "Medicham 3", 31], ["Salamence", "Snorlax 4", 31], ["Metagross", "Spenser Silver Slaking", null],
   ];
   for (const [lead, set, tier] of cells) {
@@ -70,13 +72,15 @@ console.log("-- PART 4: the memory is actually not retained, all the way down --
   const probe = (tree) => {
     const src = `import { analyzeMatchup } from "./logic.js"; import { LEADS } from "./anchors.js";
       import { getOpponentConfig } from "./opponent-adapter.js"; console.warn = () => {};
-      const r = analyzeMatchup(LEADS.Gengar, getOpponentConfig("Delcatty 2", { ivTier: 21 }), { tree: ${tree} });
+      const r = analyzeMatchup(LEADS.Gengar, getOpponentConfig("Delcatty 2", { ivTier: 21 }), { tree: ${tree}, transposition: ${!tree} });
       process.stdout.write(String(Math.round(process.resourceUsage().maxRSS / 1024)));`;
     return Number(execFileSync("node", ["--max-old-space-size=8192", "--input-type=module", "-e", src], { encoding: "utf8" }).trim());
   };
   const headless = probe(false), retained = probe(true);
   ok(headless < 300, `headless peak RSS ${headless} MB (< 300)`);
-  ok(retained > 1000, `(control) retained peak RSS ${retained} MB (> 1000)`);
+  // The control is the retained tree WITHOUT the transposition table (B6-2
+  // shares retained subtrees), i.e. the per-path tree C1 removed.
+  ok(retained > 1000, `(control) retained per-path tree peak RSS ${retained} MB (> 1000)`);
 }
 
 console.log();

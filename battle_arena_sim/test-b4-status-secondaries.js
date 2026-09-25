@@ -74,7 +74,9 @@ console.log("-- PART 2: the gates --");
     "...even one this very hit breaks (STATUS2_SUBSTITUTE clears only at MOVEEND_SUBSTITUTE)");
   const dusty = mk("Dustox", ["Splash", "Protect", "Rest", "Growl"], { ability: "Shield Dust" });
   ok(pOpp(slam, "Body Slam", dusty) === 0, "Shield Dust blocks it");
-  const brs = turn(slam, wall, start(slam, wall, { oppStatus: "burn" }), "Body Slam", "Splash");
+  // B6-2: into a Shell Armor copy of the wall, so a crit does not split it.
+  const armored = { ...wall, ability: "Shell Armor" };
+  const brs = turn(slam, armored, start(slam, armored, { oppStatus: "burn" }), "Body Slam", "Splash");
   ok(brs.length === 1 && brs[0].state.oppStatus === "burn", "an existing status: blocked AND not branched");
   ok(pOpp(slam, "Body Slam", wall, { oppSafeguardTurns: 3 }) === 0, "Safeguard blocks it");
   const ko = turn(slam, wall, start(slam, wall, { oppHpPct: 1 }), "Body Slam", "Splash");

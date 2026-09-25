@@ -28,7 +28,9 @@ const prob = (brs, f) => brs.filter(f).reduce((a, b) => a + b.p, 0);
 const flinched = (b) => /Opp flinches/.test(b.label);
 
 // A slow, bulky, ability-inert Normal target. Its Splash is what gets lost.
-const wall = mk("Blissey", ["Splash", "Soft-Boiled", "Growl", "Protect"], { ability: "Natural Cure", nature: "Bold", evs: { hp: 252, def: 252, spd: 4 } });
+// B6-2: Shell Armor -- a crit Rolling Kick would KO this wall before it could
+// flinch, and a crit splits the branch counts; crits are tested elsewhere.
+const wall = mk("Blissey", ["Splash", "Soft-Boiled", "Growl", "Protect"], { ability: "Shell Armor", nature: "Bold", evs: { hp: 252, def: 252, spd: 4 } });
 const pFl = (atk, move, tgt = wall, o = {}) => prob(turn(atk, tgt, start(atk, tgt, o), move, "Splash"), flinched);
 
 console.log("-- PART 1: each flinch move rolls, first mover only --");
@@ -58,7 +60,7 @@ console.log("-- PART 1: each flinch move rolls, first mover only --");
   ok(near(prob(turn(sky, wall, t1[0].state, "Sky Attack", "Splash"), flinched), 0.3 * 0.9), "...its release flinches 30% x 90% accuracy");
   // A SLOWER attacker cannot flinch: the target already acted. Not even branched.
   const slow = mk("Golem", ["Rock Slide", "Splash", "Rest", "Protect"], { nature: "Brave", evs: { hp: 252, atk: 252 } });
-  const zippy = mk("Jolteon", ["Splash", "Protect", "Rest", "Growl"], { ability: "Volt Absorb" });
+  const zippy = mk("Jolteon", ["Splash", "Protect", "Rest", "Growl"], { ability: "Shell Armor" });
   const sb = turn(slow, zippy, start(slow, zippy), "Rock Slide", "Splash");
   ok(prob(sb, (b) => /flinch/.test(b.label)) === 0, "a slower Rock Slide flinches nothing");
   const plain = turn(slow, zippy, start(slow, zippy), "Rock Slide", "Splash").length;

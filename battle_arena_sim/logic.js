@@ -17,6 +17,7 @@ import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
 import { ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED } from "./ai-tables.js";
 import { moveFlags, secondaryChance } from "./move-flags.js";
+import { CRIT_EFFECTS } from "./crit-effects.js";
 import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
@@ -3085,15 +3086,18 @@ function calcDamage(attacker, defender, moveName, {
   // :9002-9022) and only THEN runs typecalc, so the multiplier goes here --
   // after the +2, before STAB and type. Multiplying the final number instead
   // would floor in the wrong order and lose a few HP.
-  let base = (preFinal + 2) * baseMultiplier;
+  // B6-2: Cmd_damagecalc (src/battle_script_commands.c:1296) multiplies by
+  // gCritMultiplier HERE -- on CalculateBaseDamage's output, BEFORE typecalc
+  // floors STAB and the type multipliers. This engine used to apply it after
+  // those floors, which is a different integer whenever a floor bites.
+  const critMult = crit ? 2 : 1;
+  let base = (preFinal + 2) * baseMultiplier * critMult;
 
   const stab = untyped ? 1 : attacker.types.includes(move.type) ? 1.5 : 1;
   const eff = untyped ? 1 : typeEffectiveness(move.type, defender.types, defenderForesighted);
-  const critMult = crit ? 2 : 1;
 
   let dmg = Math.floor(base * stab);
   dmg = Math.floor(dmg * eff);
-  dmg = Math.floor(dmg * critMult);
   // A2: `rollPercent`, when supplied, applies the roll as INTEGER arithmetic —
   // floor(dmg * r / 100) — matching source exactly. The AI's own damage
   // estimate does `gBattleMoveDamage * simulatedRNG[i] / 100` in u32 math
@@ -5009,9 +5013,9 @@ const HOLD_EFFECT_DISPOSITION = new Map([
   ["HOLD_EFFECT_CURE_CONFUSION", ["cure-berry", "Persim"]],
   ["HOLD_EFFECT_LEFTOVERS", ["leftovers", "applied inline just above the cure berries"]],
   // -- deferred to a named phase ------------------------------------------
-  ["HOLD_EFFECT_SCOPE_LENS", ["deferred", "B6 — crit rate; crits are not enumerated yet"]],
-  ["HOLD_EFFECT_LUCKY_PUNCH", ["deferred", "B6 — Chansey crit rate"]],
-  ["HOLD_EFFECT_STICK", ["deferred", "B6 — Farfetch'd crit rate"]],
+  ["HOLD_EFFECT_SCOPE_LENS", ["move-time", "B6-2 — a crit-stage term in critChanceFor"]],
+  ["HOLD_EFFECT_LUCKY_PUNCH", ["move-time", "B6-2 — a crit-stage term in critChanceFor"]],
+  ["HOLD_EFFECT_STICK", ["move-time", "B6-2 — a crit-stage term in critChanceFor"]],
   ["HOLD_EFFECT_FLINCH", ["move-time", "B4c — King's Rock's roll, in secondaryOutcomes / kingsRockChance; its flinch goes through applyFlinch"]],
   ["HOLD_EFFECT_QUICK_CLAW", ["deferred", "B7c — turn order"]],
   ["HOLD_EFFECT_EVASION_UP", ["deferred", "B7c — BrightPowder, the accuracy path"]],
@@ -6614,7 +6618,7 @@ function warnUnmodeledMechanicOnce(effect, moveName) {
 // alternative -- a second, probe-only damage estimate -- is exactly the drift
 // anti-pattern this project exists downstream of, and it would be wrong the
 // moment either copy gained a modifier the other lacked.
-function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, baseMultiplier = 1) {
+function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, baseMultiplier = 1, crit = false) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
   const selfMon = isYou ? you : opp;
@@ -6640,7 +6644,10 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
     attackerBurned: s[selfStatusKey] === "burn",
     attackerFlashFireActive: isYou ? s.youFlashFireActive : s.oppFlashFireActive,
     attackerHpPct: isYou ? s.yourHpPct : s.oppHpPct,
-    screenActive: moveData.category === "physical" ? foeReflect != null : foeLightScreen != null,
+    // B6-2: a crit ignores Reflect / Light Screen (the gCritMultiplier == 1
+    // gate on each halving, src/pokemon.c:3267-3273 / 3318-3324).
+    crit,
+    screenActive: !crit && (moveData.category === "physical" ? foeReflect != null : foeLightScreen != null),
     weather: effectiveWeather(s, you, opp),
     // B2b batch 5. Super Fang and Endeavor read the DEFENDER's current HP, which
     // no other damage path needed; the enumerated draw reaches Magnitude,
@@ -6654,6 +6661,124 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
     mudSportActive: vf(s, "youMudSport") || vf(s, "oppMudSport"),
     waterSportActive: vf(s, "youWaterSport") || vf(s, "oppWaterSport"),
   };
+}
+
+// ── B6-2: CRITICAL HITS (Cmd_critcalc, src/battle_script_commands.c:1253-1288).
+// Only effects whose script reaches `critcalc` can crit -- CRIT_EFFECTS,
+// generated from the scripts by arena-solver/tools/gen-crit-effects.mjs (the
+// set-damage family, Counter/Mirror Coat, Bide, Future Sight, Spit Up and the
+// OHKO moves cannot). The stage index sums Focus Energy (+2), a high-crit
+// effect (+1: HIGH_CRITICAL, SKY_ATTACK, BLAZE_KICK, POISON_TAIL), Scope Lens
+// (+1), Lucky Punch on Chansey (+2) and Stick on Farfetch'd (+2), capped at 4;
+// the crit lands on `!(Random() % sCriticalHitChance[stage])`, i.e.
+// 1/16, 1/8, 1/4, 1/3, 1/2. Battle Armor and Shell Armor block it.
+const CRIT_CHANCE = [1 / 16, 1 / 8, 1 / 4, 1 / 3, 1 / 2];
+const HIGH_CRIT_EFFECTS = new Set(["EFFECT_HIGH_CRITICAL", "EFFECT_SKY_ATTACK", "EFFECT_BLAZE_KICK", "EFFECT_POISON_TAIL"]);
+function critChanceFor(ctx, state, actor, moveData) {
+  if (!CRIT_EFFECTS.has(moveData.effect)) return 0;
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (foe.ability === "Battle Armor" || foe.ability === "Shell Armor") return 0;
+  if (typeEffectiveness(moveData.type, foe.types, isYou ? state.oppForesighted : state.youForesighted) === 0) return 0;
+  const hold = itemData(self.item)?.holdEffect;
+  let stage = 2 * (vf(state, isYou ? "youFocusEnergy" : "oppFocusEnergy") ? 1 : 0)
+    + (HIGH_CRIT_EFFECTS.has(moveData.effect) ? 1 : 0)
+    + (hold === "HOLD_EFFECT_SCOPE_LENS" ? 1 : 0)
+    + (hold === "HOLD_EFFECT_LUCKY_PUNCH" && self.species === "Chansey" ? 2 : 0)
+    + (hold === "HOLD_EFFECT_STICK" && self.species === "Farfetch'd" ? 2 : 0);
+  return CRIT_CHANCE[Math.min(stage, CRIT_CHANCE.length - 1)];
+}
+// Each landed damaging hit (`dmgHit`) splits into crit / no crit. `crit` is a
+// per-hit bit mask, because a multi-hit move runs critcalc on EVERY hit
+// (BattleScript_MultiHitLoop); a single hit is bit 0.
+function popcount(x) { let c = 0; while (x) { c += x & 1; x >>= 1; } return c; }
+//
+// A multi-hit move's 2^n masks are EXACT but mostly redundant: where the order
+// of the crits cannot be observed, only (how many crit, did the LAST hit crit)
+// matters -- the count fixes the total damage, and the last hit is what
+// Counter / Mirror Coat record (physicalDmg is overwritten per hit). Order is
+// observable when the target has a Substitute (it breaks mid-sequence), Endure
+// or a Focus Band (they clamp a particular hit), when the attacker holds a
+// Shell Bell (it heals off the FIRST hit), or when the sequence could KO (the
+// faint stops it). There the full masks are kept; elsewhere 2^n becomes <= 2n.
+function binom(n, k) { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return r; }
+function critOrderObservable(ctx, state, actor, moveData, n) {
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return true;
+  if (state[isYou ? "oppEndureActive" : "youEndureActive"]) return true;
+  if (itemData(foe.item)?.holdEffect === "HOLD_EFFECT_FOCUS_BAND") return true;
+  if (itemData(self.item)?.holdEffect === "HOLD_EFFECT_SHELL_BELL") return true;
+  // Every hit a crit: n hits of the same damage, or Triple Kick's 10/20/30.
+  let allCrit = 0;
+  for (let i = 0; i < n; i++) {
+    const power = moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : null;
+    allCrit += calcDamage(self, foe, moveData.name ?? null, battleDamageOptions(ctx, state, actor, moveData, power, 1, true));
+  }
+  const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foe.stats.hp);
+  return allCrit >= foeHp;
+}
+// The last-hit dimension is only read by Counter / Mirror Coat (the recorded
+// physicalDmg / specialDmg). A target whose moveset cannot produce either --
+// directly, or through a move that calls or copies another -- never reads it,
+// so the classes collapse again, to the crit COUNT alone.
+const LAST_HIT_READERS = new Set(["Counter", "Mirror Coat", "Mimic", "Metronome", "Assist", "Mirror Move", "Sketch"]);
+// A single hit whose NON-crit damage already takes all the target's HP is a KO
+// either way, so the crit changes nothing observable and is not branched --
+// unless something makes the overkill matter: a Substitute (it absorbs, not
+// the target), Endure or a Focus Band (they clamp the KO), or a recoil or
+// drain effect (which this engine computes off the uncapped damage).
+const COUNTER_POWER_EFFECTS = new Set(["EFFECT_FURY_CUTTER", "EFFECT_ROLLOUT", "EFFECT_TRIPLE_KICK"]);
+function critCannotMatter(ctx, state, actor, moveData, moveName, variablePower) {
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return false;
+  if (state[isYou ? "oppEndureActive" : "youEndureActive"]) return false;
+  if (itemData(foe.item)?.holdEffect === "HOLD_EFFECT_FOCUS_BAND") return false;
+  if (moveData.effect in RECOIL_FRACTION || DRAIN_EFFECTS.has(moveData.effect)) return false;
+  // Fury Cutter, Rollout and Triple Kick take a power only applyMoveCore can
+  // derive (from their counters) -- not decidable here, so they branch.
+  if (COUNTER_POWER_EFFECTS.has(moveData.effect)) return false;
+  const d0 = calcDamage(self, foe, moveName, battleDamageOptions(ctx, state, actor, moveData, variablePower ?? null));
+  const foeHp = Math.round(((isYou ? state.oppHpPct : state.yourHpPct) / 100) * foe.stats.hp);
+  return d0 >= foeHp;
+}
+function critSplit(ctx, state, actor, moveData, results, moveName) {
+  const pc = critChanceFor(ctx, state, actor, moveData);
+  if (pc === 0) return results;
+  const out = [];
+  for (const r of results) {
+    if (!r.dmgHit || r.variablePower === "heal") { out.push(r); continue; }
+    const n = r.hitCount ?? 1;
+    if (n === 1 && moveData.effect !== "EFFECT_TRIPLE_KICK"
+        && critCannotMatter(ctx, state, actor, moveData, moveName, r.variablePower)) { out.push(r); continue; }
+    if (n > 1 && !critOrderObservable(ctx, state, actor, { ...moveData, name: moveName }, n)) {
+      const foeMoves = (actor === "you" ? ctx.opp : ctx.you).moves;
+      if (!foeMoves.some((m) => LAST_HIT_READERS.has(m))) {
+        // k crits -> the canonical mask with the first k hits critting
+        for (let k = 0; k <= n; k++) out.push({ ...r, p: r.p * binom(n, k) * pc ** k * (1 - pc) ** (n - k), crit: (1 << k) - 1 });
+        continue;
+      }
+      // (k crits, last hit crit?) -> a canonical mask with that shape
+      for (let k = 0; k <= n; k++) {
+        for (const lastCrit of [false, true]) {
+          const ways = lastCrit ? (k >= 1 ? binom(n - 1, k - 1) : 0) : (k <= n - 1 ? binom(n - 1, k) : 0);
+          if (ways === 0) continue;
+          const mask = lastCrit ? ((1 << (k - 1)) - 1) | (1 << (n - 1)) : (1 << k) - 1;
+          out.push({ ...r, p: r.p * ways * pc ** k * (1 - pc) ** (n - k), crit: mask });
+        }
+      }
+      continue;
+    }
+    for (let mask = 0; mask < (1 << n); mask++) {
+      const k = popcount(mask);
+      out.push({ ...r, p: r.p * pc ** k * (1 - pc) ** (n - k), crit: mask });
+    }
+  }
+  return out;
 }
 
 // Focus Band. Cmd_adjustnormaldamage (src/battle_script_commands.c:1658-1690)
@@ -6707,7 +6832,7 @@ function applyMove(ctx, s, actor, ...rest) {
       && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) give(foeSide, foe, s[selfKey]);
 }
 
-function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null) {
+function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null, crit = 0) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --
@@ -7446,6 +7571,17 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // 1 for every ordinary damaging move, so this loop subsumes the old
       // single-hit code path unchanged (runs its body exactly once).
       const hits = hitCount ?? 1;
+      // B6-2: this hit's crit bit, and its damage computed WITH the crit
+      // (Cmd_damagecalc's x2 before typecalc; stages and screens per critcalc).
+      const critBit = (i) => ((crit | 0) >> i) & 1;
+      const critDmg = (power) => {
+        let d = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, power, spitUpMultiplier, true));
+        if (s[foeChargingKey]) {
+          const bm = INVULN_BYPASS[s[foeChargingKey].invulnBit]?.[moveName];
+          if (bm) d = Math.floor(d * bm);
+        }
+        return d;
+      };
       let recoilBasis = 0; // last hit's actual HP removed (sub-absorbed amount, or real damage) — recoil's gHpDealt
       // drainBasis: source's gHpDealt PROPERLY CAPPED at HP actually removed
       // (src/battle_script_commands.c:1880 substitute branch, :1927 real-HP
@@ -7480,7 +7616,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // the REMAINING hits in the SAME move fall through to real HP
           // (Cmd_datahpupdate's substitute branch requires substituteHP > 0,
           // which is false the instant it's been zeroed).
-          const absorbed = Math.min(s[foeSubKey], dmg);
+          const hitBase = critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
+          const absorbed = Math.min(s[foeSubKey], hitBase);
           s[foeSubKey] -= absorbed;
           if (s[foeSubKey] <= 0) s[foeSubKey] = null; // sub breaks, fully absorbed regardless of excess
           recoilBasis = absorbed;
@@ -7496,7 +7633,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // ticks (those don't flow through this code path at all). Only
           // relevant here since a substitute already fully absorbs otherwise.
           const foeAbsHpBefore = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
-          let hitDmg = dmg;
+          let hitDmg = critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
           let endureTriggeredThisHit = false;
           if (s[foeEndureKey]) {
             const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
@@ -8881,7 +9018,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
         const powerDist = VARIABLE_DAMAGE_DRAWS[moveData.effect];
         if (powerDist) {
           for (const { power, p: pp } of powerDist) {
-            if (pp > 0) results.push({ p: p * ab.p * pp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, variablePower: power });
+            if (pp > 0) results.push({ p: p * ab.p * pp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, variablePower: power, dmgHit: true });
           }
           continue;
         }
@@ -8894,7 +9031,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           // same for every hit; a Lock-On makes it 1 for every hit.
           const q = ab.p;
           for (const [hits, w] of [[1, 1 - q], [2, q * (1 - q)], [3, q * q]]) {
-            if (w > 0) results.push({ p: p * ab.p * w, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits });
+            if (w > 0) results.push({ p: p * ab.p * w, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
           }
           continue;
         }
@@ -8910,7 +9047,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           // starts). The per-hit damage/substitute/Endure mechanics live in
           // applyMove's loop; this branch only fixes how many iterations it runs.
           for (const { hits, p: hp } of hitDist) {
-            if (hp > 0) results.push({ p: p * ab.p * hp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits });
+            if (hp > 0) results.push({ p: p * ab.p * hp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
           }
           continue;
         }
@@ -8919,19 +9056,19 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
         if (sec) {
           let rest = 1;
           for (const o of sec) {
-            results.push({ p: p * ab.p * o.q, hit: true, selfHit: false, secondaryTriggered: o.trig, statusPrevented: false, thawed: stb.thawed });
+            results.push({ p: p * ab.p * o.q, hit: true, selfHit: false, secondaryTriggered: o.trig, statusPrevented: false, thawed: stb.thawed, dmgHit: true });
             rest -= o.q;
           }
-          if (rest > 1e-12) results.push({ p: p * ab.p * rest, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
+          if (rest > 1e-12) results.push({ p: p * ab.p * rest, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, dmgHit: true });
         } else {
-          results.push({ p: p * ab.p, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
+          results.push({ p: p * ab.p, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, dmgHit: true });
         }
       }
     }
   }
   return disableTimerBranches(ctx, state, actor, moveData,
     contactAbilityBranches(ctx, state, actor, moveName, moveData,
-      focusBandBranches(ctx, state, actor, moveName, moveData, results)));
+      focusBandBranches(ctx, state, actor, moveName, moveData, critSplit(ctx, state, actor, moveData, results, moveName))));
 }
 
 // ── B8: THE CONTACT ABILITIES (ABILITYEFFECT_ON_DAMAGE, src/battle_util.c:
@@ -9338,7 +9475,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
     let s = cloneState(state);
     if (fo.confTick) applyConfusionTick(s, order[0], fo.confTick);
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null, fo.crit ?? 0);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
@@ -9383,7 +9520,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
       const bidePre2 = (s2.youLock?.kind === "bide" || s2.oppLock?.kind === "bide") ? bideSnapshot(s2) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-      applyMove(ctx2, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null);
+      applyMove(ctx2, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null, so.crit ?? 0);
       if (bidePre2) bideAccumulate(ctx2, s2, bidePre2);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
@@ -9709,9 +9846,14 @@ function moveTiebreakScore(ctx, state, moveName) {
 // B6 step 1 (amendment 14): the TRANSPOSITION TABLE. search(ctx, state, turns)
 // is a pure function of the state -- the AI's choice, the player's options and
 // every roll read nothing else -- so a state reached by two different paths has
-// one value, computed once. `tt` is a Map scoped to one analyzeMatchup call,
-// used only headless (a retained tree needs one node per path). Terminal nodes
-// are not stored: evaluateTerminal is cheaper than a key.
+// one value, computed once. `tt` is a Map scoped to one analyzeMatchup call.
+// Headless it stores the result; RETAINED (B6-2) it stores the node itself,
+// so a position reached by two paths is ONE shared subtree -- the tree becomes
+// a DAG, which every reader (printTree, team-workflow's leaf walk) already
+// handles, since each multiplies by its own branch probability. B6-2's crits
+// roughly doubled retained trees and pushed the heaviest past the default heap;
+// sharing brings them back. Terminal nodes are not stored: evaluateTerminal is
+// cheaper than a key.
 //
 // The key is the state with its turn-scoped fields dropped: the damage-taken
 // records, Endure, Protect, Destiny Bond and Magic Coat's bounce are reset by
@@ -9793,13 +9935,15 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null) {
     if (tt) tt.set(key, res);
     return res;
   }
-  return {
+  const node = {
     move: options[0].move,
     winProb: options[0].winProb,
     isTerminal: false,
     allOptions: options,
     branches: options[0].branches,
   };
+  if (tt) tt.set(key, node);
+  return node;
 }
 
 function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
@@ -9839,7 +9983,7 @@ function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
 // being analyzed), so this is a simplifying assumption until that's tracked.
 // C1: `tree: false` runs the search headless (see search) -- the result
 // carries move, winProb and allOptions[{move, winProb}], and no branches.
-function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true } = {}) {
+function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true, transposition = true } = {}) {
   const you = buildMon(youConfig);
   // Frontier trainer mons are generated at max friendship (255) — a real,
   // verified fact about this dataset's source, not a convenience default —
@@ -9848,7 +9992,9 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
   const opp = buildMon({ ...oppConfig, friendship: 255 });
   const ctx = { you, opp };
   const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
-  const result = search(ctx, state, 3, tree, tree ? null : new Map());
+  // `transposition: false` exists for MEASUREMENT only (test-c1-headless's
+  // memory control); every caller uses the default.
+  const result = search(ctx, state, 3, tree, transposition ? new Map() : null);
   return { you, opp, result };
 }
 
