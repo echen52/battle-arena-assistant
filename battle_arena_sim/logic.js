@@ -4259,6 +4259,9 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // `stats` are the five non-HP stats (HP, level, item, status are NOT copied).
     // Resolved by effectiveMon UNDER the ability / moveset / item overrides.
     youTransform: null, oppTransform: null,
+    // B8d: a TYPE override (Color Change's SET_BATTLER_TYPE), null | [types],
+    // resolved by effectiveMon above Transform.
+    youTypes: null, oppTypes: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
     youBouncing: false, oppBouncing: false,
@@ -7360,6 +7363,15 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         s[foeStatusKey] = null;
       }
 
+      // B8d: COLOR CHANGE (ABILITYEFFECT_ON_DAMAGE, src/battle_util.c:2751-
+      // 2765): a damaging, non-Struggle move that affected and damaged the
+      // holder ITSELF turns it into that move's type (both type slots), unless
+      // it already has that type or has fainted. No contact needed.
+      if (foeMon.ability === "Color Change" && moveData.power > 0 && moveName !== "Struggle"
+          && eff !== 0 && dmg > 0 && !foeHadSubstitute && s[foeHpKey] > 0
+          && !foeMon.types.includes(moveData.type)) {
+        s[isYou ? "oppTypes" : "youTypes"] = [moveData.type];
+      }
       // B8: THE CONTACT ABILITIES, applied to the ATTACKER after the hit. The
       // conditions match contactAbilityBranches; the attacker must still be up
       // (recoil has already been taken by now).
@@ -8836,10 +8848,11 @@ function effectiveMon(mon, state, side) {
   const item = state[side === "you" ? "youItemOverride" : "oppItemOverride"];
   const moves = state[side === "you" ? "youMoves" : "oppMoves"];
   const tf = state[side === "you" ? "youTransform" : "oppTransform"];
-  if (ability == null && item === undefined && moves == null && tf == null) return mon;
+  const types = state[side === "you" ? "youTypes" : "oppTypes"];
+  if (ability == null && item === undefined && moves == null && tf == null && types == null) return mon;
   let byKey = _effectiveMonCache.get(mon);
   if (!byKey) { byKey = new Map(); _effectiveMonCache.set(mon, byKey); }
-  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}|${tf ? tf.species + ":" + tf.moves.join(",") + ":" + tf.ability : ""}`;
+  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}|${tf ? tf.species + ":" + tf.moves.join(",") + ":" + tf.ability : ""}|${types ? types.join(",") : ""}`;
   let out = byKey.get(key);
   if (!out) {
     out = { ...mon };
@@ -8849,6 +8862,7 @@ function effectiveMon(mon, state, side) {
       out.moves = tf.moves; out.genderDist = tf.genderDist;
       out.stats = { ...tf.stats, hp: mon.stats.hp };
     }
+    if (types != null) out.types = types;  // B8d: Color Change, over Transform
     if (ability != null) out.ability = ability;
     if (item !== undefined) out.item = item;
     if (moves != null) out.moves = moves;
@@ -8857,11 +8871,56 @@ function effectiveMon(mon, state, side) {
   return out;
 }
 
+// B8d: FORECAST, as a DERIVED rule. CastformDataTypeChange (src/battle_util.c:
+// 2396-2429) re-runs at every action's end and at turn end
+// (HandleFaintedMonActions case 6, :1958-1963), at switch-in and after a
+// Cloud Nine / Air Lock switch-in -- so between actions a Forecast Castform's
+// type is ALWAYS the current effective weather's: sun Fire, rain Water, hail
+// Ice, anything else (sandstorm, none, suppressed) Normal. Nothing inside an
+// action observes the stale type, so no state is kept.
+const _forecastCache = new WeakMap();
+function forecastMon(mon, weather) {
+  if (mon.species !== "Castform" || mon.ability !== "Forecast") return mon;
+  const t = weather === "sun" ? "Fire" : weather === "rain" ? "Water" : weather === "hail" ? "Ice" : "Normal";
+  if (mon.types.length === 1 && mon.types[0] === t) return mon;
+  let byT = _forecastCache.get(mon);
+  if (!byT) { byT = new Map(); _forecastCache.set(mon, byT); }
+  let out = byT.get(t);
+  if (!out) { out = { ...mon, types: [t] }; byT.set(t, out); }
+  return out;
+}
 function effectiveCtx(ctx, state) {
-  const you = effectiveMon(ctx.you, state, "you");
-  const opp = effectiveMon(ctx.opp, state, "opp");
+  let you = effectiveMon(ctx.you, state, "you");
+  let opp = effectiveMon(ctx.opp, state, "opp");
+  if (you.species === "Castform" || opp.species === "Castform") {
+    const w = effectiveWeather(state, you, opp);
+    you = forecastMon(you, w);
+    opp = forecastMon(opp, w);
+  }
   if (you === ctx.you && opp === ctx.opp) return ctx;
-  return { ...ctx, you, opp };
+  return { ...ctx, you, opp, raw: ctx.raw ?? ctx };
+}
+
+// B8d: re-resolve from the RAW context. An action can change what the NEXT one
+// sees -- Trick, Skill Swap, Knock Off, Thief, Mimic, Transform, Color Change,
+// a weather move under Forecast -- and the second action and the end of turn
+// used to read the turn-start resolution, so a faster Ditto's Transform was
+// invisible to the slower foe's hit on it in the same turn. Resolving from the
+// raw mons keeps the interned identities the identity-keyed caches rely on.
+function reResolve(ctx, state) {
+  return effectiveCtx(ctx.raw ?? ctx, state);
+}
+// Overrides can only change DURING an action, and re-resolving on every branch
+// measured +5-9% (effectiveCtx went from once per turn to twice per branch). So
+// re-resolve only when something that feeds the resolution actually moved --
+// by identity, since every override is replaced, never mutated.
+function resolutionChanged(a, b) {
+  return a.youAbilityOverride !== b.youAbilityOverride || a.oppAbilityOverride !== b.oppAbilityOverride
+    || a.youItemOverride !== b.youItemOverride || a.oppItemOverride !== b.oppItemOverride
+    || a.youMoves !== b.youMoves || a.oppMoves !== b.oppMoves
+    || a.youTransform !== b.youTransform || a.oppTransform !== b.oppTransform
+    || a.youTypes !== b.youTypes || a.oppTypes !== b.oppTypes
+    || a.weatherType !== b.weatherType; // Forecast reads the weather
 }
 
 function resolveTurn(ctx, state, yourMove, oppMove) {
@@ -8989,7 +9048,9 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       bounced = true;
     }
     const secondTargetCharging = order[1] === "you" ? s.oppCharging : s.youCharging;
-    const secondOutcomes = enumerateActionOutcomes(ctx, s, order[1], secondMove, secondMoveData, secondTargetCharging, true);
+    // B8d: what the first action changed is visible to the second.
+    const ctx2 = resolutionChanged(state, s) ? reResolve(ctx, s) : ctx;
+    const secondOutcomes = enumerateActionOutcomes(ctx2, s, order[1], secondMove, secondMoveData, secondTargetCharging, true);
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
@@ -9003,8 +9064,8 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
       const bidePre2 = (s2.youLock?.kind === "bide" || s2.oppLock?.kind === "bide") ? bideSnapshot(s2) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null);
-      if (bidePre2) bideAccumulate(ctx, s2, bidePre2);
+      applyMove(ctx2, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null);
+      if (bidePre2) bideAccumulate(ctx2, s2, bidePre2);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
         const dMind = order[0] === "you" ? s2.mindYou - judgeBefore.mindYou : s2.mindOpp - judgeBefore.mindOpp;
@@ -9016,15 +9077,16 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
       // B8c: Shed Skin's 1/3 is drawn HERE, before the end-of-turn effects,
       // because it acts at their ABILITIES checkpoint -- ahead of the residuals.
       const bothUp = s2.yourHpPct > 0 && s2.oppHpPct > 0;
-      const eot = bothUp ? shedSkinBranches(ctx, s2) : NO_SHED_SKIN;
+      const ctx3 = resolutionChanged(s, s2) ? reResolve(ctx2, s2) : ctx2; // B8d: and the end of turn sees both actions' changes
+      const eot = bothUp ? shedSkinBranches(ctx3, s2) : NO_SHED_SKIN;
       for (const eb of eot) {
         const s3 = eot.length > 1 ? cloneState(s2) : s2;
-        if (bothUp) applyEndOfTurnEffects(ctx, s3, eb.cure);
+        if (bothUp) applyEndOfTurnEffects(ctx3, s3, eb.cure);
         // B3 batch 5b: Future Sight releases AFTER the end-of-turn effects
         // (HandleWishPerishSongOnTurnEnd, case 0) and BEFORE the Arena judges
         // (case 2 of the same function) -- so a turn-1 Future Sight lands before
         // turn 3 is judged. Its accuracy roll and Focus Band are real branches.
-        for (const fb of futureSightRelease(ctx, s3)) {
+        for (const fb of futureSightRelease(ctx3, s3)) {
           advanceTurn(fb.state);
           results.push({ p: fo.p * so.p * eb.p * fb.p, state: fb.state, label: `${firstLabel}; ${secondLabel}${eb.label ?? ""}${fb.label}` });
         }
