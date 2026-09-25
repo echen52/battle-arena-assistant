@@ -6385,7 +6385,47 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null) {
+// ── B8b: SYNCHRONIZE (ABILITYEFFECT_SYNCHRONIZE / _ATK_SYNCHRONIZE, src/
+// battle_util.c:2971-3002), as a thin wrapper around the action. SetMoveEffect
+// ARMS it whenever it lands poison, toxic, paralysis or burn (src/battle_script_
+// commands.c:2501-2511) -- a status move, a secondary, a contact-ability proc --
+// and two move-end steps FIRE it, in this order:
+//   MOVEEND_SYNCHRONIZE_TARGET   a Synchronize TARGET that was just statused
+//                                passes it to the attacker (AFFECTS_USER: no
+//                                Substitute check on the receiver)
+//   MOVEEND_SYNCHRONIZE_ATTACKER a Synchronize ATTACKER that was just statused
+//                                (by a contact ability, say) passes it to the
+//                                target -- whose Substitute DOES block it
+// Toxic passes as ordinary poison. Both go through seteffectprimary, so
+// Safeguard and Shield Dust do not stop them; type and ability immunities do,
+// and a fainted receiver cannot take one. "Just statused" is read as a status
+// that appeared during this action -- every psn/par/brn an action can land goes
+// through SetMoveEffect, and sleep/freeze are not synchronized.
+const SYNC_STATUSES = new Set(["poison", "paralysis", "burn"]);
+function applyMove(ctx, s, actor, ...rest) {
+  const isYou = actor === "you";
+  const selfKey = isYou ? "youStatus" : "oppStatus";
+  const foeKey = isYou ? "oppStatus" : "youStatus";
+  const selfPre = s[selfKey], foePre = s[foeKey];
+  applyMoveCore(ctx, s, actor, ...rest);
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (self.ability !== "Synchronize" && foe.ability !== "Synchronize") return;
+  const selfSide = isYou ? "you" : "opp", foeSide = isYou ? "opp" : "you";
+  const hpOf = (side) => (side === "you" ? s.yourHpPct : s.oppHpPct);
+  const give = (side, mon, st) => {
+    if (hpOf(side) <= 0 || !canTakeContactStatus(s, side, st, mon)) return;
+    s[side === "you" ? "youStatus" : "oppStatus"] = st;
+    if (st === "poison") s[side === "you" ? "youToxicCounter" : "oppToxicCounter"] = null; // toxic passes as poison
+  };
+  // MOVEEND_SYNCHRONIZE_TARGET
+  if (foe.ability === "Synchronize" && foePre == null && SYNC_STATUSES.has(s[foeKey])) give(selfSide, self, s[foeKey]);
+  // MOVEEND_SYNCHRONIZE_ATTACKER
+  if (self.ability === "Synchronize" && selfPre == null && SYNC_STATUSES.has(s[selfKey])
+      && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) give(foeSide, foe, s[selfKey]);
+}
+
+function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --

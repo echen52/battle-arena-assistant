@@ -251,7 +251,7 @@ export const B2B1 = {
 // at that commit. See test-b2a-no-dispatch.js's header for the full note.
 // Every one of these five was a recorded throw before B2a.
 export const B2A = {
-  "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.025 },
+  "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Shadow Ball", winProb: 0 }, // B8b: Espeon 3 has SYNCHRONIZE -- a Thunderbolt paralysis (the modelled 10%) now paralyses the Gengar lead back; was Thunderbolt 0.025, and the advice FLIPS
   "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.74333125 },
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
   "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9043094452878824 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt
