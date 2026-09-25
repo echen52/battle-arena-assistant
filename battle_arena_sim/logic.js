@@ -1751,6 +1751,10 @@ const AI_HANDLERS = {
   // and for five of them that row is AI_CBM_HighRiskForDamage, the routine
   // factored out just above.
   EFFECT_SONICBOOM: { checkBadMove: highRiskForDamage },   // dispatched :177
+  // B3 batch 7c: EFFECT_MIMIC has NO row in either dispatch table -- checked,
+  // not assumed: it appears nowhere in data/battle_ai_scripts.s. So it scores
+  // on the defaults alone.
+  EFFECT_MIMIC: {},
   // B3 batch 4c: BIDE. AI_CBM_HighRiskForDamage (dispatched :123) and
   // AI_CV_Bide (:1284-1288, dispatched :675): -2 unless the user is above 90%
   // (`if_hp_more_than AI_USER, 90` -- strictly more). Its membership of the
@@ -4243,6 +4247,9 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // (:3974), so it is nonzero for exactly the first turn.
     youMonFirstTurn: true,
     youAbilityOverride: null, oppAbilityOverride: null,
+    // B3 batch 7c: a MOVESET override (Mimic), null | [4 moves], replaced never
+    // mutated -- resolved by effectiveMon like the ability and item overrides.
+    youMoves: null, oppMoves: null,
     youItemOverride: undefined, oppItemOverride: undefined,
     // B2b batch 9: gProtectStructs.bounceMove -- Magic Coat, for this turn only.
     youBouncing: false, oppBouncing: false,
@@ -6558,6 +6565,35 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
     return;
   }
 
+  // B3 batch 7c: MIMIC (data/battle_scripts_1.s:1134-1145, Cmd_mimicattackcopy
+  // src/battle_script_commands.c:7844-7883), in the script's order, every
+  // failure through ButItFailed (-2): a Substitute on the target; the accuracy
+  // step (a semi-invulnerable target); then the copy itself, which fails if the
+  // target's gLastMoves is none/UNAVAILABLE, is one of the four moves before
+  // MIMIC_FORBIDDEN_END (Metronome, Struggle, Sketch, Mimic), or is already
+  // known. Otherwise it REPLACES the slot of the move the user SELECTED
+  // (gCurrMovePos -- Metronome's slot if Metronome called it) for the rest of
+  // the battle; the Arena has no switching to undo it. +1.
+  if (moveData.effect === "EFFECT_MIMIC") {
+    const copy = s[isYou ? "oppLastMove" : "youLastMove"];
+    const known = selfMon.moves;
+    if (foeHadSubstitute || !hit || copy == null
+        || ["Metronome", "Struggle", "Sketch", "Mimic"].includes(copy) || known.includes(copy)) {
+      s[skillKey] += skillDelta("noEffect");
+      return;
+    }
+    const slot = known.indexOf(chosenMoveName);
+    if (slot < 0) {
+      throw new Error(`Mimic: the selected move "${chosenMoveName}" is not in ${selfMon.species}'s moveset ` +
+        `(${known.join("/")}) -- there is no gCurrMovePos to copy into.`);
+    }
+    const next = known.slice();
+    next[slot] = copy;
+    s[isYou ? "youMoves" : "oppMoves"] = next;
+    s[skillKey] += skillDelta("landed");
+    return;
+  }
+
   // B3 batch 5b: FUTURE SIGHT / DOOM DESIRE -- the SET. trysetfutureattack
   // fails (ButItFailed, -2) if one is already pending on the target; otherwise
   // counter 3 and the damage fixed NOW from CalculateBaseDamage with the
@@ -8112,6 +8148,17 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     }
     return out;
   }
+  if (moveData.effect === "EFFECT_MIMIC") {
+    // B3 batch 7c: `accuracycheck ..., NO_ACC_CALC_CHECK_LOCK_ON` (src/
+    // battle_script_commands.c:1103-1110): no accuracy roll at all. A Lock-On
+    // lands it; a semi-invulnerable target makes it fail; and its Protect check
+    // is JumpIfMoveAffectedByProtect(0) -- move 0's flags, which are empty -- so
+    // Protect NEVER stops Mimic.
+    const tgtCharging = state[actor === "you" ? "oppCharging" : "youCharging"];
+    const lockedOn = state[actor === "you" ? "oppAlwaysHitTurns" : "youAlwaysHitTurns"] != null;
+    const hitIt = lockedOn || !tgtCharging?.invulnBit;
+    return [{ p: 1, hit: hitIt, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: false }];
+  }
   if (moveData.effect === "EFFECT_FUTURE_SIGHT") {
     // B3 batch 5b: BattleScript_EffectFutureSight (data/battle_scripts_1.s:
     // 1881-1889) has no accuracycheck -- the accuracy check comes at RELEASE --
@@ -8577,15 +8624,17 @@ const _effectiveMonCache = new WeakMap();
 function effectiveMon(mon, state, side) {
   const ability = state[side === "you" ? "youAbilityOverride" : "oppAbilityOverride"];
   const item = state[side === "you" ? "youItemOverride" : "oppItemOverride"];
-  if (ability == null && item === undefined) return mon;
+  const moves = state[side === "you" ? "youMoves" : "oppMoves"];
+  if (ability == null && item === undefined && moves == null) return mon;
   let byKey = _effectiveMonCache.get(mon);
   if (!byKey) { byKey = new Map(); _effectiveMonCache.set(mon, byKey); }
-  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}`;
+  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}`;
   let out = byKey.get(key);
   if (!out) {
     out = { ...mon };
     if (ability != null) out.ability = ability;
     if (item !== undefined) out.item = item;
+    if (moves != null) out.moves = moves;
     byKey.set(key, out);
   }
   return out;
@@ -9041,7 +9090,7 @@ function search(ctx, state, turnsRemaining) {
     ? [{ move: oppForced, prob: 1 }]
     : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();
   const yourMoveChoices = youForced ? [youForced]
-    : selectableMoves(ctx.you.moves, state, "you", ctx.opp, "you");
+    : (() => { const ec = effectiveCtx(ctx, state); return selectableMoves(ec.you.moves, state, "you", ec.opp, "you"); })();
 
   const options = [];
   for (const yourMove of yourMoveChoices) {
