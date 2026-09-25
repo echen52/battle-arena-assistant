@@ -38,13 +38,16 @@ console.log("-- PART 1: a swapped ability reaches the DAMAGE FORMULA --");
   const burner = mk("Typhlosion", ["Skill Swap", "Flamethrower", "Rest", "Quick Attack"], { ability: "Blaze" });
   const ctx = { you: tf, opp: burner };
   const fresh = buildStartState({ you: tf, opp: burner });
-  const before = 100 - resolveTurn(ctx, fresh, IDLE, "Flamethrower")[0].state.yourHpPct;
+  // B4: read the UNBURNED branch -- Flamethrower's 10% burn adds a flat 1/8
+  // tick that would dilute the ratio this measures.
+  const unburned = (brs) => brs.find((b) => b.state.youStatus == null);
+  const before = 100 - unburned(resolveTurn(ctx, fresh, IDLE, "Flamethrower")).state.yourHpPct;
 
   const swapped = buildStartState({ you: tf, opp: burner });
   applyMove(ctx, swapped, "opp", "Skill Swap", true, false);
   ok(swapped.youAbilityOverride === "Blaze" && swapped.oppAbilityOverride === "Thick Fat",
     `Skill Swap must exchange both abilities (got ${swapped.youAbilityOverride} / ${swapped.oppAbilityOverride})`);
-  const after = 100 - resolveTurn(ctx, swapped, IDLE, "Flamethrower")[0].state.yourHpPct;
+  const after = 100 - unburned(resolveTurn(ctx, swapped, IDLE, "Flamethrower")).state.yourHpPct;
   ok(after > before * 1.8,
     `Flamethrower must roughly double once Thick Fat is gone (${before.toFixed(1)}% -> ${after.toFixed(1)}%)`);
   console.log(`   Flamethrower ${before.toFixed(1)}% with Thick Fat, ${after.toFixed(1)}% after Skill Swap takes it`);

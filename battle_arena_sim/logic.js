@@ -16,7 +16,7 @@ import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
 import { ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED } from "./ai-tables.js";
-import { moveFlags } from "./move-flags.js";
+import { moveFlags, secondaryChance } from "./move-flags.js";
 import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { GENDER_RATIO } from "./gender-data.js";
@@ -4465,16 +4465,146 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
   return `${who} uses ${moveName} (${hit ? "hits" : "MISSES"})`;
 }
 
-// Secondary-effect trigger chances not present in the bulk move-data.js
-// conversion (battle_moves.json didn't include secondaryEffectChance).
-// Incremental, same pattern as everything else — add a move's real chance
-// here the first time its secondary effect actually needs to fire.
-// Source: src/data/battle_moves.h via the pokeemerald CLI research.
-const SECONDARY_EFFECT_CHANCE = {
-  "Meteor Mash": 20, // src/data/battle_moves.h:4020-4031
-  "Ice Beam": 10,    // well-established, stable since Gen I
-  "Thunderbolt": 10, // well-established, stable since Gen I
+// B4: the chance secondaries. The CHANCE is battle_moves.h's
+// secondaryEffectChance, GENERATED into move-flags.js (`secondaryChance`) --
+// this replaces a hand table that knew three moves (Meteor Mash, Ice Beam,
+// Thunderbolt), so every other move's secondary was silently never rolled.
+//
+// SECONDARY_SPEC says WHAT each effect's script queues (`setmoveeffect ...`
+// before `goto BattleScript_EffectHit`, data/battle_scripts_1.s), in this
+// engine's terms. `status` goes to the target; `self` is a stat change with
+// MOVE_EFFECT_AFFECTS_USER; `tri` is MOVE_EFFECT_TRI_ATTACK.
+//   Secret Power: Cmd_getsecretpowereffect (:9619-9652) reads
+//   gBattleEnvironment, and the Battle Arena's rooms are MAP_TYPE_INDOOR
+//   (data/maps/BattleFrontier_BattleArenaBattleRoom/map.json) -> BUILDING
+//   (src/battle_setup.c:663-665) -> the default case, PARALYSIS.
+//   Bounce: EFFECT_SEMI_INVULNERABLE, but its release queues
+//   MOVE_EFFECT_PARALYSIS (`jumpifnotmove MOVE_BOUNCE`, :2003) -- keyed by
+//   move, not effect, in secondarySpecFor.
+const SECONDARY_SPEC = {
+  EFFECT_PARALYZE_HIT: { status: "paralysis" },
+  EFFECT_THUNDER: { status: "paralysis" },
+  EFFECT_SECRET_POWER: { status: "paralysis" },
+  EFFECT_BURN_HIT: { status: "burn" },
+  EFFECT_BLAZE_KICK: { status: "burn" },
+  EFFECT_THAW_HIT: { status: "burn" },
+  EFFECT_FREEZE_HIT: { status: "freeze" },
+  EFFECT_POISON_HIT: { status: "poison" },
+  EFFECT_POISON_TAIL: { status: "poison" },
+  EFFECT_POISON_FANG: { status: "toxic" },
+  EFFECT_TRI_ATTACK: { tri: true },
+  EFFECT_ATTACK_UP_HIT: { self: { atk: 1 } },
 };
+const BOUNCE_SPEC = { status: "paralysis" };
+function secondarySpecFor(moveName, moveData) {
+  if (moveName === "Bounce") return BOUNCE_SPEC;
+  return SECONDARY_SPEC[moveData.effect];
+}
+// The abilities whose block PRINTS on a CERTAIN status secondary (the
+// `primary == TRUE || certain == MOVE_EFFECT_CERTAIN` arms of SetMoveEffect,
+// :2300/:2344/:2410/:2440): Immunity, Water Veil, Limber. The string lands in
+// DeductSkillPoints. Magma Armor has no such arm -- it only `break`s.
+const SECONDARY_PREVENT_ABILITY = { poison: "Immunity", burn: "Water Veil", paralysis: "Limber" };
+const SECONDARY_PREVENT_STRING = {
+  poison: "STRINGID_PKMNPREVENTSPOISONINGWITH", burn: "STRINGID_PKMNSXPREVENTSBURNS",
+  paralysis: "STRINGID_PKMNPREVENTSPARALYSISWITH",
+};
+// Tri Attack's draw: `Random() % 3 + 3` -> MOVE_EFFECT_BURN / FREEZE / PARALYSIS.
+const TRI_ATTACK_STATUSES = ["burn", "freeze", "paralysis"];
+
+// Could this status secondary change the target at all, judged on the state
+// BEFORE the action? A NECESSARY condition only -- the dispatch re-checks
+// everything -- so the enumerator branches only where the roll is observable
+// (the Focus Band collapse rule). Substitute, Shield Dust and type immunity to
+// the move itself are tested by the caller.
+function secondaryStatusCanLand(ctx, state, side, mon, status) {
+  const base = status === "toxic" ? "poison" : status;
+  if (state[side === "you" ? "youStatus" : "oppStatus"] != null) return false;
+  if (state[side === "you" ? "youSafeguardTurns" : "oppSafeguardTurns"] != null) return false;
+  if (STATUS_IMMUNITY_TYPES[base].some((t) => mon.types.includes(t))) return false;
+  if (STATUS_IMMUNITY_ABILITIES[base] && mon.ability === STATUS_IMMUNITY_ABILITIES[base]) return false;
+  if (base === "freeze" && effectiveWeather(state, ctx.you, ctx.opp) === "sun") return false;
+  return true;
+}
+
+// The enumerator's half: the weighted outcomes of the roll, or null when there
+// is nothing to branch. Each outcome is { q, trig } -- `trig` is true, or for
+// Tri Attack the drawn status.
+//   percentChance = secondaryEffectChance, doubled by SERENE GRACE (:2912-2915)
+//   success: Random() % 100 < percentChance, on a hit that is not NO_EFFECT
+//   percentChance >= 100 -> SetMoveEffect(..., MOVE_EFFECT_CERTAIN)
+function secondaryOutcomes(ctx, state, actor, moveName, moveData) {
+  const spec = secondarySpecFor(moveName, moveData);
+  if (!spec) return null;
+  const chance = secondaryChance(moveName);
+  if (!chance) return null;
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  const pct = self.ability === "Serene Grace" ? chance * 2 : chance;
+  const q = Math.min(1, pct / 100);
+  if (typeEffectiveness(moveData.type, foe.types, isYou ? state.oppForesighted : state.youForesighted) === 0) return null;
+  if (spec.self) {
+    const st = isYou ? state.youStages : state.oppStages;
+    return Object.keys(spec.self).some((k) => st[k] < 6) ? [{ q, trig: true }] : null;
+  }
+  // SetMoveEffect's head (:2253-2267): Shield Dust (byte <= 9) and a
+  // Substitute stop every target-side secondary here.
+  if (foe.ability === "Shield Dust") return null;
+  if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return null;
+  const foeSide = isYou ? "opp" : "you";
+  if (spec.tri) {
+    // MOVE_EFFECT_TRI_ATTACK (:2605-2615): nothing on a statused target, else
+    // a uniform draw re-entering SetMoveEffect with every normal check.
+    if (state[isYou ? "oppStatus" : "youStatus"] != null) return null;
+    const out = [];
+    for (const st of TRI_ATTACK_STATUSES) {
+      if (secondaryStatusCanLand(ctx, state, foeSide, foe, st)) out.push({ q: q / 3, trig: st });
+    }
+    return out.length ? out : null;
+  }
+  if (secondaryStatusCanLand(ctx, state, foeSide, foe, spec.status)) return [{ q, trig: true }];
+  // A CERTAIN roll into a printing ability is observable through Skill even
+  // though nothing lands (Safeguard comes first and prints nothing).
+  const base = spec.status === "toxic" ? "poison" : spec.status;
+  if (pct >= 100 && foe.ability === SECONDARY_PREVENT_ABILITY[base]
+      && state[isYou ? "oppSafeguardTurns" : "youSafeguardTurns"] == null) return [{ q: 1, trig: true }];
+  return null;
+}
+
+// The dispatch half, called from applyMoveCore right after the damage and
+// BEFORE the fire defrost (seteffectwithchance precedes MOVEEND_DEFROST, so a
+// frozen target hit by Fire Punch sees itself still frozen and is not burned).
+function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitute) {
+  const spec = secondarySpecFor(moveName, moveData);
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (spec.self) {
+    if ((isYou ? s.yourHpPct : s.oppHpPct) <= 0) return; // gEffectBattler hp == 0 (:2261)
+    // Increases pass no ability check in ChangeStatBuffs (:6964-7075).
+    for (const [k, d] of Object.entries(spec.self)) bumpStage(isYou ? s.youStages : s.oppStages, k, d);
+    return;
+  }
+  if (foe.ability === "Shield Dust") return;          // :2253
+  if (foeHadSubstitute) return;                       // :2266 -- still set, even if this hit broke it
+  if ((isYou ? s.oppHpPct : s.yourHpPct) <= 0) return; // :2261
+  const foeSide = isYou ? "opp" : "you";
+  if (s[isYou ? "oppSafeguardTurns" : "youSafeguardTurns"] != null) return; // :2257, bytes <= 7
+  const status = spec.tri ? trig : spec.status;
+  const base = status === "toxic" ? "poison" : status;
+  const chance = secondaryChance(moveName) * (self.ability === "Serene Grace" ? 2 : 1);
+  // Tri Attack's inner SetMoveEffect is called with certain = 0.
+  if (!spec.tri && chance >= 100 && foe.ability === SECONDARY_PREVENT_ABILITY[base]) {
+    // BattleScript_*Prevention prints through printfromtable, as the ATTACKER
+    // (PrepareStringBattle(..., gBattlerAttacker), :2187) -- a flat -3.
+    s[isYou ? "skillYou" : "skillOpp"] -= 3;
+    return;
+  }
+  if (base === "freeze" && effectiveWeather(s, ctx.you, ctx.opp) === "sun") return; // :2389-2390
+  if (!inflictStatus(s, foeSide, base, foe.types, foe.ability)) return;
+  if (status === "toxic") s[isYou ? "oppToxicCounter" : "youToxicCounter"] = 0;
+}
 
 // Cmd_setmultihitcounter (src/battle_script_commands.c:7139-7155) — a real
 // TWO-ROLL mechanism, not a flat lookup: r = Random()&3; r<=1 -> hits=r+2
@@ -5228,12 +5358,6 @@ const RECOIL_FRACTION = { EFFECT_RECOIL: 4, EFFECT_DOUBLE_EDGE: 3 };
 const DRAIN_EFFECTS = new Set(["EFFECT_ABSORB", "EFFECT_DREAM_EATER"]);
 
 const EFFECT_EXECUTORS = {
-  EFFECT_ATTACK_UP_HIT: (s, actor) => {
-    // Confirmed via source: increase-path ChangeStatBuffs has NO ability
-    // checks at all (Clear Body etc. only guard the decrease path) — always
-    // applies (capped at +6, silently no-ops there, matching source).
-    bumpStage(actor === "you" ? s.youStages : s.oppStages, "atk", 1);
-  },
   // A4: BattleScript_EffectConfuse (data/battle_scripts_1.s:903-917) gates the
   // confusion on, in this order: Own Tempo (-> BattleScript_OwnTempoPrevents,
   // :4152, prints STRINGID_PKMNPREVENTSCONFUSIONWITH and sets no MOVE_RESULT_*),
@@ -5485,26 +5609,6 @@ const EFFECT_EXECUTORS = {
     if (s.weatherType === "hail") return "failed";
     s.weatherType = "hail";
     s.weatherTurns = 5;
-  },
-  EFFECT_PARALYZE_HIT: (s, actor, ctx) => {
-    const targetSide = actor === "you" ? "opp" : "you";
-    const targetMon = actor === "you" ? ctx.opp : ctx.you;
-    inflictStatus(s, targetSide, "paralysis", targetMon.types, targetMon.ability);
-  },
-  EFFECT_FREEZE_HIT: (s, actor, ctx) => {
-    const targetSide = actor === "you" ? "opp" : "you";
-    const targetMon = actor === "you" ? ctx.opp : ctx.you;
-    inflictStatus(s, targetSide, "freeze", targetMon.types, targetMon.ability);
-  },
-  EFFECT_BURN_HIT: (s, actor, ctx) => {
-    const targetSide = actor === "you" ? "opp" : "you";
-    const targetMon = actor === "you" ? ctx.opp : ctx.you;
-    inflictStatus(s, targetSide, "burn", targetMon.types, targetMon.ability);
-  },
-  EFFECT_POISON_HIT: (s, actor, ctx) => {
-    const targetSide = actor === "you" ? "opp" : "you";
-    const targetMon = actor === "you" ? ctx.opp : ctx.you;
-    inflictStatus(s, targetSide, "poison", targetMon.types, targetMon.ability);
   },
   // ── Executor backfill for the batch-1 AI_HANDLERS (Paralyze/Roar/Rest) ───
   EFFECT_PARALYZE: (s, actor, ctx, moveData) => {
@@ -6255,32 +6359,22 @@ const INLINE_HANDLED_EFFECTS = new Set([
 const CHANCE_SECONDARY_EFFECTS = new Set([
   "EFFECT_SPECIAL_DEFENSE_DOWN_HIT", // Psychic/Crunch/Shadow Ball SpD-down %
   "EFFECT_FLINCH_HIT",               // Rock Slide/Headbutt/Bite flinch %
-  "EFFECT_THUNDER",                  // Thunder para % (never-miss-in-rain handled l.~3761)
   "EFFECT_SPEED_DOWN_HIT",           // Bubblebeam/Icy Wind speed-down %
   "EFFECT_DEFENSE_DOWN_HIT",         // Iron Tail/Crush Claw def-down %
   "EFFECT_ALL_STATS_UP_HIT",         // AncientPower/Silver Wind all-up %
   "EFFECT_DEFENSE_UP_HIT",           // Steel Wing def-up %
-  "EFFECT_TRI_ATTACK",               // Tri Attack burn/para/freeze %
   "EFFECT_CONFUSE_HIT",              // Confusion/Psybeam/Water Pulse confuse %
   "EFFECT_ACCURACY_DOWN_HIT",        // Mud-Slap/Muddy Water accuracy-down %
   "EFFECT_FLINCH_MINIMIZE_HIT",      // Stomp/Extrasensory flinch % (+2x vs minimize)
   "EFFECT_SPECIAL_ATTACK_DOWN_HIT",  // Mist Ball SpA-down %
-  "EFFECT_BLAZE_KICK",               // burn % (+ high-crit, crits unmodeled by design; AI scoring ported #9)
-  "EFFECT_SECRET_POWER",             // terrain-dependent status %
-  "EFFECT_POISON_FANG",              // bad-poison %
   // B2b batch 6.
   "EFFECT_ATTACK_DOWN_HIT",          // Aurora Beam attack-down %
-  // Flame Wheel / Sacred Fire. The MANDATORY half -- a frozen user acts and
-  // thaws -- is modelled (see the freeze branch in enumerateActionOutcomes);
-  // what is left is the burn %, which is this class.
-  "EFFECT_THAW_HIT",
   // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
   // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
   "EFFECT_SNORE",
   // B2b batch 7. Each of these has its mandatory half modelled and a chance
   // secondary left, which is this class:
   "EFFECT_SKY_ATTACK",   // the 2-turn charge is modelled; the flinch % is not
-  "EFFECT_POISON_TAIL",  // poison %; its high crit rate is B6, like Blaze Kick
   "EFFECT_TWISTER",      // flinch %; its 2x vs an airborne target is inline
 ]);
 
@@ -6305,6 +6399,7 @@ const DAMAGE_MAGNITUDE_ONLY_EFFECTS = new Set([
 // power>1 NOT in here and NOT in ACCEPTED_UNMODELED_EFFECTS fails closed.
 const HANDLED_EFFECTS = new Set([
   ...Object.keys(EFFECT_EXECUTORS),
+  ...Object.keys(SECONDARY_SPEC),  // B4: dispatched by applySecondary
   ...DRAIN_EFFECTS,
   ...Object.keys(RECOIL_FRACTION),
   ...Object.keys(MULTI_HIT_DISTRIBUTION),
@@ -7267,6 +7362,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           if (endureTriggeredThisHit) break;
         }
       }
+      // B4: seteffectwithchance -- after datahpupdate, before MOVEEND.
+      if (secondaryTriggered && eff !== 0) applySecondary(ctx, s, actor, moveName, moveData, secondaryTriggered, foeHadSubstitute);
       // Any damaging Fire-type move thaws a frozen target, regardless of user
       // (and regardless of substitute — thaw wasn't confirmed to be blocked
       // by a sub, kept as a passive reaction to being hit either way).
@@ -7483,10 +7580,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // fire even when Protect blocks the move entirely, which returns before
     // ever reaching this point.)
 
-    if (secondaryTriggered) {
-      const executor = EFFECT_EXECUTORS[moveData.effect];
-      if (executor) executor(s, actor, ctx, moveData);
-    } else if (moveData.power > 1) {
+    // B4: secondaries dispatch in the damage path (applySecondary), so this
+    // is now the guard alone, for every power>1 move.
+    if (moveData.power > 1) {
       // Mandatory-mechanic guard (change #11). Covers every power>1 move that
       // did NOT dispatch a secondary executor — i.e. all but the three
       // SECONDARY_EFFECT_CHANCE moves on their trigger branch. Damage is already
@@ -8603,11 +8699,15 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           }
           continue;
         }
-        const chance = SECONDARY_EFFECT_CHANCE[moveName];
-        const hasExecutor = !!EFFECT_EXECUTORS[moveData.effect];
-        if (moveData.power > 0 && chance && hasExecutor) {
-          results.push({ p: p * ab.p * (chance / 100), hit: true, selfHit: false, secondaryTriggered: true, statusPrevented: false, thawed: stb.thawed });
-          results.push({ p: p * ab.p * (1 - chance / 100), hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
+        // B4: the chance secondary, drawn once per landed hit.
+        const sec = moveData.power > 0 ? secondaryOutcomes(ctx, state, actor, moveName, moveData) : null;
+        if (sec) {
+          let rest = 1;
+          for (const o of sec) {
+            results.push({ p: p * ab.p * o.q, hit: true, selfHit: false, secondaryTriggered: o.trig, statusPrevented: false, thawed: stb.thawed });
+            rest -= o.q;
+          }
+          if (rest > 1e-12) results.push({ p: p * ab.p * rest, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
         } else {
           results.push({ p: p * ab.p, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed });
         }

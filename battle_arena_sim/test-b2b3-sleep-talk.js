@@ -123,7 +123,8 @@ console.log("-- PART 4: the sleep gate, and the counter that must still tick --"
   // Waking up forfeits the turn even with Sleep Talk selected.
   const waking = run(opp, { oppStatus: "sleep", oppSleepTurns: 1 });
   ok(calls(waking).size === 0, "a mon that WAKES this turn calls nothing -- it forfeits, as any waker does");
-  ok(waking.every((b) => b.state.oppStatus === null), "...and is awake afterwards");
+  // B4: "awake" is "not asleep" -- the player's Body Slam can now paralyse it.
+  ok(waking.every((b) => b.state.oppStatus !== "sleep"), "...and is awake afterwards");
   console.log("   awake: no call; still asleep: calls and ticks 3 -> 2; waking: forfeits and wakes");
 }
 

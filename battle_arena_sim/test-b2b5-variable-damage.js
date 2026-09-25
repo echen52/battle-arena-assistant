@@ -34,7 +34,9 @@ const dmgFromBranch = (b) => startHp - Math.round((b.state.yourHpPct / 100) * ma
 const branchesFor = (move, species, overrides = {}) => {
   const opp = mk(species, [move, "Body Slam", "Rest", "Earthquake"]);
   const s = buildStartState({ you, opp, overrides: { yourHpPct: START_PCT, oppHpPct: 60, ...overrides } });
-  return { opp, branches: resolveTurn({ you, opp }, s, "Body Slam", move), state: s };
+  // B4: the probe move is Earthquake, not Body Slam -- Body Slam's 30% paralysis
+  // would split every branch in two, orthogonally to what this file measures.
+  return { opp, branches: resolveTurn({ you, opp }, s, "Earthquake", move), state: s };
 };
 
 console.log("-- PART 1: set damage -- a fixed number, no roll, no STAB, no type mult --");
@@ -183,7 +185,7 @@ console.log("-- PART 5: Endeavor fails BEFORE the accuracy check --");
   console.log(`   player ${maxHp} HP -> ${Math.round((landed[0].state.yourHpPct / 100) * maxHp)} HP, user had ${oppHp}`);
 
   const hurtTarget = buildStartState({ you, opp, overrides: { yourHpPct: 20, oppHpPct: 90 } });
-  const failed = resolveTurn({ you, opp }, hurtTarget, "Body Slam", "Endeavor");
+  const failed = resolveTurn({ you, opp }, hurtTarget, "Earthquake", "Endeavor"); // B4: no secondary split
   const beforeHp = Math.round((20 / 100) * maxHp);
   ok(failed.every((b) => Math.round((b.state.yourHpPct / 100) * maxHp) <= beforeHp),
     "Endeavor must never HEAL a target that is already below the user");

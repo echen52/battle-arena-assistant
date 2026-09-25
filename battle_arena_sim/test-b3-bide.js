@@ -57,7 +57,9 @@ let stored;
   ok(tree.allOptions.length === 1 && tree.allOptions[0].move === "Bide", "a biding player has exactly one option: Bide");
 
   const brs = turn(bider, slowHitter, s, "Bide", "Body Slam");
-  const b = brs.find((x) => x.state.yourHpPct < 100);
+  // B4: the branch where Body Slam did NOT also paralyse the bider -- its 30%
+  // would otherwise leak a full-paralysis split into every later part.
+  const b = brs.find((x) => x.state.yourHpPct < 100 && x.state.youStatus == null);
   ok(b, "(probe check) the foe's Body Slam lands on the storing turn");
   const lost = hpOf(s.yourHpPct, bider) - hpOf(b.state.yourHpPct, bider);
   ok(/storing energy/.test(b.label), `the storing turn says so (${b.label})`);

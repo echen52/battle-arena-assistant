@@ -178,7 +178,7 @@ export const CURRENT = {
   "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
   "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
   "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
-  "Articuno 5": { move: "Meteor Mash", winProb: 0.9694799148701365 }, // B7c: holds Focus Band (a 1-ULP move)
+  "Articuno 5": { move: "Meteor Mash", winProb: 0.9665761405443762 }, // B7c: holds Focus Band (a 1-ULP move); B4a (chance status secondaries) -- its BLIZZARD now freezes 10% (zeroing Blizzard alone restores 0.9694799148701365)
   "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.5478714843750001 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
   "Heracross 2": { move: "Explosion", winProb: 0.5 },
@@ -191,12 +191,12 @@ export const CURRENT = {
 
 // Cross-lead cells, keyed "Lead|Set". A3's poison-sensitive set.
 export const CURRENT_CELLS = {
-  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.985365207225065 }, // B7a: the lead's own Thick Fat
+  "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9824447945293759 }, // B7a: the lead's own Thick Fat; B4a (chance status secondaries) -- Articuno's BLIZZARD freezes the lead 10% (zeroing it alone restores 0.985365207225065)
   "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
-  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8540164087233308 },
+  "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8934663712683204 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.8540164087233308)
   "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
   "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 },
-  "Snorlax|Blissey 1": { move: "Body Slam", winProb: 0.9351897271082136 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322
+  "Snorlax|Blissey 1": { move: "Earthquake", winProb: 0.9351897271082135 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322; B4a (chance status secondaries) -- Body Slam's 30% paralysis now rolls and the advice FLIPS to Earthquake by 1 ULP (zeroing Body Slam alone restores Body Slam 0.9351897271082136)
 };
 
 // Full opponent AI distributions at fresh turn 1, for the roll-sensitive sets.
@@ -232,16 +232,16 @@ export const CURRENT_DIST = {
 // canonical Metagross lead most of these sets evaluate to a flat 1.0, which
 // locks nothing; the panel leads separate them.
 export const B2B1 = {
-  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.06416666666666666 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.04666666666666666 (Hypnosis)
-  "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.03202128648757935 },
-  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Thunderbolt", winProb: 0.0713143221859218 }, // B7c: holds Quick Claw
-  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.49061960451908687 }, // B7a: Poison Barb
-  "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9934374999999999 },
-  "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.3474999999999999 },
+  "Poliwrath 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.22766666666666663 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.04666666666666666 (Hypnosis); B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.06416666666666666)
+  "Snorlax 8":             { tier: 31, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.10653279296875003 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.03202128648757935)
+  "Anabel Silver Snorlax": { tier: 24, lead: "Gengar",  effect: "EFFECT_BELLY_DRUM",   wasThrowing: "ai-scoring", move: "Ice Punch", winProb: 0.14194615494034907 }, // B7c: holds Quick Claw; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.0713143221859218)
+  "Muk 1":                 { tier: 31, lead: "Starmie", effect: "EFFECT_MINIMIZE",     wasThrowing: "ai-scoring", move: "Surf",        winProb: 0.47852166204156843 }, // B7a: Poison Barb; B4a (chance status secondaries) -- Muk's SLUDGE BOMB poisons the Starmie lead 30% (zeroing it alone restores 0.49061960451908687)
+  "Linoone 1":             { tier:  6, lead: "Snorlax", effect: "EFFECT_TICKLE",       wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9831071881352187 }, // B4a (chance status secondaries) -- Linoone's SECRET POWER paralyses the lead 30% -- the Arena is BUILDING (zeroing Secret Power alone restores 0.9934374999999998, 1 ULP from the recorded 0.9934374999999999)
+  "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.5519999999999999 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.3474999999999999)
   "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0 },
-  "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.5142531394958496 },
-  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.99658203125 },
-  "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
+  "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.6599771976470946 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.5142531394958496)
+  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9965820312499999 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.99658203125)
+  "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9972992078463234 }, // B4a (chance status secondaries) -- Dragonair's DRAGONBREATH paralyses the lead 30% (zeroing it alone restores 0.9999999999999998, 1 ULP from the recorded 1)
   "Caterpie 1":            { tier:  3, lead: "Snorlax", effect: "EFFECT_SPEED_DOWN",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
 };
 
@@ -251,11 +251,11 @@ export const B2B1 = {
 // at that commit. See test-b2a-no-dispatch.js's header for the full note.
 // Every one of these five was a recorded throw before B2a.
 export const B2A = {
-  "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Shadow Ball", winProb: 0 }, // B8b: Espeon 3 has SYNCHRONIZE -- a Thunderbolt paralysis (the modelled 10%) now paralyses the Gengar lead back; was Thunderbolt 0.025, and the advice FLIPS
-  "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.74333125 },
+  "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch", winProb: 0.08000000000000002 }, // B8b: Espeon 3 has SYNCHRONIZE -- a Thunderbolt paralysis (the modelled 10%) now paralyses the Gengar lead back; was Thunderbolt 0.025, and the advice FLIPS; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Shadow Ball (zeroing Ice Punch alone restores Shadow Ball 0)
+  "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.7263982421875 }, // B4a (chance status secondaries) -- Ninetales' HEAT WAVE burns the lead 10% (zeroing it alone restores 0.74333125)
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
-  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9043094452878824 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt
-  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Thunderbolt", winProb: 0.00625 },
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9069523193525368 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt; B4a (chance status secondaries) -- the lead's ICE PUNCH now freezes 10% (zeroing Ice Punch alone restores 0.9043094452878824)
+  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Ice Punch", winProb: 0.05120000000000002 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.00625)
 };
 
 // -- MODIFIER_ANCHORS -- promoted from B7a's movers, per amendment 2 --------
@@ -307,11 +307,11 @@ export const B2A = {
 // knowing the adapter's tie-break. Default IV tier throughout.
 export const MODIFIER_ANCHORS = {
   "Marowak 3": { lead: "Snorlax", ability: "Rock Head",
-    move: "Body Slam", winProb: 0.008506944444444442,
+    move: "Body Slam", winProb: 0.3059548611111111, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.008506944444444442)
     pre: { move: "Body Slam", winProb: 1 },
     causedBy: "item: Thick Club" },
   "Medicham 1": { lead: "Snorlax", ability: null,
-    move: "Shadow Ball", winProb: 0.09249908447265623, // B7c: also holds Focus Band
+    move: "Body Slam", winProb: 0.136091639881134, // B7c: also holds Focus Band; B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0.09249908447265623)
     pre: { move: "Shadow Ball", winProb: 1 },
     // HISTORY, never deleted: B7a moved this to 0.02274166870117187 via Pure
     // Power's doubled Attack. B3 batch 1 moved it again, UP, to the value above:
@@ -322,22 +322,22 @@ export const MODIFIER_ANCHORS = {
     // of porting a mechanic that only ever costs its user.
     causedBy: "opponent ability: Pure Power (B7a), then Hi Jump Kick's crash (B3 batch 1)" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
-    move: "Shadow Ball", winProb: 0,
+    move: "Body Slam", winProb: 0.51, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0)
     pre: { move: "Shadow Ball", winProb: 1 },
     // B7a moved this via Choice Band's 1.5x Attack, to 0.07823631286621092.
     // B2b batch 2 added Choice Band's MOVE LOCK and moved it again, to 0 --
     // locking this opponent into its turn-1 pick is, here, strictly good for it.
     causedBy: "item: Choice Band -- 1.5x Attack (B7a), then its move lock (B2b batch 2)" },
   "Ampharos 1": { lead: "Gengar", ability: null,
-    move: "Thunderbolt", winProb: 0.07934632632522814,
+    move: "Ice Punch", winProb: 0.12588574655303236, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.07934632632522814)
     pre: { move: "Psychic", winProb: 0.49334131133415177 },
     causedBy: "item: Magnet" },
   "Regice 3": { lead: "Snorlax", ability: null,
-    move: "Body Slam", winProb: 0.98062091876287,
+    move: "Body Slam", winProb: 0.9806468547878902, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.98062091876287)
     pre: { move: "Shadow Ball", winProb: 0.8157545010610819 },
     causedBy: "lead ability: Thick Fat" },
   "Ursaring 5": { lead: "Gengar", ability: null,
-    move: "Psychic", winProb: 0.21024999999999996,
+    move: "Ice Punch", winProb: 0.27343, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Psychic (zeroing Ice Punch alone restores Psychic 0.21024999999999996)
     pre: { move: "Thunderbolt", winProb: 0.314569140625 },
     // Choice Band's lock (B2b batch 2) moved this back UP from 0.166375 --
     // the opposite direction to Aerodactyl 2 above, because being locked into
@@ -368,7 +368,7 @@ export const MODIFIER_ANCHORS = {
     // hidden by swapping in a cleaner set.
     causedBy: "opponent ability: Torrent (B7a), then its Shell Bell (B7b)" },
   "Muk 1": { lead: "Snorlax", ability: "Stench",
-    move: "Earthquake", winProb: 0.972399478253943, // B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9618722223090354
+    move: "Earthquake", winProb: 0.969875040250244, // B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9618722223090354; B4a (chance status secondaries) -- JOINTLY the lead's BODY SLAM (30% paralysis) and Muk's SLUDGE BOMB (30% poison): zeroing either alone gives 0.9702445626603784 / 0.9719920314178362, neither restores 0.972399478253943
     pre: { move: "Earthquake", winProb: 0.9816982673274147 },
     causedBy: "item: Poison Barb" },
   "Miltank 3": { lead: "Starmie", ability: null,
@@ -376,7 +376,7 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Ice Beam", winProb: 0.15360000000000004 },
     causedBy: "opponent ability: Thick Fat" },
   "Charizard 4": { lead: "Gengar", ability: null,
-    move: "Thunderbolt", winProb: 0.424140625,
+    move: "Ice Punch", winProb: 0.45662500000000006, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.424140625)
     pre: { move: "Thunderbolt", winProb: 0.42414062500000005 },
     causedBy: "opponent ability: Blaze" },
 };
@@ -396,9 +396,9 @@ export const MODIFIER_ANCHORS = {
 export const B7B_ANCHORS = {
   "Metagross 7": { lead: "Starmie", item: "Shell Bell", move: "Ice Beam", winProb: 0.10944000000000002,
     pre: { move: "Surf", winProb: 1 } },
-  "Noland Gold† Metang": { lead: "Gengar", item: "Sitrus Berry", move: "Thunderbolt", winProb: 0.5435139236450196,
+  "Noland Gold† Metang": { lead: "Gengar", item: "Sitrus Berry", move: "Thunderbolt", winProb: 0.5676417495727539, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% (zeroing it alone restores 0.5435139236450196)
     pre: { move: "Thunderbolt", winProb: 0.9999999999999999 } },
-  "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.828125,
+  "Entei 5": { lead: "Metagross", item: "Salac Berry", move: "Earthquake", winProb: 0.7723437500000001, // B4a (chance status secondaries) -- Entei's FIRE BLAST burns the lead 10% (zeroing it alone restores 0.828125)
     pre: { move: "Earthquake", winProb: 1 } },
 };
 
@@ -414,7 +414,7 @@ export const B7B_ANCHORS = {
 // test-b7c-accuracy-chain.js PARTS 1-3, which pin each multiplier and the
 // uncapped ordering by value rather than by hit rate.
 export const B7C_ANCHORS = {
-  "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.8099999999999999,
+  "Registeel 2": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.7452, // B4a (chance status secondaries) -- Registeel's ICE PUNCH freezes the lead 10% (zeroing it alone restores 0.8099999999999999)
     pre: { move: "Earthquake", winProb: 1 } },
   // B7c moved this Dragon Claw 0.9301677280002171 -> Earthquake 0.7479850977404471
   // via its BrightPowder. Intimidate then moved it AGAIN -- it is a Salamence
@@ -423,7 +423,7 @@ export const B7C_ANCHORS = {
   "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Dragon Claw", winProb: 0.8507291838563511,
     pre: { move: "Dragon Claw", winProb: 0.9301677280002171 },
     b7cWas: { move: "Earthquake", winProb: 0.7479850977404471 } },
-  "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.8231904000000001,
+  "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.7478928000000001, // B4a (chance status secondaries) -- Alakazam's THUNDERPUNCH paralyses the lead 10% (zeroing it alone restores 0.8231904000000001)
     pre: { move: "Surf", winProb: 1 } },
 };
 
@@ -444,7 +444,7 @@ export const INTIMIDATE_ANCHORS = {
   "Granbull 2": { lead: "Salamence", move: "Earthquake", winProb: 0,
     pre: { move: "Earthquake", winProb: 1 },
     why: "the LEAD's own Intimidate -- a complete reversal" },
-  "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0,
+  "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0.09, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% -- the first non-zero odds this cell has had since Intimidate (zeroing Body Slam alone restores 0)
     pre: { move: "Body Slam", winProb: 1 },
     why: "an Intimidate OPPONENT dropping a physical lead's Attack" },
   "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.9,
