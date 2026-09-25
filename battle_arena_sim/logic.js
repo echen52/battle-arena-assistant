@@ -9641,9 +9641,18 @@ function moveTiebreakScore(ctx, state, moveName) {
   });
 }
 
-function search(ctx, state, turnsRemaining) {
+// C1 (amendment 13): `retain` = false is the HEADLESS mode. The search is the
+// same expectimax, in the same order, with the same sort and tie-break -- so the
+// winProb and the move are bit-identical -- but no node keeps its branches,
+// their states or their subtrees. A retained tree for a heavy cell held
+// gigabytes (Gengar vs Hariyama 2: 2.8 GB after the call, B4b); headless, the
+// live set is one root-to-leaf path of transient resolveTurn arrays. Batch
+// tools use it; the site and team-workflow, which read the tree, keep the
+// default.
+function search(ctx, state, turnsRemaining, retain = true) {
   if (turnsRemaining === 0 || state.yourHpPct <= 0 || state.oppHpPct <= 0) {
-    return { winProb: evaluateTerminal(state), move: null, isTerminal: true, state };
+    const winProb = evaluateTerminal(state);
+    return retain ? { winProb, move: null, isTerminal: true, state } : { winProb, move: null, isTerminal: true };
   }
 
   // A charging mon (mid-Dive/Fly/Dig) has no real choice — the game forces
@@ -9671,13 +9680,17 @@ function search(ctx, state, turnsRemaining) {
       const raw = resolveTurn(ctx, state, yourMove, oppMove);
       for (const b of raw) {
         const weight = b.p * oppProb;
-        const sub = search(ctx, b.state, turnsRemaining - 1);
+        const sub = search(ctx, b.state, turnsRemaining - 1, retain);
         expected += weight * sub.winProb;
-        branches.push({ prob: weight, label: b.label, state: b.state, subtree: sub });
+        if (retain) branches.push({ prob: weight, label: b.label, state: b.state, subtree: sub });
       }
     }
-    branches.sort((a, b) => b.prob - a.prob);
-    options.push({ move: yourMove, winProb: expected, branches });
+    if (retain) {
+      branches.sort((a, b) => b.prob - a.prob);
+      options.push({ move: yourMove, winProb: expected, branches });
+    } else {
+      options.push({ move: yourMove, winProb: expected });
+    }
   }
   // Primary key: winProb (descending) — the real decision criterion, never
   // overridden. Secondary key (ONLY within floating-point-noise distance,
@@ -9695,6 +9708,7 @@ function search(ctx, state, turnsRemaining) {
     return moveTiebreakScore(ctx, state, b.move) - moveTiebreakScore(ctx, state, a.move);
   });
 
+  if (!retain) return { move: options[0].move, winProb: options[0].winProb, isTerminal: false, allOptions: options };
   return {
     move: options[0].move,
     winProb: options[0].winProb,
@@ -9739,7 +9753,9 @@ function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
 // (AI_USER) check. Defaults to 2 for the same reason; we don't currently
 // model the opponent's full 3-mon Frontier roster (only the one named set
 // being analyzed), so this is a simplifying assumption until that's tracked.
-function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2 } = {}) {
+// C1: `tree: false` runs the search headless (see search) -- the result
+// carries move, winProb and allOptions[{move, winProb}], and no branches.
+function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true } = {}) {
   const you = buildMon(youConfig);
   // Frontier trainer mons are generated at max friendship (255) — a real,
   // verified fact about this dataset's source, not a convenience default —
@@ -9748,7 +9764,7 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
   const opp = buildMon({ ...oppConfig, friendship: 255 });
   const ctx = { you, opp };
   const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
-  const result = search(ctx, state, 3);
+  const result = search(ctx, state, 3, tree);
   return { you, opp, result };
 }
 
