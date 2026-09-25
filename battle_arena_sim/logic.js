@@ -9821,7 +9821,7 @@ function moveTiebreakScore(ctx, state, moveName) {
   const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
   const defStatKey = moveData.category === "physical" ? "def" : "spd";
   const screenActive = moveData.category === "physical" ? state.oppReflectTurns != null : state.oppLightScreenTurns != null;
-  return calcDamage(ctx.you, ctx.opp, moveName, {
+  const opts = {
     atkStage: state.youStages[atkStatKey], defStage: state.oppStages[defStatKey],
     attackerBurned: state.youStatus === "burn",
     attackerFlashFireActive: state.youFlashFireActive,
@@ -9830,7 +9830,22 @@ function moveTiebreakScore(ctx, state, moveName) {
     weather: effectiveWeather(state, ctx.you, ctx.opp),
     defenderForesighted: state.oppForesighted,
     attackerStatus: state.youStatus, defenderStatus: state.oppStatus,
-  });
+  };
+  // C2 (found by the full grid): a move whose power is an ENUMERATED draw
+  // (Magnitude, Present, Psywave) or a counter the action derives (Fury
+  // Cutter, Rollout, Triple Kick) cannot be priced without one. This is only a
+  // tie-break between equal P(win)s, so it takes the draws' expected damage
+  // (Present's heal arm counting 0) and the counter moves' first-hit power --
+  // deterministic, and nothing here reaches a P(win). Reachable once the
+  // player holds such a move, e.g. through Mimic.
+  const draws = VARIABLE_DAMAGE_DRAWS[moveData.effect];
+  if (draws) {
+    return draws.reduce((a, d) => a + (d.power === "heal" ? 0 : d.p * calcDamage(ctx.you, ctx.opp, moveName, { ...opts, variablePower: d.power })), 0);
+  }
+  if (COUNTER_POWER_EFFECTS.has(moveData.effect)) return calcDamage(ctx.you, ctx.opp, moveName, { ...opts, variablePower: moveData.power });
+  // Bide deals twice what it stored, and has stored nothing unless it is biding.
+  if (moveData.effect === "EFFECT_BIDE") return state.youLock?.kind === "bide" ? 2 * state.youLock.dmg : 0;
+  return calcDamage(ctx.you, ctx.opp, moveName, opts);
 }
 
 // C1 (amendment 13): `retain` = false is the HEADLESS mode. The search is the
