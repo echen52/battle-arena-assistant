@@ -4414,6 +4414,21 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
 // every action and at every turn end, and at the start: a UI percentage that
 // is not a whole HP (50% of an odd max HP) is rounded to the nearest one, as
 // the game would never hold anything else.
+// B6-1d (found while building B6-2's crit overkill check): the SUBTRACTION itself must be in
+// integer HP, not only the snap after it. An exactly lethal hit taken as a float
+// percentage left 3.5e-15% behind INSIDE the action, so every in-action "did it
+// faint?" test -- Destiny Bond, the secondary-effect gates, the contact
+// abilities, Rage -- saw a living target; the snap after the action then set
+// it to 0, too late. hpSub / hpAdd take the whole HP, apply the whole amount,
+// and write the canonical percentage back.
+function hpSub(pct, amt, maxHp) {
+  const hp = Math.round((pct * maxHp) / 100) - amt;
+  return hp <= 0 ? 0 : (hp * 100) / maxHp;
+}
+function hpAdd(pct, amt, maxHp) {
+  const hp = Math.min(maxHp, Math.round((pct * maxHp) / 100) + amt);
+  return (hp * 100) / maxHp;
+}
 function canonHpPct(pct, maxHp) {
   const hp = Math.round((pct * maxHp) / 100);
   return hp <= 0 ? 0 : (hp * 100) / maxHp;
@@ -4843,7 +4858,7 @@ function healHalfMaxHp(s, actor, ctx, moveData) {
     heal = Math.floor(selfMon.stats.hp / 2);
   }
   heal = Math.max(1, heal);
-  s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
+  s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
 }
 
 // Type-based status immunities. Confirmed stable Gen I+ mechanics — NOT
@@ -5053,7 +5068,7 @@ function tryEndOfTurnItem(s, side, mon) {
     // max — a flat number, NOT a fraction of max HP (:3336-3345).
     case "HOLD_EFFECT_RESTORE_HP": {
       if (s[consumedKey] || curHp > Math.floor(maxHp / 2)) return;
-      s[hpKey] = Math.min(100, s[hpKey] + (d.param / maxHp) * 100);
+      s[hpKey] = hpAdd(s[hpKey], d.param, maxHp);
       s[consumedKey] = true;
       s[side === "you" ? "youUsedItem" : "oppUsedItem"] = mon.item;
       s[side === "you" ? "youItemOverride" : "oppItemOverride"] = null;
@@ -5657,7 +5672,7 @@ const EFFECT_EXECUTORS = {
       s[foeCursedKey] = true;
       const selfHp = isYou ? "yourHpPct" : "oppHpPct";
       const cost = Math.max(1, Math.floor(selfMon.stats.hp / 2));
-      s[selfHp] = Math.max(0, s[selfHp] - (cost / selfMon.stats.hp) * 100);
+      s[selfHp] = hpSub(s[selfHp], cost, selfMon.stats.hp);
       return;
     }
     const stages = isYou ? s.youStages : s.oppStages;
@@ -5702,7 +5717,7 @@ const EFFECT_EXECUTORS = {
     const cost = Math.max(1, Math.floor(selfMon.stats.hp / 4));
     const currentHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
     if (currentHp <= cost) return "failed";
-    s[selfHpKey] = Math.max(0, s[selfHpKey] - (cost / selfMon.stats.hp) * 100);
+    s[selfHpKey] = hpSub(s[selfHpKey], cost, selfMon.stats.hp);
     s[selfSubKey] = cost;
     // B3 batch 5: and it frees the user from a wrap (:7826).
     s[isYou ? "youWrapped" : "oppWrapped"] = null;
@@ -6144,7 +6159,7 @@ const EFFECT_EXECUTORS = {
     s[key] = 0;
     if (s[hpKey] >= 100) return "failed";
     const heal = Math.max(1, Math.floor(mon.stats.hp / (1 << (3 - count))));
-    s[hpKey] = Math.min(100, s[hpKey] + (heal / mon.stats.hp) * 100);
+    s[hpKey] = hpAdd(s[hpKey], heal, mon.stats.hp);
   },
   EFFECT_MEMENTO: (s, actor, ctx) => {
     // Cmd_trymemento (:9265-9283): fails only when the target is ALREADY at
@@ -6258,8 +6273,8 @@ const EFFECT_EXECUTORS = {
     const selfHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
     const foeHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
     const shared = Math.floor((selfHp + foeHp) / 2);
-    s[selfHpKey] = Math.min(100, (Math.min(shared, selfMon.stats.hp) / selfMon.stats.hp) * 100);
-    s[foeHpKey] = Math.min(100, (Math.min(shared, foeMon.stats.hp) / foeMon.stats.hp) * 100);
+    s[selfHpKey] = (Math.min(shared, selfMon.stats.hp) * 100) / selfMon.stats.hp;
+    s[foeHpKey] = (Math.min(shared, foeMon.stats.hp) * 100) / foeMon.stats.hp;
   },
   // -- B2b batch 2 executors: the move-restriction family ----------------
   EFFECT_DISABLE: (s, actor, ctx, moveData, sleepDuration, attractGenderCompatible, disableTimer) => {
@@ -6381,7 +6396,7 @@ const EFFECT_EXECUTORS = {
     const currentHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
     if (stages.atk >= 6 || currentHp <= halfHp) return "failed";
     stages.atk = 6;
-    s[selfHpKey] = Math.max(0, s[selfHpKey] - (halfHp / selfMon.stats.hp) * 100);
+    s[selfHpKey] = hpSub(s[selfHpKey], halfHp, selfMon.stats.hp);
   },
   EFFECT_HAZE: (s) => {
     // Cmd_normalisebuffs (src/battle_script_commands.c): loops over EVERY
@@ -6825,7 +6840,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   if (selfHit) {
     s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE; // confusionSelfDmg (B3 batch 3)
     const dmg = calcConfusionDamage(selfMon);
-    s[selfHpKey] = Math.max(0, s[selfHpKey] - (dmg / selfMon.stats.hp) * 100);
+    s[selfHpKey] = hpSub(s[selfHpKey], dmg, selfMon.stats.hp);
     s[mindKey] += mindDelta(mindMove);
     return;
   }
@@ -7005,7 +7020,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // real KO — sets MOVE_RESULT_FOE_ENDURED, not MOVE_RESULT_ONE_HIT_KO,
       // so this does NOT count as a KO for Destiny Bond purposes below.
       const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
-      s[foeHpKey] = (Math.max(0, foeRawHp - 1) / foeMon.stats.hp) * 100;
+      s[foeHpKey] = (Math.max(0, foeRawHp - 1) * 100) / foeMon.stats.hp;
     } else {
       s[foeHpKey] = 0;
       if (s[foeDestinyBondKey] && s[selfHpKey] > 0) s[selfHpKey] = 0;
@@ -7031,7 +7046,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     const received = s[selfDamageTakenKey];
     if (hit && received && received.category === neededCategory) {
       const reflected = received.amount * 2;
-      s[foeHpKey] = Math.max(0, s[foeHpKey] - (reflected / foeMon.stats.hp) * 100);
+      s[foeHpKey] = hpSub(s[foeHpKey], reflected, foeMon.stats.hp);
       s[skillKey] += skillDelta("landed");
       s[foeDamageTakenKey] = { amount: reflected, category: neededCategory };
     } else {
@@ -7227,7 +7242,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       return;
     }
     const heal = Math.max(1, Math.floor(foeMon.stats.hp / 4));
-    s[foeHpKey] = Math.min(100, s[foeHpKey] + (heal / foeMon.stats.hp) * 100);
+    s[foeHpKey] = hpAdd(s[foeHpKey], heal, foeMon.stats.hp);
     s[skillKey] += skillDelta("landed");
     return;
   }
@@ -7245,7 +7260,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       const healAmount = Math.max(1, Math.floor(foeMon.stats.hp * interaction.healFraction));
       // No-op (not healing over cap) if already at full HP, per source.
       if (s[foeHpKey] < 100) {
-        s[foeHpKey] = Math.min(100, s[foeHpKey] + (healAmount / foeMon.stats.hp) * 100);
+        s[foeHpKey] = hpAdd(s[foeHpKey], healAmount, foeMon.stats.hp);
       }
       s[skillKey] += interaction.skillDelta; // still an ability-block for Skill purposes
       return;
@@ -7390,7 +7405,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       const wouldHave = calcDamage(selfMon, foeMon, moveName,
         battleDamageOptions(ctx, s, actor, moveData));
       const crash = Math.min(Math.max(1, Math.floor(wouldHave / 2)), Math.floor(foeMon.stats.hp / 2));
-      s[selfHpKey] = Math.max(0, s[selfHpKey] - (crash / selfMon.stats.hp) * 100);
+      s[selfHpKey] = hpSub(s[selfHpKey], crash, selfMon.stats.hp);
     }
     if (hit) {
       // Reflect/Light Screen: halves damage of the matching category, gated
@@ -7495,7 +7510,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
             const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
             if (hitDmg >= foeRawHp) hitDmg = Math.max(0, foeRawHp - 1);
           }
-          s[foeHpKey] = Math.max(0, s[foeHpKey] - (hitDmg / foeMon.stats.hp) * 100);
+          s[foeHpKey] = hpSub(s[foeHpKey], hitDmg, foeMon.stats.hp);
           recoilBasis = hitDmg;
           // FINDING (deliberately NOT fixed in change #10 — recoil is checkpointed):
           // recoilBasis is the RAW hitDmg, uncapped. Source's gHpDealt caps at the
@@ -7548,7 +7563,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // reachable as the no-legal-move fallback.
       if (recoilDivisor && (moveName === "Struggle" || selfMon.ability !== "Rock Head")) {
         const recoilDmg = Math.max(1, Math.floor(recoilBasis / recoilDivisor));
-        s[selfHpKey] = Math.max(0, s[selfHpKey] - (recoilDmg / selfMon.stats.hp) * 100);
+        s[selfHpKey] = hpSub(s[selfHpKey], recoilDmg, selfMon.stats.hp);
       }
 
       // B3 batch 1: the CERTAIN self-inflicted stat drops. Both are
@@ -7634,7 +7649,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         if (foeMon.ability === "Rough Skin") {
           // :2767-2781 -- no roll: 1/16 of the ATTACKER's max HP, min 1.
           const rs = Math.max(1, Math.floor(selfMon.stats.hp / 16));
-          s[selfHpKey] = Math.max(0, s[selfHpKey] - (rs / selfMon.stats.hp) * 100);
+          s[selfHpKey] = hpSub(s[selfHpKey], rs, selfMon.stats.hp);
         }
         if (contactProc === "attract") {
           s[isYou ? "youAttracted" : "oppAttracted"] = true;
@@ -7684,7 +7699,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // so a drain never targets a Liquid Ooze holder.
       if (DRAIN_EFFECTS.has(moveData.effect) && eff !== 0) {
         const heal = Math.max(1, Math.floor(drainBasis / 2));
-        s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
+        s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
       }
       // B7b: Shell Bell (src/battle_util.c:3787-3806). Heals the ATTACKER
       // floor(dmg / param) with param 8, min 1, but ONLY when the move had an
@@ -7694,7 +7709,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       if (selfItemData && selfItemData.holdEffect === "HOLD_EFFECT_SHELL_BELL"
           && eff !== 0 && shellBellBasis > 0 && s[selfHpKey] > 0 && s[selfHpKey] < 100) {
         const heal = Math.max(1, Math.floor(shellBellBasis / selfItemData.param));
-        s[selfHpKey] = Math.min(100, s[selfHpKey] + (heal / selfMon.stats.hp) * 100);
+        s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
       }
     }
     // B2b batch 2: Choice Band locks its holder into the first move it uses.
@@ -7883,11 +7898,11 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   if ((weather === "sandstorm" || weather === "hail")) {
     if (s.yourHpPct > 0 && !isWeatherChipImmune(weather, you, s.youCharging)) {
       const chip = Math.max(1, Math.floor(you.stats.hp / 16));
-      s.yourHpPct = Math.max(0, s.yourHpPct - (chip / you.stats.hp) * 100);
+      s.yourHpPct = hpSub(s.yourHpPct, chip, you.stats.hp);
     }
     if (s.oppHpPct > 0 && !isWeatherChipImmune(weather, opp, s.oppCharging)) {
       const chip = Math.max(1, Math.floor(opp.stats.hp / 16));
-      s.oppHpPct = Math.max(0, s.oppHpPct - (chip / opp.stats.hp) * 100);
+      s.oppHpPct = hpSub(s.oppHpPct, chip, opp.stats.hp);
     }
   }
 
@@ -7896,11 +7911,11 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // src/battle_util.c:1440-1462). No-op at full HP or 0 HP.
   if (s.youIngrained && s.yourHpPct > 0 && s.yourHpPct < 100) {
     const heal = Math.max(1, Math.floor(you.stats.hp / 16));
-    s.yourHpPct = Math.min(100, s.yourHpPct + (heal / you.stats.hp) * 100);
+    s.yourHpPct = hpAdd(s.yourHpPct, heal, you.stats.hp);
   }
   if (s.oppIngrained && s.oppHpPct > 0 && s.oppHpPct < 100) {
     const heal = Math.max(1, Math.floor(opp.stats.hp / 16));
-    s.oppHpPct = Math.min(100, s.oppHpPct + (heal / opp.stats.hp) * 100);
+    s.oppHpPct = hpAdd(s.oppHpPct, heal, opp.stats.hp);
   }
 
   // Rain Dish: 1/16 max HP in rain, comes right after Ingrain and before
@@ -7909,11 +7924,11 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   if (weather === "rain") {
     if (you.ability === "Rain Dish" && s.yourHpPct > 0 && s.yourHpPct < 100) {
       const heal = Math.max(1, Math.floor(you.stats.hp / 16));
-      s.yourHpPct = Math.min(100, s.yourHpPct + (heal / you.stats.hp) * 100);
+      s.yourHpPct = hpAdd(s.yourHpPct, heal, you.stats.hp);
     }
     if (opp.ability === "Rain Dish" && s.oppHpPct > 0 && s.oppHpPct < 100) {
       const heal = Math.max(1, Math.floor(opp.stats.hp / 16));
-      s.oppHpPct = Math.min(100, s.oppHpPct + (heal / opp.stats.hp) * 100);
+      s.oppHpPct = hpAdd(s.oppHpPct, heal, opp.stats.hp);
     }
   }
   // B8c: the rest of ENDTURN_ABILITIES (src/battle_util.c:2620-2655), at the
@@ -7934,11 +7949,11 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // Leftovers: 1/16 max HP, no-op at full HP, never overheals past max.
   if (s.yourHpPct > 0 && s.yourHpPct < 100 && you.item === "Leftovers") {
     const heal = Math.max(1, Math.floor(you.stats.hp / 16));
-    s.yourHpPct = Math.min(100, s.yourHpPct + (heal / you.stats.hp) * 100);
+    s.yourHpPct = hpAdd(s.yourHpPct, heal, you.stats.hp);
   }
   if (s.oppHpPct > 0 && s.oppHpPct < 100 && opp.item === "Leftovers") {
     const heal = Math.max(1, Math.floor(opp.stats.hp / 16));
-    s.oppHpPct = Math.min(100, s.oppHpPct + (heal / opp.stats.hp) * 100);
+    s.oppHpPct = hpAdd(s.oppHpPct, heal, opp.stats.hp);
   }
 
   // Status-curing berries (Lum/Cheri/Chesto/etc.) — same ITEMS1/ITEMS2
@@ -7968,18 +7983,18 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     const maxDrain = Math.max(1, Math.floor(you.stats.hp / 8));
     const currentHp = Math.round((s.yourHpPct / 100) * you.stats.hp);
     const drain = Math.min(maxDrain, currentHp);
-    s.yourHpPct = Math.max(0, s.yourHpPct - (drain / you.stats.hp) * 100);
+    s.yourHpPct = hpSub(s.yourHpPct, drain, you.stats.hp);
     if (opp.ability !== "Liquid Ooze") {
-      s.oppHpPct = Math.min(100, s.oppHpPct + (drain / opp.stats.hp) * 100);
+      s.oppHpPct = hpAdd(s.oppHpPct, drain, opp.stats.hp);
     }
   }
   if (s.oppSeeded && s.oppHpPct > 0 && s.yourHpPct > 0) {
     const maxDrain = Math.max(1, Math.floor(opp.stats.hp / 8));
     const currentHp = Math.round((s.oppHpPct / 100) * opp.stats.hp);
     const drain = Math.min(maxDrain, currentHp);
-    s.oppHpPct = Math.max(0, s.oppHpPct - (drain / opp.stats.hp) * 100);
+    s.oppHpPct = hpSub(s.oppHpPct, drain, opp.stats.hp);
     if (you.ability !== "Liquid Ooze") {
-      s.yourHpPct = Math.min(100, s.yourHpPct + (drain / you.stats.hp) * 100);
+      s.yourHpPct = hpAdd(s.yourHpPct, drain, you.stats.hp);
     }
   }
 
@@ -7997,14 +8012,14 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     const dmg = Math.max(1, Math.floor(mon.stats.hp / 16));
     const next = Math.min(15, (s[counterKey] ?? 0) + 1);
     s[counterKey] = next;
-    s[hpKey] = Math.max(0, s[hpKey] - ((dmg * next) / mon.stats.hp) * 100);
+    s[hpKey] = hpSub(s[hpKey], (dmg * next), mon.stats.hp);
   };
   if (s.yourHpPct > 0 && (s.youStatus === "burn" || s.youStatus === "poison")) {
     if (s.youStatus === "poison" && s.youToxicCounter != null) {
       toxicTick("yourHpPct", "youToxicCounter", you);
     } else {
       const dmg = Math.max(1, Math.floor(you.stats.hp / 8));
-      s.yourHpPct = Math.max(0, s.yourHpPct - (dmg / you.stats.hp) * 100);
+      s.yourHpPct = hpSub(s.yourHpPct, dmg, you.stats.hp);
     }
   }
   if (s.oppHpPct > 0 && (s.oppStatus === "burn" || s.oppStatus === "poison")) {
@@ -8012,7 +8027,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
       toxicTick("oppHpPct", "oppToxicCounter", opp);
     } else {
       const dmg = Math.max(1, Math.floor(opp.stats.hp / 8));
-      s.oppHpPct = Math.max(0, s.oppHpPct - (dmg / opp.stats.hp) * 100);
+      s.oppHpPct = hpSub(s.oppHpPct, dmg, opp.stats.hp);
     }
   }
 
@@ -8021,11 +8036,11 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // per-battler chain (:1450), which is where this block already is.
   if (s.yourHpPct > 0 && s.youCursed) {
     const d = Math.max(1, Math.floor(you.stats.hp / 4));
-    s.yourHpPct = Math.max(0, s.yourHpPct - (d / you.stats.hp) * 100);
+    s.yourHpPct = hpSub(s.yourHpPct, d, you.stats.hp);
   }
   if (s.oppHpPct > 0 && s.oppCursed) {
     const d = Math.max(1, Math.floor(opp.stats.hp / 4));
-    s.oppHpPct = Math.max(0, s.oppHpPct - (d / opp.stats.hp) * 100);
+    s.oppHpPct = hpSub(s.oppHpPct, d, opp.stats.hp);
   }
 
   // B3 batch 5: ENDTURN_WRAP (src/battle_util.c:1592-1624), right after CURSE.
@@ -8038,7 +8053,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     if (n > 0) {
       s.youWrapped = { ...s.youWrapped, n };
       const d = Math.max(1, Math.floor(you.stats.hp / 16));
-      s.yourHpPct = Math.max(0, s.yourHpPct - (d / you.stats.hp) * 100);
+      s.yourHpPct = hpSub(s.yourHpPct, d, you.stats.hp);
     } else {
       s.youWrapped = null;
     }
@@ -8048,7 +8063,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     if (n > 0) {
       s.oppWrapped = { ...s.oppWrapped, n };
       const d = Math.max(1, Math.floor(opp.stats.hp / 16));
-      s.oppHpPct = Math.max(0, s.oppHpPct - (d / opp.stats.hp) * 100);
+      s.oppHpPct = hpSub(s.oppHpPct, d, opp.stats.hp);
     } else {
       s.oppWrapped = null;
     }
@@ -8087,7 +8102,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     if (s[statusKey] !== "sleep") { s[flag] = false; continue; }
     if (s[hpKey] <= 0) continue;
     const d = Math.max(1, Math.floor(mon.stats.hp / 4));
-    s[hpKey] = Math.max(0, s[hpKey] - (d / mon.stats.hp) * 100);
+    s[hpKey] = hpSub(s[hpKey], d, mon.stats.hp);
   }
 
   // B3 batch 4d: ENDTURN_UPROAR (src/battle_util.c:1625-1672), just before
@@ -8135,7 +8150,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     s[k] = null;
     if (s[hpKey] > 0) {
       const heal = Math.max(1, Math.floor(mon.stats.hp / 2));
-      s[hpKey] = Math.min(100, s[hpKey] + (heal / mon.stats.hp) * 100);
+      s[hpKey] = hpAdd(s[hpKey], heal, mon.stats.hp);
     }
   }
 
@@ -9521,7 +9536,7 @@ function futureSightReleaseSide(ctx, br, side) {
         if (t[subKey] <= 0) t[subKey] = null;
       } else {
         const hit = banded ? Math.max(0, hpNow - 1) : dmg;
-        t[hpKey] = Math.max(0, t[hpKey] - (hit / target.stats.hp) * 100);
+        t[hpKey] = hpSub(t[hpKey], hit, target.stats.hp);
         // MOVEEND_RAGE (src/battle_script_commands.c:4240-4255) runs for it.
         if (t[side === "you" ? "youRaging" : "oppRaging"] && t[hpKey] > 0 && tStages.atk < 6) {
           bumpStage(side === "you" ? t.youStages : t.oppStages, "atk", 1);

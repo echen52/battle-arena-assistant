@@ -81,5 +81,21 @@ console.log("-- PART 3: a start percentage snaps to the nearest whole HP --");
 }
 
 console.log();
+console.log("-- PART 4: an exactly lethal hit counts as a faint INSIDE the action --");
+{
+  // B6-1d: the subtraction itself is in whole HP. The float version left
+  // 7.1e-15% inside the action, so Destiny Bond's "did the target faint?"
+  // check missed, and the snap afterwards zeroed it too late. A faster Tauros
+  // on 50 HP uses Destiny Bond; the Jolteon's Seismic Toss does exactly 50.
+  const tau = buildMon({ species: "Tauros", level: 50, nature: "Jolly", evs: { spe: 252 }, ability: "Intimidate", item: null, moves: ["Destiny Bond"], friendship: 255 });
+  const jolt = buildMon({ species: "Jolteon", level: 50, nature: "Brave", evs: {}, ability: "Volt Absorb", item: null, moves: ["Seismic Toss"], friendship: 255 });
+  ok(tau.stats.hp === 150, `(probe check) Tauros max HP 150 (${tau.stats.hp})`);
+  const st = buildStartState({ you: jolt, opp: tau, overrides: { oppHpPct: (50 * 100) / 150 } });
+  const brs = resolveTurn({ you: jolt, opp: tau }, st, "Seismic Toss", "Destiny Bond").filter((b) => /Seismic Toss \(hits\)/.test(b.label));
+  ok(brs.length > 0 && brs.every((b) => /Opp uses Destiny Bond; You uses Seismic Toss/.test(b.label)), "(probe check) Destiny Bond first, then the exact Seismic Toss");
+  ok(brs.every((b) => b.state.oppHpPct === 0 && b.state.yourHpPct === 0), "the Tauros faints INSIDE the action, so Destiny Bond takes the Jolteon too");
+}
+
+console.log();
 console.log(failures === 0 ? "ALL PASS -- B6-1a integer HP characterization green" : `${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
