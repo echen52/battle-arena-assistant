@@ -4494,7 +4494,35 @@ const SECONDARY_SPEC = {
   EFFECT_POISON_FANG: { status: "toxic" },
   EFFECT_TRI_ATTACK: { tri: true },
   EFFECT_ATTACK_UP_HIT: { self: { atk: 1 } },
+  // B4b: the stat changes (data/battle_scripts_1.s:1041-1061, :1765, :1773).
+  // `foeStat` is MOVE_EFFECT_*_MINUS_1 on the target; `self` carries
+  // MOVE_EFFECT_AFFECTS_USER.
+  EFFECT_SPECIAL_DEFENSE_DOWN_HIT: { foeStat: "spd" },
+  EFFECT_SPEED_DOWN_HIT: { foeStat: "spe" },
+  EFFECT_DEFENSE_DOWN_HIT: { foeStat: "def" },
+  EFFECT_ATTACK_DOWN_HIT: { foeStat: "atk" },
+  EFFECT_ACCURACY_DOWN_HIT: { foeStat: "accuracy" },
+  EFFECT_SPECIAL_ATTACK_DOWN_HIT: { foeStat: "spa" },
+  EFFECT_DEFENSE_UP_HIT: { self: { def: 1 } },
+  // MOVE_EFFECT_ALL_STATS_UP -> BattleScript_AllStatsUp (:3452-3485): skipped
+  // outright when all five sit at +6, otherwise each of the five is raised in
+  // turn, a stat already at +6 simply not moving. Never accuracy or evasion.
+  EFFECT_ALL_STATS_UP_HIT: { self: { atk: 1, def: 1, spe: 1, spa: 1, spd: 1 } },
 };
+// B4b: a SECONDARY stat drop goes through ChangeStatBuffs (:6937-7075) with
+// flags = 0 -- never MOVE_EFFECT_CERTAIN (so Mist and Clear Body block even a
+// 100% drop) and never STAT_CHANGE_ALLOW_PTR (so a block prints nothing and
+// costs no Skill). In source order: Mist (:6962), Clear Body / White Smoke
+// (:6991), Keen Eye on accuracy (:7009), Hyper Cutter on Attack (:7021), Shield
+// Dust (:7033). A stat already at -6 "changes" to -6: nothing to observe.
+function secondaryStatDropBlocked(state, side, mon, stat) {
+  if (state[side === "you" ? "youMistTurns" : "oppMistTurns"] != null) return true;
+  const ab = mon.ability;
+  if (ab === "Clear Body" || ab === "White Smoke" || ab === "Shield Dust") return true;
+  if (ab === "Keen Eye" && stat === "accuracy") return true;
+  if (ab === "Hyper Cutter" && stat === "atk") return true;
+  return false;
+}
 const BOUNCE_SPEC = { status: "paralysis" };
 function secondarySpecFor(moveName, moveData) {
   if (moveName === "Bounce") return BOUNCE_SPEC;
@@ -4553,6 +4581,10 @@ function secondaryOutcomes(ctx, state, actor, moveName, moveData) {
   if (foe.ability === "Shield Dust") return null;
   if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return null;
   const foeSide = isYou ? "opp" : "you";
+  if (spec.foeStat) {
+    if (secondaryStatDropBlocked(state, foeSide, foe, spec.foeStat)) return null;
+    return (isYou ? state.oppStages : state.youStages)[spec.foeStat] > -6 ? [{ q, trig: true }] : null;
+  }
   if (spec.tri) {
     // MOVE_EFFECT_TRI_ATTACK (:2605-2615): nothing on a statused target, else
     // a uniform draw re-entering SetMoveEffect with every normal check.
@@ -4590,6 +4622,12 @@ function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitut
   if (foeHadSubstitute) return;                       // :2266 -- still set, even if this hit broke it
   if ((isYou ? s.oppHpPct : s.yourHpPct) <= 0) return; // :2261
   const foeSide = isYou ? "opp" : "you";
+  if (spec.foeStat) {
+    // Safeguard does not reach here: the stat bytes are above 7.
+    if (secondaryStatDropBlocked(s, foeSide, foe, spec.foeStat)) return;
+    bumpStage(isYou ? s.oppStages : s.youStages, spec.foeStat, -1);
+    return;
+  }
   if (s[isYou ? "oppSafeguardTurns" : "youSafeguardTurns"] != null) return; // :2257, bytes <= 7
   const status = spec.tri ? trig : spec.status;
   const base = status === "toxic" ? "poison" : status;
@@ -6357,18 +6395,9 @@ const INLINE_HANDLED_EFFECTS = new Set([
 // EFFECT_EXECUTORS (their executor simply never dispatches off-SECONDARY_EFFECT_
 // CHANCE), so they are intentionally not re-listed here.
 const CHANCE_SECONDARY_EFFECTS = new Set([
-  "EFFECT_SPECIAL_DEFENSE_DOWN_HIT", // Psychic/Crunch/Shadow Ball SpD-down %
   "EFFECT_FLINCH_HIT",               // Rock Slide/Headbutt/Bite flinch %
-  "EFFECT_SPEED_DOWN_HIT",           // Bubblebeam/Icy Wind speed-down %
-  "EFFECT_DEFENSE_DOWN_HIT",         // Iron Tail/Crush Claw def-down %
-  "EFFECT_ALL_STATS_UP_HIT",         // AncientPower/Silver Wind all-up %
-  "EFFECT_DEFENSE_UP_HIT",           // Steel Wing def-up %
   "EFFECT_CONFUSE_HIT",              // Confusion/Psybeam/Water Pulse confuse %
-  "EFFECT_ACCURACY_DOWN_HIT",        // Mud-Slap/Muddy Water accuracy-down %
   "EFFECT_FLINCH_MINIMIZE_HIT",      // Stomp/Extrasensory flinch % (+2x vs minimize)
-  "EFFECT_SPECIAL_ATTACK_DOWN_HIT",  // Mist Ball SpA-down %
-  // B2b batch 6.
-  "EFFECT_ATTACK_DOWN_HIT",          // Aurora Beam attack-down %
   // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
   // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
   "EFFECT_SNORE",

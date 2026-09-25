@@ -254,8 +254,8 @@ export const B2A = {
   "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch", winProb: 0.08000000000000002 }, // B8b: Espeon 3 has SYNCHRONIZE -- a Thunderbolt paralysis (the modelled 10%) now paralyses the Gengar lead back; was Thunderbolt 0.025, and the advice FLIPS; B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Shadow Ball (zeroing Ice Punch alone restores Shadow Ball 0)
   "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.7263982421875 }, // B4a (chance status secondaries) -- Ninetales' HEAT WAVE burns the lead 10% (zeroing it alone restores 0.74333125)
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
-  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9069523193525368 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt; B4a (chance status secondaries) -- the lead's ICE PUNCH now freezes 10% (zeroing Ice Punch alone restores 0.9043094452878824)
-  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Ice Punch", winProb: 0.05120000000000002 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.00625)
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9076023913187656 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt; B4a (chance status secondaries) -- the lead's ICE PUNCH now freezes 10% (zeroing Ice Punch alone restores 0.9043094452878824); B4b: the Gengar lead's PSYCHIC now drops SpD 10% (zeroing Psychic alone restores 0.9069523193525368)
+  "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Ice Punch", winProb: 0.05376000000000003 }, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.00625); B4b: SHADOW BALL and PSYCHIC jointly (the lead's two SpD drops, Dusclops' own Shadow Ball shares the flag) -- zeroing both restores 0.05120000000000002; Shadow Ball alone gives 0.05248
 };
 
 // -- MODIFIER_ANCHORS -- promoted from B7a's movers, per amendment 2 --------
@@ -322,14 +322,14 @@ export const MODIFIER_ANCHORS = {
     // of porting a mechanic that only ever costs its user.
     causedBy: "opponent ability: Pure Power (B7a), then Hi Jump Kick's crash (B3 batch 1)" },
   "Aerodactyl 2": { lead: "Snorlax", ability: "Rock Head",
-    move: "Body Slam", winProb: 0.51, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0)
+    move: "Body Slam", winProb: 0.5036181587219238, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% and the advice FLIPS from Shadow Ball (zeroing Body Slam alone restores Shadow Ball 0); B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.51)
     pre: { move: "Shadow Ball", winProb: 1 },
     // B7a moved this via Choice Band's 1.5x Attack, to 0.07823631286621092.
     // B2b batch 2 added Choice Band's MOVE LOCK and moved it again, to 0 --
     // locking this opponent into its turn-1 pick is, here, strictly good for it.
     causedBy: "item: Choice Band -- 1.5x Attack (B7a), then its move lock (B2b batch 2)" },
   "Ampharos 1": { lead: "Gengar", ability: null,
-    move: "Ice Punch", winProb: 0.12588574655303236, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.07934632632522814)
+    move: "Ice Punch", winProb: 0.12651531436934088, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.07934632632522814); B4b: the Gengar lead's PSYCHIC drops SpD 10% (zeroing it alone restores 0.12588574655303236)
     pre: { move: "Psychic", winProb: 0.49334131133415177 },
     causedBy: "item: Magnet" },
   "Regice 3": { lead: "Snorlax", ability: null,
@@ -344,7 +344,7 @@ export const MODIFIER_ANCHORS = {
     // its turn-1 pick costs THIS opponent its follow-up.
     causedBy: "item AND ability: Choice Band + Guts, then the Choice lock (B2b batch 2)" },
   "Scizor 4": { lead: "Starmie", ability: null,
-    move: "Surf", winProb: 0.6736855928174657,
+    move: "Surf", winProb: 0.6735178101572199, // B4b: Scizor's SILVER WIND raises all five 10% (zeroing it alone restores 0.6736855928174657)
     pre: { move: "Surf", winProb: 0.7852604166666668 },
     // B7a moved this via Swarm (causally verified). B7c then moved it again,
     // because Scizor 4 also holds a BrightPowder. Both movements named.
@@ -447,7 +447,7 @@ export const INTIMIDATE_ANCHORS = {
   "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0.09, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% -- the first non-zero odds this cell has had since Intimidate (zeroing Body Slam alone restores 0)
     pre: { move: "Body Slam", winProb: 1 },
     why: "an Intimidate OPPONENT dropping a physical lead's Attack" },
-  "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.9,
+  "Aerodactyl 1": { lead: "Salamence", move: "Rock Slide", winProb: 0.81, // B4b: Aerodactyl's ANCIENTPOWER raises all five 10% (zeroing it alone restores 0.9)
     pre: { move: "Rock Slide", winProb: 0 },
     why: "moves in the PLAYER's favour -- the drop is on the opponent" },
   "Granbull 1": { lead: "Metagross", move: "Earthquake", winProb: 1,

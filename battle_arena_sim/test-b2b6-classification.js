@@ -150,13 +150,15 @@ console.log("-- PART 4: the three that needed only a classification --");
     `Gust must still double against a target in the air (${hitGround.toFixed(1)}% grounded vs ${hitAir.toFixed(1)}% airborne)`);
   console.log(`   Gust: ${hitGround.toFixed(1)}% grounded, ${hitAir.toFixed(1)}% airborne -- the 2x was never missing`);
 
-  // Aurora Beam: an ordinary chance secondary, which this engine does not roll
-  // for any move outside SECONDARY_EFFECT_CHANCE. Stated, not hidden.
+  // Aurora Beam: an ordinary chance secondary. This batch recorded it as the
+  // documented B4 omission (never rolled); B4b closed it, so the assertion
+  // flipped from "never" to "exactly its 10%".
   const beamer = mk("Dewgong", ["Aurora Beam", "Body Slam", "Rest", "Surf"], { ability: "Thick Fat" });
   const ab = resolveTurn({ you, opp: beamer }, buildStartState({ you, opp: beamer }), "Body Slam", "Aurora Beam");
-  ok(ab.every((b) => b.state.youStages.atk === 0),
-    "Aurora Beam's Attack drop is a CHANCE secondary and is not rolled -- the documented B4 omission");
-  console.log("   Aurora Beam deals damage; its 10% Attack drop is the B4 class, unrolled and declared");
+  const pDrop = ab.filter((b) => b.state.youStages.atk === -1).reduce((x, b) => x + b.p, 0);
+  ok(Math.abs(pDrop - 0.1) < 1e-9,
+    `Aurora Beam's Attack drop is a CHANCE secondary rolled at its 10% since B4b (got ${pDrop.toFixed(4)})`);
+  console.log(`   Aurora Beam deals damage; its Attack drop lands ${(pDrop * 100).toFixed(1)}% (was the B4 omission)`);
 }
 
 console.log();
