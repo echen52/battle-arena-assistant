@@ -9691,10 +9691,33 @@ function moveTiebreakScore(ctx, state, moveName) {
 // live set is one root-to-leaf path of transient resolveTurn arrays. Batch
 // tools use it; the site and team-workflow, which read the tree, keep the
 // default.
-function search(ctx, state, turnsRemaining, retain = true) {
+// B6 step 1 (amendment 14): the TRANSPOSITION TABLE. search(ctx, state, turns)
+// is a pure function of the state -- the AI's choice, the player's options and
+// every roll read nothing else -- so a state reached by two different paths has
+// one value, computed once. `tt` is a Map scoped to one analyzeMatchup call,
+// used only headless (a retained tree needs one node per path). Terminal nodes
+// are not stored: evaluateTerminal is cheaper than a key.
+//
+// The key is the state with its turn-scoped fields dropped: the damage-taken
+// records, Endure, Protect, Destiny Bond and Magic Coat's bounce are reset by
+// resolveTurnWithOrder before anything reads them (freshTurnDamageTracking),
+// and nothing between here and there -- move selection, the AI, turn order --
+// reads them. Two states differing only in those are the same position.
+function ttKey(turnsRemaining, state) {
+  const { youDamageTaken, oppDamageTaken, youEndureActive, oppEndureActive, youProtected, oppProtected,
+    youDestinyBondActive, oppDestinyBondActive, youBouncing, oppBouncing, ...rest } = state;
+  return turnsRemaining + "|" + JSON.stringify(rest);
+}
+function search(ctx, state, turnsRemaining, retain = true, tt = null) {
   if (turnsRemaining === 0 || state.yourHpPct <= 0 || state.oppHpPct <= 0) {
     const winProb = evaluateTerminal(state);
     return retain ? { winProb, move: null, isTerminal: true, state } : { winProb, move: null, isTerminal: true };
+  }
+  let key = null;
+  if (tt) {
+    key = ttKey(turnsRemaining, state);
+    const hit = tt.get(key);
+    if (hit) return hit;
   }
 
   // A charging mon (mid-Dive/Fly/Dig) has no real choice — the game forces
@@ -9722,7 +9745,7 @@ function search(ctx, state, turnsRemaining, retain = true) {
       const raw = resolveTurn(ctx, state, yourMove, oppMove);
       for (const b of raw) {
         const weight = b.p * oppProb;
-        const sub = search(ctx, b.state, turnsRemaining - 1, retain);
+        const sub = search(ctx, b.state, turnsRemaining - 1, retain, tt);
         expected += weight * sub.winProb;
         if (retain) branches.push({ prob: weight, label: b.label, state: b.state, subtree: sub });
       }
@@ -9750,7 +9773,11 @@ function search(ctx, state, turnsRemaining, retain = true) {
     return moveTiebreakScore(ctx, state, b.move) - moveTiebreakScore(ctx, state, a.move);
   });
 
-  if (!retain) return { move: options[0].move, winProb: options[0].winProb, isTerminal: false, allOptions: options };
+  if (!retain) {
+    const res = { move: options[0].move, winProb: options[0].winProb, isTerminal: false, allOptions: options };
+    if (tt) tt.set(key, res);
+    return res;
+  }
   return {
     move: options[0].move,
     winProb: options[0].winProb,
@@ -9806,7 +9833,7 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
   const opp = buildMon({ ...oppConfig, friendship: 255 });
   const ctx = { you, opp };
   const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
-  const result = search(ctx, state, 3, tree);
+  const result = search(ctx, state, 3, tree, tree ? null : new Map());
   return { you, opp, result };
 }
 
