@@ -64,7 +64,10 @@ console.log("-- PART 1: each blocker refuses the confusion and scores -2 --");
     const before = s.youConfused;
     const outs = resolveTurn({ you, opp }, s, "Body Slam", "Confuse Ray");
     for (const o of outs) {
-      ok(o.state.youConfused === before,
+      // B4d-pre: an already-confused mon takes its OWN confusion check this
+      // turn, so its counter moves (true -> 2); "unchanged" means still
+      // confused, not refreshed. The -2 below is the refused Confuse Ray.
+      ok(label === "already confused" ? !!o.state.youConfused : o.state.youConfused === before,
          `${label}: confusion state must not change (was ${before}, got ${o.state.youConfused})`);
       ok(o.state.skillOpp === -2, `${label}: opponent Skill must be -2, got ${o.state.skillOpp}`);
     }
@@ -77,7 +80,7 @@ console.log("-- PART 2: with no blocker it still lands and still scores +1 --");
 {
   const you = buildMon(LICKITUNG_NO_OT), opp = confuser();
   const outs = resolveTurn({ you, opp }, buildStartState({ you, opp }), "Body Slam", "Confuse Ray");
-  ok(outs.every((o) => o.state.youConfused === true), "an unblocked Confuse Ray must confuse");
+  ok(outs.every((o) => !!o.state.youConfused), "an unblocked Confuse Ray must confuse"); // B4d-pre: truthy -- a check the same turn moves the counter
   ok(outs.every((o) => o.state.skillOpp === 1), "an unblocked Confuse Ray banks +1 Skill");
   console.log(`   unblocked: confused=true, opponent Skill +1 across all ${outs.length} branches`);
 }

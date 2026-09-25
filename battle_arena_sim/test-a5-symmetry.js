@@ -74,12 +74,12 @@ console.log("-- PART 3: player Confuse Ray / Swagger / Attract land on the oppon
   const s0 = buildStartState({ you, opp });
 
   const conf = resolveTurn({ you, opp }, s0, "Confuse Ray", "Body Slam")[0].state;
-  ok(conf.oppConfused === true, "player Confuse Ray must set oppConfused");
+  ok(!!conf.oppConfused, "player Confuse Ray must set oppConfused"); // B4d-pre: truthy -- its own check this turn moves the counter
   ok(conf.youConfused === false, "player Confuse Ray must NOT confuse the player");
 
   const swag = resolveTurn({ you, opp }, s0, "Swagger", "Body Slam").find((o) => o.state.oppStages.atk === 2);
   ok(swag !== undefined, "player Swagger must raise the opponent's Atk by 2");
-  ok(swag && swag.state.oppConfused === true, "player Swagger must also confuse the opponent");
+  ok(swag && !!swag.state.oppConfused, "player Swagger must also confuse the opponent");
 
   // Attract needs a GENDERED user: Mew is genderless (GENDER_RATIO "genderless"),
   // so gender compatibility is 0 and every branch correctly fails. That is the
@@ -128,7 +128,8 @@ console.log("-- PART 5: the blockers work in the NEW direction too --");
     const s = buildStartState({ you, opp, overrides: ov });
     const before = s.oppConfused;
     const outs = resolveTurn({ you, opp }, s, "Confuse Ray", opp.moves[0]);
-    ok(outs.every((o) => o.state.oppConfused === before), `${label}: opponent confusion must not change`);
+    // B4d-pre: an already-confused opponent takes its own check this turn.
+    ok(outs.every((o) => (label === "already confused" ? !!o.state.oppConfused : o.state.oppConfused === before)), `${label}: opponent confusion must not change`);
     ok(outs.every((o) => o.state.skillYou === -2), `${label}: the PLAYER's Skill must be -2, got ${outs[0].state.skillYou}`);
     console.log(`   ${label.padEnd(17)} refused, player Skill -2`);
   }

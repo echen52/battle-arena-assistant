@@ -70,7 +70,7 @@ export const ANCHOR = {
   lead: "Metagross",
   set: "Umbreon 4",
   move: "Meteor Mash",
-  winProb: 0.9067329423180334,
+  winProb: 0.9151343785835914,
 };
 
 // Never deleted. Each row is (value, class, why).
@@ -87,6 +87,8 @@ export const ANCHOR_HISTORY = [
   ["0.9067329423180334", "A8/A10", "unchanged"],
   ["0.9067329423180334", "B1/B2a/B2b-1", "unchanged — Umbreon 4 carries no item or ability the pool changes"],
   ["0.9067329423180334", "B7a", "unchanged — Metagross holds Cheri Berry and Umbreon 4 Leftovers; neither is a damage modifier, and neither mon has a modifier ability"],
+  ["0.9067329423180334", "B7b..B4c", "unchanged — no item effect, ability or chance secondary of either mon reaches it"],
+  ["0.9151343785835914", "B4d-pre", "MOVED — Umbreon 4's Confuse Ray now WEARS OFF: confusion lasts 2-5 turns (CANCELER_CONFUSED); zeroing only the snap-out chances restores 0.9067329423180334"],
 ];
 
 // B7a moved three OTHER recorded values, each with a named mechanism. Kept here
@@ -171,15 +173,15 @@ export const CURRENT = {
   "Marowak 2": { move: "Explosion", winProb: 0.5 }, // B7a: Thick Club doubles its Attack
   "Suicune 1": { move: "Meteor Mash", winProb: 0.5159383055241743 },
   // A4/A6's confusion-sensitive set
-  "Gengar 1": { move: "Shadow Ball", winProb: 0.64 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5800000000000001 (Hypnosis)
-  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9783547376864591 },
-  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8143718750000001 },
-  "Lapras 1": { move: "Meteor Mash", winProb: 0.6130758843315973 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.589053488498264 (Sing)
-  "Cradily 1": { move: "Meteor Mash", winProb: 0.9831834216220691 },
-  "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
-  "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
-  "Articuno 5": { move: "Meteor Mash", winProb: 0.9665761405443762 }, // B7c: holds Focus Band (a 1-ULP move); B4a (chance status secondaries) -- its BLIZZARD now freezes 10% (zeroing Blizzard alone restores 0.9694799148701365)
-  "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.5478714843750001 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS
+  "Gengar 1": { move: "Shadow Ball", winProb: 0.649375 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5800000000000001 (Hypnosis); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.64)
+  "Greta Gold Umbreon": { move: "Earthquake", winProb: 0.9837660532648443 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9783547376864591)
+  "Greta Silver Umbreon": { move: "Meteor Mash", winProb: 0.8479656250000001 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.8143718750000001)
+  "Lapras 1": { move: "Meteor Mash", winProb: 0.6209323947482639 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.589053488498264 (Sing); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.6130758843315973)
+  "Cradily 1": { move: "Meteor Mash", winProb: 0.9856756127472637 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9831834216220691)
+  "Starmie 6": { move: "Shadow Ball", winProb: 0.8593750000000001 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7821180555555556)
+  "Tauros 1": { move: "Meteor Mash", winProb: 0.5597958984375 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5167382812500002)
+  "Articuno 5": { move: "Meteor Mash", winProb: 0.9727478477299578 }, // B7c: holds Focus Band (a 1-ULP move); B4a (chance status secondaries) -- its BLIZZARD now freezes 10% (zeroing Blizzard alone restores 0.9694799148701365); B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.9665761405443762)
+  "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.6746125561523437 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS; B4d-pre: confusion now wears off after 2-5 turns -- this set carries Swagger (zeroing only the snap-out chances restores 0.5478714843750001)
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
   "Heracross 2": { move: "Explosion", winProb: 0.5 },
   "Venusaur 3": { move: "Meteor Mash", winProb: 0.6831619873046876 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5964432373046875 (Sleep Powder)
@@ -194,8 +196,8 @@ export const CURRENT_CELLS = {
   "Snorlax|Articuno 2": { move: "Body Slam", winProb: 0.9824447945293759 }, // B7a: the lead's own Thick Fat; B4a (chance status secondaries) -- Articuno's BLIZZARD freezes the lead 10% (zeroing it alone restores 0.985365207225065)
   "Starmie|Brandon Silver Registeel": { move: "Thunderbolt", winProb: 0.8888926973180181 },
   "Snorlax|Exeggutor 3": { move: "Body Slam", winProb: 0.8934663712683204 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.8540164087233308)
-  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9640729692247177 },
-  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7912195234978198 },
+  "Salamence|Umbreon 4": { move: "Earthquake", winProb: 0.9696678585476344 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.9640729692247177)
+  "Starmie|Umbreon 4": { move: "Ice Beam", winProb: 0.7976496123258271 }, // B4d-pre: confusion now wears off after 2-5 turns -- this set carries Confuse Ray (zeroing only the snap-out chances restores 0.7912195234978198)
   "Snorlax|Blissey 1": { move: "Earthquake", winProb: 0.9351897271082135 }, // B7c: Blissey 1 holds BrightPowder; B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.9260616024472976 (Sing); then B3-4d: Rest at full HP scores +1, not -2 (BattleScript_AlreadyAtFullHp sets no result flag) -- the Snorlax lead carries Rest; was 0.9351849809890322; B4a (chance status secondaries) -- Body Slam's 30% paralysis now rolls and the advice FLIPS to Earthquake by 1 ULP (zeroing Body Slam alone restores Body Slam 0.9351897271082136)
 };
 

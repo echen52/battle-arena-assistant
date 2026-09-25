@@ -8245,6 +8245,23 @@ function sleepTalkCandidates(ctx, state, actor) {
 // object, so the caller can skip the merge entirely. Measured: without this the
 // hoist cost 12.4% over the Metagross column, spread evenly over sets carrying
 // none of these mechanics, i.e. pure per-node allocation.
+// B4d-pre: CONFUSION'S DURATION. Every source draws it the same way --
+// STATUS2_CONFUSION_TURN((Random() % 4) + 2) for MOVE_EFFECT_CONFUSION
+// (:2539), `(Random() & 3) + 2` for a rampage's end -- uniform over {2,3,4,5},
+// and CANCELER_CONFUSED decrements it before testing. So the mon snaps out at
+// its N-th check. Drawn LAZILY, which is exact because the counter is observed
+// nowhere but here: at check j, given it is still confused,
+// P(snap) = P(N = j) / P(N >= j). The state holds the next check's j: `true`
+// for a fresh confusion (j = 1, so every infliction site and override is
+// unchanged), then 2..5.
+const CONFUSION_SNAP = [0, 0, 1 / 4, 1 / 3, 1 / 2, 1];
+function confusionCheck(v) { return v === true ? 1 : v; }
+function applyConfusionTick(s, side, tick) {
+  const key = side === "you" ? "youConfused" : "oppConfused";
+  if (!s[key]) return;
+  s[key] = tick === "snap" ? false : confusionCheck(s[key]) + 1;
+}
+
 const PASS_GATE = Object.freeze([Object.freeze({ p: 1, pass: true, thawed: false, sleepRemaining: null })]);
 function cancelerGates(ctx, state, actor, moveName, moveData) {
   {
@@ -8321,7 +8338,8 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     }
     // Carried onto every outcome below: a thaw or a sleep-counter tick has
     // already happened by the time any later canceler fires.
-    const carry = { thawed: stb.thawed, sleepRemaining: stb.sleepRemaining ?? null };
+    const carryBase = { thawed: stb.thawed, sleepRemaining: stb.sleepRemaining ?? null };
+    const carry = carryBase;
 
     // RECHARGE -> FLINCH -> DISABLED -> TAUNTED -> IMPRISONED. Each is decided
     // by state alone, and each ends the chain.
@@ -8353,7 +8371,19 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
 
     let actionBranches;
     if (confusable) {
-      actionBranches = [{ p: 0.5, kind: "confuseSelfHit" }, { p: 0.5, kind: "normal" }];
+      // B4d-pre: CANCELER_CONFUSED (src/battle_util.c:2156-2187) DECREMENTS the
+      // 2-5 counter first. A counter that reaches 0 SNAPS OUT and the mon acts;
+      // otherwise the 50% self-hit. Either way effect = 1, so paralysis and
+      // love are not rolled. The duration is drawn lazily here -- see
+      // CONFUSION_SNAP -- and `confTick` carries the counter update to the
+      // action (resolveTurnWithOrder applies it).
+      const pSnap = CONFUSION_SNAP[confusionCheck(confusable)];
+      actionBranches = [];
+      if (pSnap > 0) actionBranches.push({ p: pSnap, kind: "normal", confTick: "snap" });
+      if (pSnap < 1) {
+        actionBranches.push({ p: (1 - pSnap) / 2, kind: "confuseSelfHit", confTick: "tick" });
+        actionBranches.push({ p: (1 - pSnap) / 2, kind: "normal", confTick: "tick" });
+      }
     } else {
       actionBranches = [{ p: 1, kind: "normal" }];
       if (paralyzed) {
@@ -8372,6 +8402,7 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
 
     for (const acb of actionBranches) {
       const p = stb.p * acb.p;
+      const carry = acb.confTick ? { ...carryBase, confTick: acb.confTick } : carryBase;
       if (acb.kind === "confuseSelfHit") {
         gates.push({ p, outcome: { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry } });
       } else if (acb.kind === "paraBlocked") {
@@ -8462,7 +8493,7 @@ function enumerateActionOutcomes(ctx, state, actor, moveName, moveData, targetCh
   for (const g of gates) {
     if (g.outcome) { out.push({ ...g.outcome, p: g.p }); continue; }
     for (const o of rampageSplit(state, actor, moveData, enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging, isLastToAct, false))) {
-      out.push({ ...o, p: o.p * g.p, thawed: g.thawed || o.thawed, sleepRemaining: o.sleepRemaining ?? g.sleepRemaining });
+      out.push({ ...o, p: o.p * g.p, thawed: g.thawed || o.thawed, sleepRemaining: o.sleepRemaining ?? g.sleepRemaining, confTick: g.confTick });
     }
   }
   return out;
@@ -9243,6 +9274,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
+    if (fo.confTick) applyConfusionTick(s, order[0], fo.confTick);
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
     applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
@@ -9277,6 +9309,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
 
     for (const so of secondOutcomes) {
       let s2 = cloneState(s);
+      if (so.confTick) applyConfusionTick(s2, order[1], so.confTick);
       // A bounced move is applied with the BOUNCER as the actor -- which in this
       // engine is exactly "it landed on the original user", since every executor
       // targets the actor's foe. The judging then has to be put back where it
