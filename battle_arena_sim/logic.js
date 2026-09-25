@@ -6385,7 +6385,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
 // modelled: see the throw in enumerateActionOutcomes.
 const FOCUS_BAND_SPACE = 100;
 
-function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null) {
+function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null) {
   const { you, opp } = ctx;
   // B2b batch 3: a move-calling move (Sleep Talk today) resolves as the move it
   // CALLED. Everything below therefore works on `moveName` after substitution --
@@ -7309,6 +7309,34 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
       // doubling against a paralysed target is handled in the damage options.
       if (moveData.effect === "EFFECT_SMELLINGSALT" && dmg > 0 && s[foeStatusKey] === "paralysis") {
         s[foeStatusKey] = null;
+      }
+
+      // B8: THE CONTACT ABILITIES, applied to the ATTACKER after the hit. The
+      // conditions match contactAbilityBranches; the attacker must still be up
+      // (recoil has already been taken by now).
+      if (moveData.power > 0 && moveFlags(moveName).makesContact && eff !== 0 && dmg > 0
+          && !foeHadSubstitute && s[selfHpKey] > 0 && (hitCount ?? 1) === 1) {
+        if (foeMon.ability === "Rough Skin") {
+          // :2767-2781 -- no roll: 1/16 of the ATTACKER's max HP, min 1.
+          const rs = Math.max(1, Math.floor(selfMon.stats.hp / 16));
+          s[selfHpKey] = Math.max(0, s[selfHpKey] - (rs / selfMon.stats.hp) * 100);
+        }
+        if (contactProc === "attract") {
+          s[isYou ? "youAttracted" : "oppAttracted"] = true;
+        } else if (contactProc) {
+          const side = isYou ? "you" : "opp";
+          if (canTakeContactStatus(s, side, contactProc, selfMon)) {
+            s[selfStatusKey] = contactProc;
+            if (contactProc === "sleep") {
+              s[selfSleepTurnsKey] = contactSleep;
+              cancelMultiTurnMoves(s, side); // SetMoveEffect's sleep case (:2296)
+            }
+          }
+        }
+      } else if (moveData.power > 0 && moveFlags(moveName).makesContact && foeMon.ability === "Rough Skin"
+                 && (hitCount ?? 1) > 1 && eff !== 0 && !foeHadSubstitute) {
+        throw new Error(`"${moveName}" is a multi-hit contact move into Rough Skin (${foeMon.species}): ` +
+          `ABILITYEFFECT_ON_DAMAGE runs after EVERY hit, which is not modelled.`);
       }
 
       // (2) B2b batch 11: RAGE'S ATTACK RAISE, at MOVEEND_RAGE
@@ -8516,7 +8544,81 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     }
   }
   return disableTimerBranches(ctx, state, actor, moveData,
-    focusBandBranches(ctx, state, actor, moveName, moveData, results));
+    contactAbilityBranches(ctx, state, actor, moveName, moveData,
+      focusBandBranches(ctx, state, actor, moveName, moveData, results)));
+}
+
+// ── B8: THE CONTACT ABILITIES (ABILITYEFFECT_ON_DAMAGE, src/battle_util.c:
+// 2749-2872). Every one needs a contact move that affected its holder and
+// damaged the holder ITSELF (TARGET_TURN_DAMAGED -- a Substitute absorbing it
+// does not count), a live attacker, and no confusion self-hit. The chances, read
+// from source rather than from the "30%" folklore in ability-enumeration.md:
+//   Static / Poison Point / Flame Body / Cute Charm   Random() % 3 == 0  -> 1/3
+//   Effect Spore   Random() % 10 == 0, then `Random() & 3` re-rolled until
+//                  non-zero and BURN remapped to PARALYSIS: sleep, poison and
+//                  paralysis at 1/30 each (and sleep's own 2-5 duration)
+//   Rough Skin     no roll -- applyMove handles it
+// The statuses go through SetMoveEffect with HITMARKER_STATUS_ABILITY_EFFECT
+// (Shield Dust and Safeguard are SKIPPED) and AFFECTS_USER (no Substitute
+// check); type and ability immunities still apply, so a proc that could not
+// land is not branched at all -- the same collapse rule as Focus Band.
+const CONTACT_STATUS_ABILITY = { "Static": "paralysis", "Poison Point": "poison", "Flame Body": "burn" };
+function canTakeContactStatus(state, side, status, mon) {
+  if (state[side === "you" ? "youStatus" : "oppStatus"] != null) return false;
+  if (STATUS_IMMUNITY_TYPES[status].some((t) => mon.types.includes(t))) return false;
+  if (STATUS_IMMUNITY_ABILITIES[status] && mon.ability === STATUS_IMMUNITY_ABILITIES[status]) return false;
+  if (status === "sleep") {
+    if (mon.ability === "Insomnia" || mon.ability === "Vital Spirit") return false;
+    if (uproarKeepsAwake(state, mon)) return false;
+  }
+  return true;
+}
+function contactAbilityBranches(ctx, state, actor, moveName, moveData, results) {
+  const isYou = actor === "you";
+  const holder = isYou ? ctx.opp : ctx.you;      // the TARGET holds the ability
+  const attacker = isYou ? ctx.you : ctx.opp;
+  const ab = holder.ability;
+  if (!(ab in CONTACT_STATUS_ABILITY) && ab !== "Effect Spore" && ab !== "Cute Charm") return results;
+  if (moveData.power === 0 || !moveFlags(moveName).makesContact) return results;
+  if ((isYou ? state.oppSubstituteHP : state.youSubstituteHP) != null) return results; // no TARGET_TURN_DAMAGED
+  if (typeEffectiveness(moveData.type, holder.types, isYou ? state.oppForesighted : state.youForesighted) === 0) return results;
+  const selfSide = isYou ? "you" : "opp";
+  // Each proc: [probability, outcome fields]. Unobservable ones are dropped.
+  const procs = [];
+  if (ab in CONTACT_STATUS_ABILITY) {
+    const st = CONTACT_STATUS_ABILITY[ab];
+    if (canTakeContactStatus(state, selfSide, st, attacker)) procs.push([1 / 3, { contactProc: st }]);
+  } else if (ab === "Effect Spore") {
+    if (canTakeContactStatus(state, selfSide, "poison", attacker)) procs.push([1 / 30, { contactProc: "poison" }]);
+    if (canTakeContactStatus(state, selfSide, "paralysis", attacker)) procs.push([1 / 30, { contactProc: "paralysis" }]);
+    if (canTakeContactStatus(state, selfSide, "sleep", attacker)) {
+      for (const d of [2, 3, 4, 5]) procs.push([1 / 120, { contactProc: "sleep", contactSleep: d }]);
+    }
+  } else if (ab === "Cute Charm") {
+    // Gender uses the engine's Attract treatment: a per-use compatibility
+    // probability from each species' gender distribution.
+    if (attacker.ability !== "Oblivious" && !state[isYou ? "youAttracted" : "oppAttracted"]) {
+      let pCompat = 0;
+      for (const u of attacker.genderDist) for (const t of holder.genderDist) {
+        if (u.gender !== "genderless" && t.gender !== "genderless" && u.gender !== t.gender) pCompat += u.p * t.p;
+      }
+      if (pCompat > 0) procs.push([pCompat / 3, { contactProc: "attract" }]);
+    }
+  }
+  if (procs.length === 0) return results;
+  if (results.some((r) => r.hit && (r.hitCount ?? 1) > 1)) {
+    throw new Error(`"${moveName}" is a multi-hit contact move into ${ab} (${holder.species}). Source rolls ` +
+      `ABILITYEFFECT_ON_DAMAGE after EVERY hit; the per-hit chain is not modelled. Port it before this ` +
+      `position can be solved.`);
+  }
+  const pAny = procs.reduce((a, [q]) => a + q, 0);
+  const out = [];
+  for (const r of results) {
+    if (r.hit !== true || r.variablePower === "heal" || r.variablePower === "failed") { out.push(r); continue; }
+    for (const [q, fields] of procs) out.push({ ...r, p: r.p * q, ...fields });
+    out.push({ ...r, p: r.p * (1 - pAny) });
+  }
+  return out;
 }
 
 // Disable's timer, enumerated as weighted branches -- and COLLAPSED by the same
@@ -8793,7 +8895,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   for (const fo of firstOutcomes) {
     let s = cloneState(state);
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
     const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
@@ -8834,7 +8936,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
       const bidePre2 = (s2.youLock?.kind === "bide" || s2.oppLock?.kind === "bide") ? bideSnapshot(s2) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null);
+      applyMove(ctx, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null);
       if (bidePre2) bideAccumulate(ctx, s2, bidePre2);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.

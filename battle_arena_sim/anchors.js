@@ -254,7 +254,7 @@ export const B2A = {
   "Espeon 3":    { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.025 },
   "Ninetales 2": { tier: 31, lead: "Gengar", effect: "EFFECT_GRUDGE (no-dispatch)",    move: "Thunderbolt", winProb: 0.74333125 },
   "Xatu 1":      { tier: 12, lead: "Gengar", effect: "EFFECT_TEETER_DANCE/WISH",       move: "Thunderbolt", winProb: 1 },
-  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Ice Punch",   winProb: 0.918450597123913 }, // B7c: holds Focus Band
+  "Clefable 2":  { tier: 31, lead: "Gengar", effect: "EFFECT_METRONOME (no-dispatch)", move: "Thunderbolt", winProb: 0.9043094452878824 }, // B7c: holds Focus Band; B8: Clefable 2 has CUTE CHARM and the Gengar lead's Ice Punch makes contact -- 1/3 x gender-compat infatuation; was Ice Punch 0.918450597123913, and the advice FLIPS to the non-contact Thunderbolt
   "Dusclops 4":  { tier: 31, lead: "Gengar", effect: "Ghost-EFFECT_CURSE",             move: "Thunderbolt", winProb: 0.00625 },
 };
 

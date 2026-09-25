@@ -134,7 +134,10 @@ console.log("-- PART 6: the two that cost a TURN rather than HP --");
   // move table -- so it naturally moves last and the check is reachable.
   const fp = mk("Breloom", ["Focus Punch", "Spore", "Rest", "Giga Drain"], { ability: "Effect Spore" });
   const ctx = { you, opp: fp };
-  const hitFirst = resolveTurn(ctx, buildStartState({ you, opp: fp }), "Body Slam", "Focus Punch");
+  // B8: Shadow Ball, not Body Slam -- Breloom holds Effect Spore, and a CONTACT
+  // hit can now poison the attacker, whose end-of-turn tick would move the HP
+  // this assertion reads. A non-contact hit damages Breloom first all the same.
+  const hitFirst = resolveTurn(ctx, buildStartState({ you, opp: fp }), "Shadow Ball", "Focus Punch");
   ok(hitFirst.every((b) => b.state.yourHpPct === 100),
     "a Focus Punch user that was damaged first must lose focus and do NOTHING");
   const unharassed = resolveTurn(ctx, buildStartState({ you, opp: fp }), IDLE, "Focus Punch");
