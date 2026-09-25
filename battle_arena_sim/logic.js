@@ -9486,7 +9486,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
     applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null, fo.crit ?? 0);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
-    const firstLabel = describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
+    const firstLabel = ctx.noLabels ? "" : describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
@@ -9538,7 +9538,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         if (order[0] === "you") { s2.mindYou -= dMind; s2.skillYou -= dSkill; s2.mindOpp += dMind; s2.skillOpp += dSkill; }
         else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
       }
-      const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
+      const secondLabel = ctx.noLabels ? "" : (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
       // B8c: Shed Skin's 1/3 is drawn HERE, before the end-of-turn effects,
       // because it acts at their ABILITIES checkpoint -- ahead of the residuals.
       const bothUp = s2.yourHpPct > 0 && s2.oppHpPct > 0;
@@ -9889,7 +9889,7 @@ function ttKey(turnsRemaining, state) {
     youDestinyBondActive, oppDestinyBondActive, youBouncing, oppBouncing, ...rest } = state;
   return turnsRemaining + "|" + JSON.stringify(rest);
 }
-function search(ctx, state, turnsRemaining, retain = true, tt = null) {
+function search(ctx, state, turnsRemaining, retain = true, tt = null, prune = false) {
   if (turnsRemaining === 0 || state.yourHpPct <= 0 || state.oppHpPct <= 0) {
     const winProb = evaluateTerminal(state);
     return retain ? { winProb, move: null, isTerminal: true, state } : { winProb, move: null, isTerminal: true };
@@ -9918,19 +9918,39 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null) {
   const yourMoveChoices = youForced ? [youForced]
     : (() => { const ec = effectiveCtx(ctx, state); return selectableMoves(ec.you.moves, state, "you", ec.opp, "you"); })();
 
+  // C2: PRUNING (opt-in, headless only). P(win) is at most 1, so while an
+  // option's expectation is being summed, `expected + (1 - weight seen)` bounds
+  // it from above; once that bound is below the best option found by more than
+  // the tie epsilon, the option can neither win nor tie and its remaining
+  // branches are skipped. The winning option is always evaluated in full, so
+  // the returned winProb and move are unchanged (the pick below is independent
+  // of evaluation order); only the LOSING options' values become bounds.
+  // Pruning is strongest when the best option comes first, so the player's
+  // moves are tried in descending estimated damage.
   const options = [];
-  for (const yourMove of yourMoveChoices) {
+  let best = -Infinity;
+  const tryOrder = prune && yourMoveChoices.length > 1
+    ? yourMoveChoices.map((m) => [m, moveTiebreakScore(ctx, state, m)]).sort((x, y) => y[1] - x[1]).map((x) => x[0])
+    : yourMoveChoices;
+  for (const yourMove of tryOrder) {
     let expected = 0;
+    let seen = 0;
+    let cut = false;
     const branches = [];
     for (const { move: oppMove, prob: oppProb } of oppCandidates) {
       const raw = resolveTurn(ctx, state, yourMove, oppMove);
       for (const b of raw) {
         const weight = b.p * oppProb;
-        const sub = search(ctx, b.state, turnsRemaining - 1, retain, tt);
+        const sub = search(ctx, b.state, turnsRemaining - 1, retain, tt, prune);
         expected += weight * sub.winProb;
+        seen += weight;
         if (retain) branches.push({ prob: weight, label: b.label, state: b.state, subtree: sub });
+        if (prune && expected + Math.max(0, 1 - seen) + 1e-9 < best - 1e-6) { cut = true; break; }
       }
+      if (cut) break;
     }
+    if (cut) { options.push({ move: yourMove, winProb: expected + Math.max(0, 1 - seen), pruned: true }); continue; }
+    if (expected > best) best = expected;
     if (retain) {
       branches.sort((a, b) => b.prob - a.prob);
       options.push({ move: yourMove, winProb: expected, branches });
@@ -9949,10 +9969,19 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null) {
   // it's genuinely a guaranteed win/loss regardless of move, but the tool
   // must still recommend something sensible rather than something arbitrary).
   const WINPROB_TIE_EPSILON = 1e-6;
-  options.sort((a, b) => {
-    if (Math.abs(a.winProb - b.winProb) > WINPROB_TIE_EPSILON) return b.winProb - a.winProb;
-    return moveTiebreakScore(ctx, state, b.move) - moveTiebreakScore(ctx, state, a.move);
-  });
+  // The pick, as a well-defined rule (C2): the maximum P(win) among the
+  // options evaluated in full; every option within WINPROB_TIE_EPSILON of it is
+  // tied, and a tie goes to the higher damage estimate, then the earlier move
+  // in selection order. The in-place sort this replaces used the same keys, but
+  // an epsilon comparator is not transitive, so its answer could depend on the
+  // input order -- which pruning and move ordering change. Pruned options never
+  // take part; the rest follow the pick by P(win).
+  const full = options.filter((o) => !o.pruned);
+  const maxV = Math.max(...full.map((o) => o.winProb));
+  const idx = (m) => yourMoveChoices.indexOf(m);
+  const pick = full.filter((o) => o.winProb >= maxV - WINPROB_TIE_EPSILON)
+    .sort((a, b) => (moveTiebreakScore(ctx, state, b.move) - moveTiebreakScore(ctx, state, a.move)) || (idx(a.move) - idx(b.move)))[0];
+  options.sort((a, b) => (a === pick ? -1 : b === pick ? 1 : (b.winProb - a.winProb) || (idx(a.move) - idx(b.move))));
 
   if (!retain) {
     const res = { move: options[0].move, winProb: options[0].winProb, isTerminal: false, allOptions: options };
@@ -10007,18 +10036,19 @@ function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
 // being analyzed), so this is a simplifying assumption until that's tracked.
 // C1: `tree: false` runs the search headless (see search) -- the result
 // carries move, winProb and allOptions[{move, winProb}], and no branches.
-function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true, transposition = true } = {}) {
+function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true, transposition = true, prune = false } = {}) {
   const you = buildMon(youConfig);
   // Frontier trainer mons are generated at max friendship (255) — a real,
   // verified fact about this dataset's source, not a convenience default —
   // so EFFECT_RETURN/EFFECT_FRUSTRATION resolve correctly for the opponent
   // side regardless of buildMon's own moveset-based guess (see buildMon).
   const opp = buildMon({ ...oppConfig, friendship: 255 });
-  const ctx = { you, opp };
+  // C2: headless, nothing reads a branch's label, so none are built.
+  const ctx = tree ? { you, opp } : { you, opp, noLabels: true };
   const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
   // `transposition: false` exists for MEASUREMENT only (test-c1-headless's
   // memory control); every caller uses the default.
-  const result = search(ctx, state, 3, tree, transposition ? new Map() : null);
+  const result = search(ctx, state, 3, tree, transposition ? new Map() : null, prune && !tree);
   return { you, opp, result };
 }
 
