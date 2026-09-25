@@ -4508,7 +4508,42 @@ const SECONDARY_SPEC = {
   // outright when all five sit at +6, otherwise each of the five is raised in
   // turn, a stat already at +6 simply not moving. Never accuracy or evasion.
   EFFECT_ALL_STATS_UP_HIT: { self: { atk: 1, def: 1, spe: 1, spa: 1, spd: 1 } },
+  // B4c: MOVE_EFFECT_FLINCH (data/battle_scripts_1.s:669, :1272 Snore, :792
+  // Sky Attack's release, :1831 Twister and Stomp's BattleScript_FlinchEffect).
+  EFFECT_FLINCH_HIT: { flinch: true },
+  EFFECT_FLINCH_MINIMIZE_HIT: { flinch: true },
+  EFFECT_SNORE: { flinch: true },
+  EFFECT_SKY_ATTACK: { flinch: true },
+  EFFECT_TWISTER: { flinch: true },
 };
+// B4c: can a flinch change anything? MOVE_EFFECT_FLINCH (:2547-2565) sets
+// STATUS2_FLINCHED only while the target's turn is still to come
+// (`GetBattlerTurnOrderNum(gEffectBattler) > gCurrentTurnActionNumber`), so a
+// SECOND mover flinches nothing -- not branched at all. Inner Focus stops a
+// non-certain flinch silently (the certain case is handled by the caller).
+// Shield Dust and a Substitute are SetMoveEffect's head, tested by the caller.
+function flinchCanLand(foe, isLastToAct) {
+  return !isLastToAct && foe.ability !== "Inner Focus";
+}
+// B4c: KING'S ROCK (ItemBattleEffects ITEMEFFECT_KINGSROCK_SHELLBELL, src/
+// battle_util.c:3769-3786, from MOVEEND_KINGSROCK_SHELLBELL): a SECOND,
+// independent flinch roll, `Random() % 100 < holdEffectParam` (10), on a move
+// with FLAG_KINGS_ROCK_AFFECTED that did not come back NO_EFFECT, damaged the
+// target ITSELF (TARGET_TURN_DAMAGED -- a Substitute absorbing it does not
+// count) and left it alive. It goes through SetMoveEffect(FALSE, 0): Shield
+// Dust, a Substitute and Inner Focus stop it silently, and a second mover
+// flinches nothing. Returns the chance, 0 when nothing could land.
+function kingsRockChance(ctx, state, actor, moveName, moveData, isLastToAct) {
+  const isYou = actor === "you";
+  const item = itemData((isYou ? ctx.you : ctx.opp).item);
+  if (!item || item.holdEffect !== "HOLD_EFFECT_FLINCH") return 0;
+  if (moveData.power === 0 || !moveFlags(moveName).kingsRockAffected) return 0;
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (!flinchCanLand(foe, isLastToAct) || foe.ability === "Shield Dust") return 0;
+  if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return 0;
+  if (typeEffectiveness(moveData.type, foe.types, isYou ? state.oppForesighted : state.youForesighted) === 0) return 0;
+  return item.param / 100;
+}
 // B4b: a SECONDARY stat drop goes through ChangeStatBuffs (:6937-7075) with
 // flags = 0 -- never MOVE_EFFECT_CERTAIN (so Mist and Clear Body block even a
 // 100% drop) and never STAT_CHANGE_ALLOW_PTR (so a block prints nothing and
@@ -4561,7 +4596,28 @@ function secondaryStatusCanLand(ctx, state, side, mon, status) {
 //   percentChance = secondaryEffectChance, doubled by SERENE GRACE (:2912-2915)
 //   success: Random() % 100 < percentChance, on a hit that is not NO_EFFECT
 //   percentChance >= 100 -> SetMoveEffect(..., MOVE_EFFECT_CERTAIN)
-function secondaryOutcomes(ctx, state, actor, moveName, moveData) {
+function secondaryOutcomes(ctx, state, actor, moveName, moveData, isLastToAct = false) {
+  const own = secondaryOutcomesOwn(ctx, state, actor, moveName, moveData, isLastToAct);
+  const kr = kingsRockChance(ctx, state, actor, moveName, moveData, isLastToAct);
+  if (kr === 0) return own;
+  // King's Rock is independent of the move's own roll. Where the move's own
+  // effect IS a flinch, the two collapse into one flinch outcome.
+  const spec = secondarySpecFor(moveName, moveData);
+  if (spec?.flinch && own) {
+    const q = own[0].q;
+    return [{ q: 1 - (1 - q) * (1 - kr), trig: own[0].trig }];
+  }
+  const out = [];
+  let rest = 1;
+  for (const o of own ?? []) {
+    out.push({ q: o.q * kr, trig: { sec: o.trig, kr: true } });
+    out.push({ q: o.q * (1 - kr), trig: o.trig });
+    rest -= o.q;
+  }
+  out.push({ q: rest * kr, trig: { sec: false, kr: true } });
+  return out;
+}
+function secondaryOutcomesOwn(ctx, state, actor, moveName, moveData, isLastToAct) {
   const spec = secondarySpecFor(moveName, moveData);
   if (!spec) return null;
   const chance = secondaryChance(moveName);
@@ -4581,6 +4637,11 @@ function secondaryOutcomes(ctx, state, actor, moveName, moveData) {
   if (foe.ability === "Shield Dust") return null;
   if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return null;
   const foeSide = isYou ? "opp" : "you";
+  if (spec.flinch) {
+    if (flinchCanLand(foe, isLastToAct)) return [{ q, trig: true }];
+    // A CERTAIN flinch into Inner Focus prints PKMNSXPREVENTSFLINCHING: Skill.
+    return pct >= 100 && foe.ability === "Inner Focus" ? [{ q: 1, trig: true }] : null;
+  }
   if (spec.foeStat) {
     if (secondaryStatDropBlocked(state, foeSide, foe, spec.foeStat)) return null;
     return (isYou ? state.oppStages : state.youStages)[spec.foeStat] > -6 ? [{ q, trig: true }] : null;
@@ -4604,10 +4665,32 @@ function secondaryOutcomes(ctx, state, actor, moveName, moveData) {
   return null;
 }
 
+// MOVE_EFFECT_FLINCH through SetMoveEffect: Shield Dust / Substitute / a
+// fainted target first (silent), then Inner Focus -- which PRINTS on a certain
+// flinch (BattleScript_FlinchPrevention, PKMNSXPREVENTSFLINCHING as the
+// attacker: -3 Skill) and is silent otherwise. Setting the flag on a target
+// that already acted is harmless: it is cleared at every turn end.
+function applyFlinch(ctx, s, actor, foeHadSubstitute, certain) {
+  const isYou = actor === "you";
+  const foe = isYou ? ctx.opp : ctx.you;
+  if (foe.ability === "Shield Dust" || foeHadSubstitute || (isYou ? s.oppHpPct : s.yourHpPct) <= 0) return;
+  if (foe.ability === "Inner Focus") {
+    if (certain) s[isYou ? "skillYou" : "skillOpp"] -= 3;
+    return;
+  }
+  s.turnFlags |= isYou ? TF_OPP_FLINCHED : TF_YOU_FLINCHED;
+}
+
 // The dispatch half, called from applyMoveCore right after the damage and
 // BEFORE the fire defrost (seteffectwithchance precedes MOVEEND_DEFROST, so a
 // frozen target hit by Fire Punch sees itself still frozen and is not burned).
 function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitute) {
+  if (typeof trig === "object") {
+    // { sec, kr }: the move's own outcome, then King's Rock at MOVEEND.
+    if (trig.sec) applySecondary(ctx, s, actor, moveName, moveData, trig.sec, foeHadSubstitute);
+    applyFlinch(ctx, s, actor, foeHadSubstitute, false);
+    return;
+  }
   const spec = secondarySpecFor(moveName, moveData);
   const isYou = actor === "you";
   const self = isYou ? ctx.you : ctx.opp;
@@ -4622,6 +4705,11 @@ function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitut
   if (foeHadSubstitute) return;                       // :2266 -- still set, even if this hit broke it
   if ((isYou ? s.oppHpPct : s.yourHpPct) <= 0) return; // :2261
   const foeSide = isYou ? "opp" : "you";
+  if (spec.flinch) {
+    const pct = secondaryChance(moveName) * (self.ability === "Serene Grace" ? 2 : 1);
+    applyFlinch(ctx, s, actor, foeHadSubstitute, pct >= 100);
+    return;
+  }
   if (spec.foeStat) {
     // Safeguard does not reach here: the stat bytes are above 7.
     if (secondaryStatDropBlocked(s, foeSide, foe, spec.foeStat)) return;
@@ -4854,7 +4942,7 @@ const HOLD_EFFECT_DISPOSITION = new Map([
   ["HOLD_EFFECT_SCOPE_LENS", ["deferred", "B6 — crit rate; crits are not enumerated yet"]],
   ["HOLD_EFFECT_LUCKY_PUNCH", ["deferred", "B6 — Chansey crit rate"]],
   ["HOLD_EFFECT_STICK", ["deferred", "B6 — Farfetch'd crit rate"]],
-  ["HOLD_EFFECT_FLINCH", ["deferred", "B4 — King's Rock's 10% chance; the flinch it would cause is modelled since B3 batch 2"]],
+  ["HOLD_EFFECT_FLINCH", ["move-time", "B4c — King's Rock's roll, in secondaryOutcomes / kingsRockChance; its flinch goes through applyFlinch"]],
   ["HOLD_EFFECT_QUICK_CLAW", ["deferred", "B7c — turn order"]],
   ["HOLD_EFFECT_EVASION_UP", ["deferred", "B7c — BrightPowder, the accuracy path"]],
   ["HOLD_EFFECT_FOCUS_BAND", ["deferred", "B7c — a per-hit survival roll"]],
@@ -6395,16 +6483,11 @@ const INLINE_HANDLED_EFFECTS = new Set([
 // EFFECT_EXECUTORS (their executor simply never dispatches off-SECONDARY_EFFECT_
 // CHANCE), so they are intentionally not re-listed here.
 const CHANCE_SECONDARY_EFFECTS = new Set([
-  "EFFECT_FLINCH_HIT",               // Rock Slide/Headbutt/Bite flinch %
   "EFFECT_CONFUSE_HIT",              // Confusion/Psybeam/Water Pulse confuse %
-  "EFFECT_FLINCH_MINIMIZE_HIT",      // Stomp/Extrasensory flinch % (+2x vs minimize)
   // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
   // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
-  "EFFECT_SNORE",
   // B2b batch 7. Each of these has its mandatory half modelled and a chance
   // secondary left, which is this class:
-  "EFFECT_SKY_ATTACK",   // the 2-turn charge is modelled; the flinch % is not
-  "EFFECT_TWISTER",      // flinch %; its 2x vs an airborne target is inline
 ]);
 
 // DAMAGE_MAGNITUDE_ONLY: power>1 effects that deal ordinary power-based damage
@@ -7193,6 +7276,12 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) {
       spitUpMultiplier = 2;
     }
+    // B4c: BattleScript_EffectStomp (data/battle_scripts_1.s:1898-1901) --
+    // EFFECT_FLINCH_MINIMIZE_HIT sets sDMG_MULTIPLIER = 2 into a target with
+    // STATUS3_MINIMIZED, through the same multiplier as Smelling Salt.
+    if (moveData.effect === "EFFECT_FLINCH_MINIMIZE_HIT" && vf(s, isYou ? "oppMinimized" : "youMinimized")) {
+      spitUpMultiplier = 2;
+    }
     if (moveData.effect === "EFFECT_SPIT_UP") {
       // NOTE the script ends in `adjustsetdamage`, not `adjustnormaldamage`
       // (data/battle_scripts_1.s:2103-2112), so Spit Up takes NO damage roll --
@@ -7427,10 +7516,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // blocks it at the flinch case itself (:2547-2560). The "target has not
       // moved yet" test there is implicit here: the flag is cleared at every
       // turn end, so setting it on a mon that already acted changes nothing.
-      if (moveData.effect === "EFFECT_FAKE_OUT" && dmg > 0 && s[foeHpKey] > 0 && !foeHadSubstitute
-          && foeMon.ability !== "Shield Dust" && foeMon.ability !== "Inner Focus") {
-        s.turnFlags |= isYou ? TF_OPP_FLINCHED : TF_YOU_FLINCHED;
-      }
+      // B4c: the same path as every other flinch now -- including Inner Focus
+      // PRINTING on this certain one (-3 Skill), which batch 2 left out.
+      if (moveData.effect === "EFFECT_FAKE_OUT" && dmg > 0) applyFlinch(ctx, s, actor, foeHadSubstitute, true);
       // B3 batch 3: RAMPAGE'S LOCK. confuseifrepeatingattackends queues
       // MOVE_EFFECT_THRASH | AFFECTS_USER only while LOCK_CONFUSE is clear
       // (src/battle_script_commands.c:7131-7137), and seteffectwithchance (100%)
@@ -8718,6 +8806,11 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           continue;
         }
         const hitDist = MULTI_HIT_DISTRIBUTION[moveData.effect];
+        if (hitDist && kingsRockChance(ctx, state, actor, moveName, moveData, isLastToAct) > 0) {
+          throw new Error(`"${moveName}" is a multi-hit move with FLAG_KINGS_ROCK_AFFECTED, used with King's Rock. ` +
+            `Source rolls it once at MOVEEND off the last hit's damage; the multi-hit path does not reach that ` +
+            `roll yet. Port it before this position can be solved.`);
+        }
         if (hitDist) {
           // Hit-count resolved ONCE per move use (never re-rolled per hit —
           // Cmd_setmultihitcounter runs a single time, before the loop even
@@ -8729,7 +8822,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           continue;
         }
         // B4: the chance secondary, drawn once per landed hit.
-        const sec = moveData.power > 0 ? secondaryOutcomes(ctx, state, actor, moveName, moveData) : null;
+        const sec = moveData.power > 0 ? secondaryOutcomes(ctx, state, actor, moveName, moveData, isLastToAct) : null;
         if (sec) {
           let rest = 1;
           for (const o of sec) {

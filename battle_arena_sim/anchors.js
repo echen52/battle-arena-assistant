@@ -240,7 +240,7 @@ export const B2B1 = {
   "Machoke 2":             { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.5519999999999999 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.3474999999999999)
   "Hitmonlee 2":           { tier:  9, lead: "Snorlax", effect: "EFFECT_FORESIGHT",    wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0 },
   "Pinsir 1":              { tier:  9, lead: "Snorlax", effect: "EFFECT_FOCUS_ENERGY", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.6599771976470946 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.5142531394958496)
-  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9965820312499999 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.99658203125)
+  "Dunsparce 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_CURL", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9602825520833332 }, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% (zeroing it alone restores 0.99658203125); B4c: Dunsparce's HEADBUTT flinches -- 30% doubled to 60% by SERENE GRACE (zeroing Headbutt alone restores 0.9965820312499999)
   "Dragonair 1":           { tier:  6, lead: "Snorlax", effect: "EFFECT_DEFENSE_DOWN", wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 0.9972992078463234 }, // B4a (chance status secondaries) -- Dragonair's DRAGONBREATH paralyses the lead 30% (zeroing it alone restores 0.9999999999999998, 1 ULP from the recorded 1)
   "Caterpie 1":            { tier:  3, lead: "Snorlax", effect: "EFFECT_SPEED_DOWN",   wasThrowing: "ai-scoring", move: "Body Slam",   winProb: 1 },
 };
@@ -420,7 +420,7 @@ export const B7C_ANCHORS = {
   // via its BrightPowder. Intimidate then moved it AGAIN -- it is a Salamence
   // cell and the Salamence lead carries Intimidate -- and the recommended move
   // flipped BACK to Dragon Claw. Both movements named rather than one hidden.
-  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Dragon Claw", winProb: 0.8507291838563511,
+  "Lucy Gold Steelix": { lead: "Salamence", item: "BrightPowder", move: "Earthquake", winProb: 0.8590899118509061, // B4c: the lead's ROCK SLIDE flinches 30% and the advice FLIPS back to Earthquake (zeroing Rock Slide alone restores Dragon Claw 0.8507291838563511)
     pre: { move: "Dragon Claw", winProb: 0.9301677280002171 },
     b7cWas: { move: "Earthquake", winProb: 0.7479850977404471 } },
   "Alakazam 4": { lead: "Starmie", item: "BrightPowder", move: "Ice Beam", winProb: 0.7478928000000001, // B4a (chance status secondaries) -- Alakazam's THUNDERPUNCH paralyses the lead 10% (zeroing it alone restores 0.8231904000000001)
@@ -441,7 +441,7 @@ export const B7C_ANCHORS = {
 // Body blocks it outright, the other two because they attack specially and a
 // -1 Attack changes nothing for them.
 export const INTIMIDATE_ANCHORS = {
-  "Granbull 2": { lead: "Salamence", move: "Earthquake", winProb: 0,
+  "Granbull 2": { lead: "Salamence", move: "Rock Slide", winProb: 0.15740568000000005, // B4c: the lead's ROCK SLIDE flinches 30% -- the reversal is no longer complete, and the advice FLIPS from Earthquake (zeroing Rock Slide alone restores Earthquake 0)
     pre: { move: "Earthquake", winProb: 1 },
     why: "the LEAD's own Intimidate -- a complete reversal" },
   "Salamence 7": { lead: "Snorlax", move: "Body Slam", winProb: 0.09, // B4a (chance status secondaries) -- the lead's BODY SLAM paralyses 30% -- the first non-zero odds this cell has had since Intimidate (zeroing Body Slam alone restores 0)
