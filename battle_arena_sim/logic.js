@@ -4361,6 +4361,14 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   // `base` here, BEFORE overrides are spread, which leaves an explicit
   // caller-supplied stage free to win as it always has.
   applyIntimidateOnSwitchIn(base, you, opp);
+  // B8c: TRACE (ABILITYEFFECT_TRACE, src/battle_util.c:3017-3040, run from
+  // TryDoEventsBeforeFirstTurn, src/battle_main.c:3882): each Trace holder
+  // takes the foe's ability at the start of the match. It runs AFTER the
+  // switch-in abilities, so a traced Intimidate does not fire (the tracer never
+  // got STATUS3_INTIMIDATE_POKES), and BattleScript_TraceActivates is a plain
+  // end3. Two Trace holders both stay Trace.
+  if (you.ability === "Trace" && opp.ability) base.youAbilityOverride = opp.ability;
+  if (opp.ability === "Trace" && you.ability) base.oppAbilityOverride = you.ability === "Trace" ? "Trace" : you.ability;
   if (!overrides) return base; // unchanged path — byte-identical to before overrides existed
   // B3 batch 7a: a legacy per-flag key becomes its volFlags bit instead of an
   // undeclared property (which would also break the state's shape).
@@ -4439,6 +4447,7 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
   // B3 batches 1-2: the single-cause cancelers are prevented turns too, and
   // must not read as paralysis.
   if (cancelReason === "recharge") return `${who} must recharge`;
+  if (cancelReason === "truant") return `${who} is loafing around`;
   if (cancelReason === "bideStore") return `${who} is storing energy`;
   if (cancelReason === "flinch") return `${who} flinches`;
   if (cancelReason === "disabled") return `${who} can't use the disabled ${moveName}`;
@@ -7595,7 +7604,7 @@ function isWeatherChipImmune(weatherType, mon, charging) {
   return true; // rain/sun/no-weather never chip
 }
 
-function applyEndOfTurnEffects(ctx, s) {
+function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   const { you, opp } = ctx;
 
   // Weather chip damage + duration housekeeping runs FIRST, before EVERYTHING
@@ -7643,6 +7652,20 @@ function applyEndOfTurnEffects(ctx, s) {
       s.oppHpPct = Math.min(100, s.oppHpPct + (heal / opp.stats.hp) * 100);
     }
   }
+  // B8c: the rest of ENDTURN_ABILITIES (src/battle_util.c:2620-2655), at the
+  // same checkpoint -- so a Shed Skin cure comes BEFORE this turn's poison or
+  // burn tick. Its 1/3 roll was drawn by the caller (shedSkinBranches).
+  // SHED SKIN clears the whole major status and STATUS2_NIGHTMARE.
+  for (const side of ["you", "opp"]) {
+    if (!shedSkinCure?.[side]) continue;
+    s[side === "you" ? "youStatus" : "oppStatus"] = null;
+    s[side === "you" ? "youSleepTurns" : "oppSleepTurns"] = null;
+    s[side === "you" ? "youToxicCounter" : "oppToxicCounter"] = null;
+    s[side === "you" ? "youNightmared" : "oppNightmared"] = false;
+  }
+  // TRUANT flips its counter every end of turn.
+  if (you.ability === "Truant" && s.yourHpPct > 0) setVf(s, "youTruantLoaf", !vf(s, "youTruantLoaf"));
+  if (opp.ability === "Truant" && s.oppHpPct > 0) setVf(s, "oppTruantLoaf", !vf(s, "oppTruantLoaf"));
 
   // Leftovers: 1/16 max HP, no-op at full HP, never overheals past max.
   if (s.yourHpPct > 0 && s.yourHpPct < 100 && you.item === "Leftovers") {
@@ -8158,6 +8181,10 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
 // The five single-cause cancelers between FROZEN and CONFUSED, in source order.
 function singleCauseCancel(ctx, state, actor, moveName, moveData) {
   const isYou = actor === "you";
+  // B8c: CANCELER_TRUANT (src/battle_util.c:2086-2097), between FROZEN and
+  // RECHARGE: a Truant mon with its counter set loafs -- the turn is lost and
+  // multi-turn moves are cancelled.
+  if ((isYou ? ctx.you : ctx.opp).ability === "Truant" && vf(state, isYou ? "youTruantLoaf" : "oppTruantLoaf")) return "truant";
   // CANCELER_RECHARGE (src/battle_util.c:2098-2108).
   if (state[isYou ? "youRecharge" : "oppRecharge"]) return "recharge";
   // CANCELER_FLINCH (:2110-2120). Set by the foe's hit earlier this same turn.
@@ -8986,14 +9013,21 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
       }
       const secondLabel = (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
-      if (s2.yourHpPct > 0 && s2.oppHpPct > 0) applyEndOfTurnEffects(ctx, s2);
-      // B3 batch 5b: Future Sight releases AFTER the end-of-turn effects
-      // (HandleWishPerishSongOnTurnEnd, case 0) and BEFORE the Arena judges
-      // (case 2 of the same function) -- so a turn-1 Future Sight lands before
-      // turn 3 is judged. Its accuracy roll and Focus Band are real branches.
-      for (const fb of futureSightRelease(ctx, s2)) {
-        advanceTurn(fb.state);
-        results.push({ p: fo.p * so.p * fb.p, state: fb.state, label: `${firstLabel}; ${secondLabel}${fb.label}` });
+      // B8c: Shed Skin's 1/3 is drawn HERE, before the end-of-turn effects,
+      // because it acts at their ABILITIES checkpoint -- ahead of the residuals.
+      const bothUp = s2.yourHpPct > 0 && s2.oppHpPct > 0;
+      const eot = bothUp ? shedSkinBranches(ctx, s2) : NO_SHED_SKIN;
+      for (const eb of eot) {
+        const s3 = eot.length > 1 ? cloneState(s2) : s2;
+        if (bothUp) applyEndOfTurnEffects(ctx, s3, eb.cure);
+        // B3 batch 5b: Future Sight releases AFTER the end-of-turn effects
+        // (HandleWishPerishSongOnTurnEnd, case 0) and BEFORE the Arena judges
+        // (case 2 of the same function) -- so a turn-1 Future Sight lands before
+        // turn 3 is judged. Its accuracy roll and Focus Band are real branches.
+        for (const fb of futureSightRelease(ctx, s3)) {
+          advanceTurn(fb.state);
+          results.push({ p: fo.p * so.p * eb.p * fb.p, state: fb.state, label: `${firstLabel}; ${secondLabel}${eb.label ?? ""}${fb.label}` });
+        }
       }
     }
   }
@@ -9033,6 +9067,26 @@ function endTurnThrash(s, side, mon) {
   } else {
     s[lockKey] = { ...s[lockKey], n };
   }
+}
+
+// B8c: SHED SKIN (src/battle_util.c:2620-2640): a holder with ANY major status
+// cures it with `Random() % 3 == 0`, each end of turn. Drawn per side; a side
+// with nothing to cure is not branched.
+// The common case is returned as ONE shared object: this runs at every node's
+// turn end, and a fresh array there is a per-node allocation (measured +5.9%).
+const NO_SHED_SKIN = Object.freeze([Object.freeze({ p: 1, cure: null })]);
+function shedSkinBranches(ctx, s) {
+  const y = ctx.you.ability === "Shed Skin" && s.youStatus != null && s.yourHpPct > 0;
+  const o = ctx.opp.ability === "Shed Skin" && s.oppStatus != null && s.oppHpPct > 0;
+  if (!y && !o) return NO_SHED_SKIN;
+  const out = [];
+  for (const yc of y ? [true, false] : [false]) {
+    for (const oc of o ? [true, false] : [false]) {
+      const p = (y ? (yc ? 1 / 3 : 2 / 3) : 1) * (o ? (oc ? 1 / 3 : 2 / 3) : 1);
+      out.push({ p, cure: { you: yc, opp: oc }, label: (yc ? " (You shed its status)" : "") + (oc ? " (Opp sheds its status)" : "") });
+    }
+  }
+  return out;
 }
 
 // B3 batch 5b: the Future Sight release (src/battle_util.c:1796-1826 +
@@ -9143,6 +9197,8 @@ const VF = {
   youMudSport: 1, oppMudSport: 2, youWaterSport: 4, oppWaterSport: 8,
   youFocusEnergy: 16, oppFocusEnergy: 32, youMinimized: 64, oppMinimized: 128,
   youDefenseCurled: 256, oppDefenseCurled: 512, youPerishSonged: 1024, oppPerishSonged: 2048,
+  // B8c: gDisableStructs.truantCounter -- set means "loafs on its next action".
+  youTruantLoaf: 4096, oppTruantLoaf: 8192,
 };
 function vf(s, name) {
   const bit = VF[name];

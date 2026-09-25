@@ -179,7 +179,7 @@ export const CURRENT = {
   "Starmie 6": { move: "Shadow Ball", winProb: 0.7821180555555556 },
   "Tauros 1": { move: "Meteor Mash", winProb: 0.5167382812500002 },
   "Articuno 5": { move: "Meteor Mash", winProb: 0.9694799148701365 }, // B7c: holds Focus Band (a 1-ULP move)
-  "Spenser Silver Slaking": { move: "Explosion", winProb: 0.415625 },
+  "Spenser Silver Slaking": { move: "Meteor Mash", winProb: 0.5478714843750001 }, // B8c: TRUANT -- Slaking now loafs on turn 2; was Explosion 0.415625, and the advice FLIPS
   // remaining roll-sensitive sets from sim-audit.md 7.1's list
   "Heracross 2": { move: "Explosion", winProb: 0.5 },
   "Venusaur 3": { move: "Meteor Mash", winProb: 0.6831619873046876 }, // B3-4a: a mon that WAKES UP now acts that turn (CANCELER_ASLEEP pushes the cursor, src/battle_util.c:2049); was 0.5964432373046875 (Sleep Powder)
