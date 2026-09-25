@@ -4372,7 +4372,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   // end3. Two Trace holders both stay Trace.
   if (you.ability === "Trace" && opp.ability) base.youAbilityOverride = opp.ability;
   if (opp.ability === "Trace" && you.ability) base.oppAbilityOverride = you.ability === "Trace" ? "Trace" : you.ability;
-  if (!overrides) return base; // unchanged path — byte-identical to before overrides existed
+  if (!overrides) return snapStartHp(base, you, opp); // unchanged path otherwise
   // B3 batch 7a: a legacy per-flag key becomes its volFlags bit instead of an
   // undeclared property (which would also break the state's shape).
   if (Object.keys(overrides).some((k) => k in VF)) {
@@ -4385,12 +4385,39 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     }
     overrides = { ...rest, volFlags: bits };
   }
-  return {
+  return snapStartHp({
     ...base,
     ...overrides,
     youStages: { ...base.youStages, ...(overrides.youStages || {}) },
     oppStages: { ...base.oppStages, ...(overrides.oppStages || {}) },
-  };
+  }, you, opp);
+}
+
+// B6 step 1 (amendment 14): HP IS AN INTEGER. The game stores gBattleMons[].hp
+// as a u16; this engine stores a percentage, and every damage and heal it
+// applies is an integer amount -- but float arithmetic lets the same integer HP,
+// reached by two paths, land on two different percentages. That splits one game
+// state into several (fatal to a transposition table) and can leave a fainted
+// mon at 1e-14% "alive". So the percentage is SNAPPED to its integer HP after
+// every action and at every turn end, and at the start: a UI percentage that
+// is not a whole HP (50% of an odd max HP) is rounded to the nearest one, as
+// the game would never hold anything else.
+function canonHpPct(pct, maxHp) {
+  const hp = Math.round((pct * maxHp) / 100);
+  return hp <= 0 ? 0 : (hp * 100) / maxHp;
+}
+function snapHp(ctx, s) {
+  const raw = ctx.raw ?? ctx;
+  s.yourHpPct = canonHpPct(s.yourHpPct, raw.you.stats.hp);
+  s.oppHpPct = canonHpPct(s.oppHpPct, raw.opp.stats.hp);
+}
+function snapStartHp(st, you, opp) {
+  if (!you || !opp) return st;
+  st.yourHpPct = canonHpPct(st.yourHpPct, you.stats.hp);
+  st.oppHpPct = canonHpPct(st.oppHpPct, opp.stats.hp);
+  st.yourHpPctAtStart = canonHpPct(st.yourHpPctAtStart, you.stats.hp);
+  st.oppHpPctAtStart = canonHpPct(st.oppHpPctAtStart, opp.stats.hp);
+  return st;
 }
 
 // Intimidate. ABILITYEFFECT_ON_SWITCHIN sets STATUS3_INTIMIDATE_POKES
@@ -6635,6 +6662,7 @@ function applyMove(ctx, s, actor, ...rest) {
   const foeKey = isYou ? "oppStatus" : "youStatus";
   const selfPre = s[selfKey], foePre = s[foeKey];
   applyMoveCore(ctx, s, actor, ...rest);
+  snapHp(ctx, s); // B6 step 1: the action's HP changes, as integer HP
   const self = isYou ? ctx.you : ctx.opp;
   const foe = isYou ? ctx.opp : ctx.you;
   if (self.ability !== "Synchronize" && foe.ability !== "Synchronize") return;
@@ -9290,6 +9318,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
     if (firstActorHp <= 0 || secondActorHp <= 0) {
+      snapHp(ctx, s);
       advanceTurn(s);
       results.push({ p: fo.p, state: s, label: `${firstLabel} (opp never acts — KO)` });
       continue;
@@ -9350,6 +9379,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         // (case 2 of the same function) -- so a turn-1 Future Sight lands before
         // turn 3 is judged. Its accuracy roll and Focus Band are real branches.
         for (const fb of futureSightRelease(ctx3, s3)) {
+          snapHp(ctx, fb.state); // end-of-turn residuals and Future Sight
           advanceTurn(fb.state);
           results.push({ p: fo.p * so.p * eb.p * fb.p, state: fb.state, label: `${firstLabel}; ${secondLabel}${eb.label ?? ""}${fb.label}` });
         }

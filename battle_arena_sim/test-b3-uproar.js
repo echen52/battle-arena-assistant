@@ -114,7 +114,8 @@ console.log("-- PART 5: Rest, per its script --");
     "Rest during an uproar: no sleep, no heal, and +1 (RestCantSleep sets no flag)");
   const ins = mk("Snorlax", ["Rest", "Body Slam", "Growl", "Splash"], { ability: "Insomnia" });
   const i = turn(ins, foe, start(ins, foe, hurt), "Rest", "Splash");
-  ok(i.every((b) => b.state.youStatus === null && b.state.yourHpPct === 50 && b.state.skillYou === skillDelta("noEffect")),
+  const i0 = start(ins, foe, hurt).yourHpPct; // B6 step 1: 50% snapped to a whole HP
+  ok(i.every((b) => b.state.youStatus === null && b.state.yourHpPct === i0 && b.state.skillYou === skillDelta("noEffect")),
     "Rest with Insomnia: no heal, and -2 net (+1, then the STAYEDAWAKEUSING deduction of -3)");
   const healed = turn(rester, foe, start(rester, foe, hurt), "Rest", "Splash");
   ok(healed.every((b) => b.state.yourHpPct === 100 && b.state.youStatus === "sleep"), "(control) an ordinary Rest heals and sleeps");

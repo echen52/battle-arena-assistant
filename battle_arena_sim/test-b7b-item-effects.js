@@ -148,7 +148,9 @@ console.log("-- PART 2: Shell Bell heals off the FIRST damaging hit, not the tot
     ability: "Levitate", item: null, moves: ["Shadow Ball", "Thunderbolt", "Ice Punch", "Psychic"] });
   const noEff = buildStartState({ you: beller, opp: immune, overrides: { yourHpPct: 50 } });
   applyMove({ you: beller, opp: immune }, noEff, "you", "Earthquake", true, false);
-  ok(noEff.yourHpPct === 50, "Shell Bell must not heal off a move the target is immune to");
+  // B6 step 1: 50% is snapped to a whole HP at the start; compare against that.
+  const noEffStart = buildStartState({ you: beller, opp: immune, overrides: { yourHpPct: 50 } }).yourHpPct;
+  ok(noEff.yourHpPct === noEffStart, "Shell Bell must not heal off a move the target is immune to");
   console.log("   no heal at full HP, and none off a zero-effect hit");
 }
 

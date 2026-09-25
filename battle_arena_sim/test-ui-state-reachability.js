@@ -87,8 +87,16 @@ console.log("── PART 1: the 6 v1 user inputs reach the engine through buildO
   });
 
   const unreachable = [];
+  // B6 step 1: HP is an integer in the game, so an HP percentage reaches the
+  // engine as the nearest WHOLE HP of that percentage -- that is still the
+  // input arriving, and is what is compared.
+  const wholeHp = (k, v) => {
+    if (!/HpPct/.test(k)) return v;
+    const M = (k.startsWith("your") ? you : opp).stats.hp;
+    return (Math.round((v * M) / 100) * 100) / M;
+  };
   for (const [k, want] of Object.entries(USER_INPUT_KEYS_V1)) {
-    if (state[k] !== want) unreachable.push({ k, want, got: state[k] });
+    if (state[k] !== wholeHp(k, want)) unreachable.push({ k, want, got: state[k] });
   }
 
   if (unreachable.length === 0) {

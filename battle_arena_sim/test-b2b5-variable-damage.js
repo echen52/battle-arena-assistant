@@ -115,8 +115,10 @@ console.log("-- PART 3: Magnitude is NOT uniform, and Present has a heal arm --"
 
   // Cmd_presentdamagecalculation (:9111-9147): 102/76/26/52 out of 256, and the
   // fourth arm HEALS the target for maxHP/4 instead of attacking.
-  const { branches: pres } = branchesFor("Present", "Delibird");
-  const healed = pres.filter((b) => b.state.yourHpPct > START_PCT);
+  const { branches: pres, state: presStart } = branchesFor("Present", "Delibird");
+  // B6 step 1: compared against the START STATE's HP -- 80% is snapped to a
+  // whole HP, which can sit a hair above 80.
+  const healed = pres.filter((b) => b.state.yourHpPct > presStart.yourHpPct);
   ok(healed.length === 1, `Present must have exactly one HEALING branch (got ${healed.length})`);
   const acc = MOVES["Present"].accuracy / 100;
   ok(close(healed[0].p, acc * (52 / 256)),

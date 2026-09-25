@@ -59,9 +59,11 @@ console.log("-- PART 2: it fights as the copy --");
   const used = new Set(tree.allOptions.flatMap((o) => o.branches.map((x) => (x.label.match(/Opp uses ([A-Za-z -]+?)(?: \(|;|$)/) || [])[1]).filter(Boolean)));
   ok(used.size > 0 && [...used].every((m) => meta.moves.includes(m)), `the AI chooses among the COPIED moves (${[...used].join(", ")})`);
   // HP is NOT copied: its Leftovers heal 1/16 of DITTO's max HP.
-  const half = { ...tf, oppHpPct: 50 };
+  // B6 step 1: start at a WHOLE HP (half, rounded) -- the game never holds a half HP.
+  const halfHp = Math.round(ditto.stats.hp / 2);
+  const half = { ...tf, oppHpPct: (halfHp * 100) / ditto.stats.hp };
   const lf = turn(meta, ditto, half, "Agility", "Agility")[0];
-  const healed = Math.round(((lf.state.oppHpPct - 50) / 100) * ditto.stats.hp);
+  const healed = Math.round((lf.state.oppHpPct / 100) * ditto.stats.hp) - halfHp;
   ok(healed === Math.floor(ditto.stats.hp / 16), `Leftovers heals 1/16 of Ditto's OWN max HP (${healed} vs ${Math.floor(ditto.stats.hp / 16)})`);
   // Unambiguous: Seismic Toss deals exactly the level (50), which must come off
   // DITTO's max HP, not a copied one.
