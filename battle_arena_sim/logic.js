@@ -3543,16 +3543,25 @@ function requireAiDamageState(ctx, where) {
   return ctx.aiDamageState;
 }
 
-function aiRollCacheKey(st, targetHp, hpRelevant) {
+function aiRollCacheKey(st, targetHp, hpRelevant, pinch = false) {
   // Every field the damage table can depend on. attackerHpPct is included ONLY
   // when a tabulated move actually reads it (Flail/Reversal, via
   // getFlailPower) — today never, since the table is power>1 and both are
   // power 1 — because HP changes on almost every branch and would otherwise
   // reduce the memo to a no-op. The flag keeps this correct if that ever
   // changes rather than relying on the coincidence.
+  // C2 (found by the full grid): the key must name EVERY field
+  // buildAiDamageState hands aiCalcDamage. B2b added targetForesighted and B7
+  // added the two statuses (Guts, Marvel Scale) to the state without adding
+  // them here, so a position differing only in those reused another's table --
+  // and the AI's choice depended on which position the search reached first.
   return [targetHp, st.atkStage, st.spaStage, st.defStage, st.spdStage,
     st.attackerBurned, st.attackerFlashFireActive, st.targetReflect,
-    st.targetLightScreen, st.weather, hpRelevant ? st.attackerHpPct : 0].join("|");
+    st.targetLightScreen, st.weather, hpRelevant ? st.attackerHpPct : 0,
+    st.targetForesighted, st.attackerStatus, st.defenderStatus,
+    // ...and the pinch abilities (Blaze/Torrent/Overgrow/Swarm), which read the
+    // attacker's HP: only whether it is at or below maxHP/3 matters.
+    pinch].join("|");
 }
 
 const HP_DEPENDENT_POWER_MOVES = new Set(["Flail", "Reversal"]); // getFlailPower's only readers
@@ -3629,7 +3638,9 @@ function enumerateAiRollOutcomes(opp, you, ctx) {
   if (!byYou) { byYou = new WeakMap(); _aiRollClassCache.set(opp, byYou); }
   let byKey = byYou.get(you);
   if (!byKey) { byKey = new Map(); byYou.set(you, byKey); }
-  const cacheKey = aiRollCacheKey(st, targetHp, hpRelevant);
+  const pinch = PINCH_ABILITY_TYPE[opp.ability] != null
+    && Math.round((st.attackerHpPct / 100) * opp.stats.hp) <= Math.floor(opp.stats.hp / 3);
+  const cacheKey = aiRollCacheKey(st, targetHp, hpRelevant, pinch);
   const cached = byKey.get(cacheKey);
   if (cached) return cached;
   const computed = computeAiRollOutcomes(opp, you, st, targetHp, relevant);
