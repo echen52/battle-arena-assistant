@@ -83,6 +83,15 @@ console.log("-- PART 2: Rage's flag belongs to its user, its bonus to the target
   ok(b.state.oppRaging === false, "choosing another move must clear the flag");
   ok(b.state.oppStages.atk === 1, "...without taking the Attack back");
   console.log("   Rage: flag on use, +1 on being hit, flag gone the moment another move is picked");
+  // ...even when that other move never runs. TryClearRageStatuses runs at the
+  // TOP of the turn (src/battle_main.c:4925), so a fully paralysed rager that
+  // chose Cross Chop loses the flag too. The clear used to live inside the
+  // action, which a prevented action never reaches.
+  const para = buildStartState({ you, opp: rager, overrides: { oppRaging: true, oppStatus: "paralysis" } });
+  const stuck = resolveTurn(ctx, para, IDLE, "Cross Chop").filter((x) => /fully paralyzed/.test(x.label));
+  ok(stuck.length === 1 && stuck[0].state.oppRaging === false, "a fully paralysed rager that chose another move loses the flag");
+  const kept = resolveTurn(ctx, para, IDLE, "Rage").filter((x) => /fully paralyzed/.test(x.label));
+  ok(kept.length === 1 && kept[0].state.oppRaging === true, "(control) one that chose Rage keeps it through the paralysis");
 
   // A status move does not feed it: MOVEEND_RAGE requires power != 0 and real
   // damage.

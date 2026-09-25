@@ -6886,18 +6886,10 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
 
   // B2b batch 11: RAGE. Two halves, in two places.
   // (1) The flag. MOVE_EFFECT_RAGE is a primary effect of a LANDED Rage
-  //     (data/battle_scripts_1.s:1140-1146 -> src/battle_script_commands.c:2735),
-  //     and it is cleared for any mon that chose a different move this turn
-  //     (src/battle_util.c:1974-1980) -- which is why the clear is keyed on the
-  //     CHOSEN move, not on the flag's age.
-  {
-    const ragingKey = isYou ? "youRaging" : "oppRaging";
-    if (moveData.effect === "EFFECT_RAGE") {
-      if (hit) s[ragingKey] = true;
-    } else if (chosenMoveName !== "Rage") {
-      s[ragingKey] = false;
-    }
-  }
+  //     (data/battle_scripts_1.s:1140-1146 -> src/battle_script_commands.c:2735).
+  //     Its CLEAR is not here: it happens at the top of the turn, for a battler
+  //     whose chosen move is not Rage (resolveTurnWithOrder).
+  if (moveData.effect === "EFFECT_RAGE" && hit) s[isYou ? "youRaging" : "oppRaging"] = true;
   // B3 batch 1: KNOCK OFF removes the target's item outright (
   // MOVE_EFFECT_KNOCK_OFF, :2863-2890). Sticky Hold blocks it. This became a
   // three-line change the moment batch 10 made items mutable -- before that it
@@ -9012,6 +9004,15 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   // B2b batch 9: bounceMove is a PER-TURN flag (gProtectStructs is cleared each
   // turn), so it never survives into the next one.
   state = { ...state, youBouncing: false, oppBouncing: false };
+  // RAGE'S FLAG is cleared by TryClearRageStatuses (src/battle_util.c:1973-
+  // 1981), called ONCE at the top of the turn (src/battle_main.c:4925), before
+  // any action, for every battler whose CHOSEN move is not Rage -- whether or
+  // not that battler then gets to act. It used to be cleared inside the action,
+  // which a fully paralysed, flinched or sleeping rager never reaches, so its
+  // flag survived a turn it had chosen something else.
+  if ((state.youRaging && yourMove !== "Rage") || (state.oppRaging && oppMove !== "Rage")) {
+    state = { ...state, youRaging: state.youRaging && yourMove === "Rage", oppRaging: state.oppRaging && oppMove === "Rage" };
+  }
 
   const firstMove = order[0] === "you" ? yourMove : oppMove;
   const firstMoveData = order[0] === "you" ? yourMoveData : oppMoveData;
