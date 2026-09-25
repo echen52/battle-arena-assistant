@@ -4290,7 +4290,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // already has a live consumer in AI_CBM_FocusEnergy's already-set check.
     // (folded into volFlags -- B3 batch 7a)
     // STATUS2_MINIMIZE -- doubles EFFECT_FLINCH_MINIMIZE_HIT (Stomp/
-    // Extrasensory), a CHANCE_SECONDARY effect not rolled until B4.
+    // Extrasensory) into this mon; consumed since B4c (sDMG_MULTIPLIER).
     // (folded into volFlags -- B3 batch 7a)
     // STATUS2_DEFENSE_CURL -- doubles EFFECT_ROLLOUT's power; Rollout is still
     // in ACCEPTED_UNMODELED (B3). Tracked so porting Rollout does not have to
@@ -4515,6 +4515,8 @@ const SECONDARY_SPEC = {
   EFFECT_SNORE: { flinch: true },
   EFFECT_SKY_ATTACK: { flinch: true },
   EFFECT_TWISTER: { flinch: true },
+  // B4d: MOVE_EFFECT_CONFUSION (data/battle_scripts_1.s, EffectConfuseHit).
+  EFFECT_CONFUSE_HIT: { confuse: true },
 };
 // B4c: can a flinch change anything? MOVE_EFFECT_FLINCH (:2547-2565) sets
 // STATUS2_FLINCHED only while the target's turn is still to come
@@ -4637,6 +4639,14 @@ function secondaryOutcomesOwn(ctx, state, actor, moveName, moveData, isLastToAct
   if (foe.ability === "Shield Dust") return null;
   if (state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return null;
   const foeSide = isYou ? "opp" : "you";
+  if (spec.confuse) {
+    // MOVE_EFFECT_CONFUSION is byte 7: Safeguard stops it at SetMoveEffect's
+    // head (:2257); its own case (:2533-2545) then skips Own Tempo and an
+    // existing confusion SILENTLY -- no string, certain or not.
+    if (state[isYou ? "oppSafeguardTurns" : "youSafeguardTurns"] != null) return null;
+    if (foe.ability === "Own Tempo" || state[isYou ? "oppConfused" : "youConfused"]) return null;
+    return [{ q, trig: true }];
+  }
   if (spec.flinch) {
     if (flinchCanLand(foe, isLastToAct)) return [{ q, trig: true }];
     // A CERTAIN flinch into Inner Focus prints PKMNSXPREVENTSFLINCHING: Skill.
@@ -4705,6 +4715,13 @@ function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitut
   if (foeHadSubstitute) return;                       // :2266 -- still set, even if this hit broke it
   if ((isYou ? s.oppHpPct : s.yourHpPct) <= 0) return; // :2261
   const foeSide = isYou ? "opp" : "you";
+  if (spec.confuse) {
+    if (s[isYou ? "oppSafeguardTurns" : "youSafeguardTurns"] != null) return;
+    const key = isYou ? "oppConfused" : "youConfused";
+    if (foe.ability === "Own Tempo" || s[key]) return;
+    s[key] = true; // fresh: its first CANCELER_CONFUSED check is check 1
+    return;
+  }
   if (spec.flinch) {
     const pct = secondaryChance(moveName) * (self.ability === "Serene Grace" ? 2 : 1);
     applyFlinch(ctx, s, actor, foeHadSubstitute, pct >= 100);
@@ -4755,11 +4772,10 @@ const MULTI_HIT_DISTRIBUTION = {
 // conventions, matching real game structure:
 //  - power === 0 (status moves): called unconditionally on a successful,
 //    non-blocked use — the effect IS the move, no separate chance roll.
-//  - power > 0 (damaging moves' secondary effects, e.g. Meteor Mash's own
-//    Atk+1): gated by SECONDARY_EFFECT_CHANCE, only rolled after a
-//    confirmed hit, matching Cmd_seteffectwithchance's real behavior
-//    (rolled post-accuracy-check, post-damage; a miss or NO_EFFECT target
-//    never triggers it).
+//  - power > 0: a damaging move's CHANCE secondary no longer runs through
+//    this table. Since B4 it is SECONDARY_SPEC -> applySecondary, rolled at
+//    battle_moves.h's chance after a confirmed, non-NO_EFFECT hit, exactly
+//    where Cmd_seteffectwithchance runs.
 // Each executor: (state, actor) => mutates state's stat stages/status directly.
 function bumpStage(stages, key, delta) {
   stages[key] = Math.max(-6, Math.min(6, stages[key] + delta));
@@ -6295,9 +6311,9 @@ const EFFECT_EXECUTORS = {
   EFFECT_MINIMIZE: (s, actor) => {
     // BattleScript_EffectMinimize (data/battle_scripts_1.s:1476-1480):
     // setminimize, then STAT_EVASION +1 -- Gen III raises it by ONE, not the
-    // two of later generations. The minimize bit only doubles
-    // EFFECT_FLINCH_MINIMIZE_HIT (Stomp/Extrasensory), a CHANCE_SECONDARY
-    // effect not rolled until B4 -- tracked, no consumer yet.
+    // two of later generations. The minimize bit doubles
+    // EFFECT_FLINCH_MINIMIZE_HIT (Stomp/Extrasensory) into this mon -- its
+    // consumer landed in B4c.
     setVf(s, actor === "you" ? "youMinimized" : "oppMinimized", true);
     bumpStage(actor === "you" ? s.youStages : s.oppStages, "evasion", 1);
   },
@@ -6369,9 +6385,9 @@ const EFFECT_EXECUTORS = {
 //     on-hit/on-use MECHANIC is missing" — the move deals correct generic
 //     damage but silently drops an always-happens side effect (self stat-drop,
 //     recharge, charge, lock-in, guaranteed flinch, delayed damage, ...).
-// The bug this closes: for power>0 moves the executor at the bottom of the
-// damage path is gated on `secondaryTriggered`, which is true ONLY for the
-// three SECONDARY_EFFECT_CHANCE moves. Every other power>0 move whose effect
+// The bug this closed (at the time): for power>0 moves the executor at the
+// bottom of the damage path was gated on `secondaryTriggered`, true ONLY for
+// three hand-listed moves (B4 has since replaced that gate). Every power>0 move whose effect
 // carries a mandatory mechanic falls straight through to plain damage with no
 // throw — the same class of silent degradation that hid EFFECT_ABSORB (29
 // sets) and EFFECT_DREAM_EATER (5) until changes #9/#10.
@@ -6469,25 +6485,17 @@ const INLINE_HANDLED_EFFECTS = new Set([
   "EFFECT_FURY_CUTTER",
 ]);
 
-// CHANCE_SECONDARY: effects whose ONLY consequence beyond damage is a
-// PROBABILISTIC secondary (a % status/stat-drop/flinch on an otherwise normal
-// attack). Dropping these is the documented accepted simplification — the
-// engine only rolls a secondary for the three SECONDARY_EFFECT_CHANCE moves;
-// for every other move the secondary is silently skipped. This is a DIFFERENT
-// disposition from ACCEPTED_UNMODELED below: a chance secondary is an
-// intentional probabilistic omission (no warn), not mandatory-mechanic debt.
-// Two are not costless and are the first candidates if this policy is ever
-// revisited: EFFECT_FLINCH_HIT (77 sets — a flinch is a whole turn) and the
-// paralyze family. NOTE: EFFECT_PARALYZE_HIT/FREEZE_HIT/BURN_HIT/POISON_HIT/
-// ATTACK_UP_HIT are also chance secondaries but already sit in HANDLED via
-// EFFECT_EXECUTORS (their executor simply never dispatches off-SECONDARY_EFFECT_
-// CHANCE), so they are intentionally not re-listed here.
+// CHANCE_SECONDARY: the class of effects whose only consequence beyond damage
+// is a PROBABILISTIC secondary. Until B4 these were deliberately never rolled
+// (a hand table knew three moves); B4a-d ported the whole class -- status,
+// stat changes, flinch (with King's Rock) and confusion -- into
+// SECONDARY_SPEC, whose keys are part of HANDLED below. What remains here is
+// the empty set, which is the class's closing record.
 const CHANCE_SECONDARY_EFFECTS = new Set([
-  "EFFECT_CONFUSE_HIT",              // Confusion/Psybeam/Water Pulse confuse %
-  // Snore's flinch %. Its two MANDATORY halves are modelled: the sleep-lock
-  // exemption (enumerateActionOutcomes) and the fails-when-awake executor.
-  // B2b batch 7. Each of these has its mandatory half modelled and a chance
-  // secondary left, which is this class:
+  // EMPTY SINCE B4 (a-d). Every effect that used to sit here -- a chance
+  // secondary that was deliberately never rolled -- now rolls through
+  // SECONDARY_SPEC / applySecondary. The set is kept, empty, so the guard's
+  // derivation and the tools that read it keep their shape.
 ]);
 
 // DAMAGE_MAGNITUDE_ONLY: power>1 effects that deal ordinary power-based damage
@@ -7700,9 +7708,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // B4: secondaries dispatch in the damage path (applySecondary), so this
     // is now the guard alone, for every power>1 move.
     if (moveData.power > 1) {
-      // Mandatory-mechanic guard (change #11). Covers every power>1 move that
-      // did NOT dispatch a secondary executor — i.e. all but the three
-      // SECONDARY_EFFECT_CHANCE moves on their trigger branch. Damage is already
+      // Mandatory-mechanic guard (change #11). Covers every power>1 move; its
+      // chance secondary, if any, already ran in applySecondary. Damage is already
       // applied above; here we only assert that dropping the executor was
       // legitimate. See the HANDLED / ACCEPTED_UNMODELED definitions above for
       // the axis distinction vs SILENT_FALLTHROUGH_EFFECTS.
@@ -8795,8 +8802,8 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           // which for a variable-ratio mon with no fixed/config gender is
           // genuinely uncertain — enumerated here as its own branch (Lesson
           // 1: never re-roll it live in the executor) rather than resolved
-          // as a single probability the way SECONDARY_EFFECT_CHANCE's fixed
-          // percentages are below.
+          // as a single probability the way a chance secondary's fixed
+          // percentage is (secondaryOutcomes).
           const targetMon = actor === "you" ? ctx.opp : ctx.you;
           const userMon = actor === "you" ? ctx.you : ctx.opp;
           let pCompatible = 0;
