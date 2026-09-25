@@ -6419,9 +6419,21 @@ function applyMove(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = f
   const selfLastMoveKey = isYou ? "youLastMove" : "oppLastMove";
   const selfFlashFireKey = isYou ? "youFlashFireActive" : "oppFlashFireActive";
 
-  // gLastMoves[gBattlerAttacker] = gChosenMove — set for every action attempt,
-  // regardless of what happens next (hit/miss/prevented/self-hit).
-  s[selfLastMoveKey] = moveName;
+  // gLastMoves (MOVEEND_UPDATE_LAST_MOVES, src/battle_script_commands.c:
+  // 4389-4414) is `HITMARKER_OBEYS ? gChosenMove : MOVE_UNAVAILABLE`.
+  // B3 batch 7b corrected BOTH halves of what this line used to say:
+  //  - it is the move SELECTED, not the move called: Sleep Talk and Assist use
+  //    `jumptocalledmove TRUE`, which leaves gChosenMove alone, and Metronome /
+  //    Mirror Move only ever set gCurrentMove. So a Metronome user's last move
+  //    is Metronome. (FALSE, which overwrites it, is only in the disobedience
+  //    script.) It used to record the called move.
+  //  - an attempt the canceler chain STOPPED never sets HITMARKER_OBEYS, so it
+  //    records MOVE_UNAVAILABLE. It used to record the move.
+  // UNAVAILABLE is stored as null: every consumer treats the two alike --
+  // Disable, Encore and Mimic fail on either, Torment restricts nothing. The
+  // one approximation is the AI, which in source reads gBattleMoves[0xFFFF]
+  // (past the table) and here sees "no last move".
+  s[selfLastMoveKey] = (statusPrevented || attractPrevented || selfHit) ? null : chosenMoveName;
 
   if (thawed && s[selfStatusKey] === "freeze") s[selfStatusKey] = null;
 
