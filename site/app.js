@@ -8,6 +8,7 @@ import {
   loadCustomSets, saveCustomSet, deleteCustomSet,
   scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove, isDrivableHealMove,
 } from "./ui-logic.js";
+import { HIDDEN_POWER_TYPES } from "../battle_arena_sim/logic.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -39,6 +40,13 @@ fillSelect($("oppSpecies"), SPECIES_LIST);
 fillSelect($("oppSetName"), OPPONENT_SET_NAMES);
 document.querySelectorAll(".move-select, .opp-move-select").forEach((sel) => fillSelect(sel, MOVE_LIST, { withBlank: true }));
 document.querySelectorAll(".stage-select, .opp-stage-select").forEach(fillStageSelect);
+// Hidden Power's type is ENTERED, never guessed (amendment 16): the picker
+// starts blank and a solve with Hidden Power and no type is refused.
+fillSelect($("youHpType"), HIDDEN_POWER_TYPES, { withBlank: true });
+function updateHiddenPowerRow() {
+  $("youHiddenPowerRow").hidden = !readMoves(".move-select").includes("Hidden Power");
+}
+document.querySelectorAll(".move-select").forEach((sel) => sel.addEventListener("change", updateHiddenPowerRow));
 
 // ── Filtering combobox for the two long lists (opponent set: ~552 entries;
 // species: ~386) — a native <select> lets you type-to-jump but doesn't
@@ -262,7 +270,7 @@ function readStages(selector) {
 
 function buildYouConfig() {
   const { evs, ivs } = readEvIvBlock(".ev-input", ".iv-input");
-  return {
+  const config = {
     species: $("youSpecies").value,
     level: Number($("youLevel").value) || 50,
     nature: $("youNature").value,
@@ -271,6 +279,11 @@ function buildYouConfig() {
     evs, ivs,
     moves: readMoves(".move-select"),
   };
+  if (config.moves.includes("Hidden Power")) {
+    if (!$("youHpType").value) throw new Error("Choose your Hidden Power's type.");
+    config.hiddenPower = { type: $("youHpType").value, power: Number($("youHpPower").value) || 70 };
+  }
+  return config;
 }
 
 function buildOppConfig() {
@@ -555,6 +568,9 @@ function applyYouConfig(config) {
   document.querySelectorAll(".iv-input").forEach((el) => { el.value = (config.ivs && config.ivs[el.dataset.stat] != null) ? config.ivs[el.dataset.stat] : 31; });
   const moveSelects = document.querySelectorAll(".move-select");
   moveSelects.forEach((sel, i) => { sel.value = (config.moves && config.moves[i]) || ""; });
+  $("youHpType").value = config.hiddenPower?.type || "";
+  $("youHpPower").value = config.hiddenPower?.power ?? 70;
+  updateHiddenPowerRow();
 }
 
 $("youImport").addEventListener("click", () => {

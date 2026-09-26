@@ -147,7 +147,10 @@ export function serializeToShowdown(config) {
   }
   if (ivParts.length) lines.push("IVs: " + ivParts.join(" / "));
   for (const move of config.moves || []) {
-    if (move) lines.push("- " + move);
+    // Showdown writes the type in brackets; it has no field for the power
+    // (70 is assumed on import, and a saved set keeps the exact value)
+    if (move === "Hidden Power" && config.hiddenPower) lines.push(`- Hidden Power [${config.hiddenPower.type}]`);
+    else if (move) lines.push("- " + move);
   }
   return lines.join("\n");
 }
@@ -193,6 +196,11 @@ export function parseShowdownText(text) {
           if (key) config.ivs[key] = parseInt(pm[1], 10);
         }
       }
+    } else if ((m = line.match(/^-\s*Hidden Power\s*\[?\s*([A-Za-z]+)\s*\]?$/i))) {
+      // "- Hidden Power [Fire]" (Showdown) or "- Hidden Power Fire"
+      const t = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+      config.moves.push("Hidden Power");
+      config.hiddenPower = { type: t, power: 70 };
     } else if ((m = line.match(/^-\s*(.+)$/))) {
       config.moves.push(m[1].trim());
     }

@@ -235,6 +235,9 @@ input[type="checkbox"]:checked + label.btn {
   margin: 10px 0;
 }
 .moves-grid select { width: 100%; }
+.hidden-power-row { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+.hidden-power-row[hidden] { display: none; }
+.hidden-power-row input { width: 55px; }
 
 .hp-block { margin: 10px 0; }
 .hp-block input { width: 55px; }

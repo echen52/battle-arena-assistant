@@ -126,7 +126,74 @@ function buildMon(config) {
     // convenience default) — which is why an opponent's own Frustration, if it
     // ever carries one, computes to 0 power (see calcDamage), not 102.
     friendship: config.friendship ?? (config.moves.includes("Frustration") ? 0 : 255),
+    hiddenPower: resolveHiddenPower(config, iv),
   };
+}
+
+// HIDDEN POWER (C2, amendment 16). Cmd_hiddenpowercalc
+// (src/battle_script_commands.c:8889-8915) derives the power and type from the
+// low two bits of the six IVs:
+//   power = 40 * powerBits / 63 + 30        (30..70)
+//   type  = 15 * typeBits / 63 + 1, skipping TYPE_MYSTERY (so never Normal)
+// For the PLAYER the type and power are ENTERED (`hiddenPower: { type, power }`,
+// power defaulting to 70, the maximum): a player knows their Hidden Power, not
+// necessarily the IVs behind it. Any mon built from explicit IVs (every
+// Frontier mon) derives it, which is what Mimic, Mirror Move and Transform need.
+// A mon that carries Hidden Power with neither is refused, never guessed.
+// Type ids 0..17 (include/constants/pokemon.h:6-24): the physical types, then
+// TYPE_MYSTERY (9), then the special types.
+const TYPE_BY_ID = [...PHYSICAL_TYPES, null, ...SPECIAL_TYPES];
+const HIDDEN_POWER_TYPES = TYPE_BY_ID.filter((t) => t && t !== "Normal");
+function hiddenPowerFromIvs(iv) {
+  const order = ["hp", "atk", "def", "spe", "spa", "spd"]; // source's bit order
+  let powerBits = 0, typeBits = 0;
+  order.forEach((k, i) => { powerBits |= ((iv[k] >> 1) & 1) << i; typeBits |= (iv[k] & 1) << i; });
+  let t = Math.floor((15 * typeBits) / 63) + 1;
+  if (t >= 9) t++;
+  return { type: TYPE_BY_ID[t], power: Math.floor((40 * powerBits) / 63) + 30 };
+}
+function resolveHiddenPower(config, iv) {
+  if (config.hiddenPower) {
+    const { type, power = 70 } = config.hiddenPower;
+    if (!HIDDEN_POWER_TYPES.includes(type)) {
+      throw new Error(`${config.species}: Hidden Power type "${type}" is not one Hidden Power can have (${HIDDEN_POWER_TYPES.join(", ")}).`);
+    }
+    if (!Number.isInteger(power) || power < 30 || power > 70) {
+      throw new Error(`${config.species}: Hidden Power power ${power} is outside 30..70.`);
+    }
+    return { type, power };
+  }
+  if (config.ivs) return hiddenPowerFromIvs(iv);
+  if (config.moves.includes("Hidden Power")) {
+    throw new Error(`"Hidden Power" (effect: EFFECT_HIDDEN_POWER): ${config.species} carries it with no type -- ` +
+      `enter it as { hiddenPower: { type, power } } (power defaults to 70); it is not guessed.`);
+  }
+  return null; // none possible: battleMoveData refuses if it is ever needed
+}
+
+// The move data the BATTLE sees for this mon. Only Hidden Power differs: its
+// type and power come from the user (GET_MOVE_TYPE, include/battle.h:458-464,
+// reads the dynamic type at every battle site), and in Gen 3 the physical /
+// special split follows that type (CalculateBaseDamage, src/pokemon.c:3124-3127,
+// 3232, 3287). Everything that reads gBattleMoves instead -- the AI's view of a
+// move, the Arena's Mind score, the Counter / Mirror Coat record and the fire
+// defrost (F_DYNAMIC_TYPE_IGNORE_PHYSICALITY, src/battle_script_commands.c:
+// 1851-1860) -- keeps MOVES, the base Normal-type entry.
+const _hpMoveData = new WeakMap();
+function battleMoveData(mon, moveName) {
+  const md = MOVES[moveName];
+  if (!md || md.effect !== "EFFECT_HIDDEN_POWER") return md;
+  let out = _hpMoveData.get(mon);
+  if (!out) {
+    const hp = mon.hiddenPower;
+    if (!hp) {
+      throw new Error(`"Hidden Power" (effect: EFFECT_HIDDEN_POWER): ${mon.species} uses it (drawn or copied) ` +
+        `with no Hidden Power type -- build it with { hiddenPower: { type, power } } or explicit IVs.`);
+    }
+    out = { ...md, type: hp.type, power: hp.power, category: PHYSICAL_TYPES.includes(hp.type) ? "physical" : "special" };
+    _hpMoveData.set(mon, out);
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2862,7 +2929,9 @@ function calcDamage(attacker, defender, moveName, {
   // Future Sight fixes its damage this way and never runs typecalc.
   untyped = false,
 } = {}) {
-  const move = MOVES[moveName];
+  // The AI's estimate reads the base entry: AI_CalcDmg runs with the dynamic
+  // type cleared (src/battle_ai_script_commands.c:1470-1474).
+  const move = aiEstimate ? MOVES[moveName] : battleMoveData(attacker, moveName);
   if (move.power === 0) return 0;
   // EFFECT_LEVEL_DAMAGE (Night Shade/Seismic Toss): damage is EXACTLY the
   // user's level — bypasses Atk/Def/STAB/power/the formula entirely, and
@@ -5517,7 +5586,7 @@ const SILENT_FALLTHROUGH_EFFECTS = new Set([
   // EFFECT_MAGNITUDE, EFFECT_PRESENT and EFFECT_ERUPTION through
   // variablePowerFor(). What is left is what is genuinely still unported.
   // B3 batch 4c REMOVED EFFECT_BIDE: modelled (lock, storing, unleash).
-  "EFFECT_HIDDEN_POWER",
+  // C2 REMOVED EFFECT_HIDDEN_POWER: modelled (battleMoveData, amendment 16).
   // EFFECT_RETURN/EFFECT_FRUSTRATION REMOVED from this set — now correctly
   // handled via calcDamage's friendship-based effectivePower (see
   // getFriendshipPower/buildMon's `friendship` field).
@@ -6479,6 +6548,7 @@ const PURE_DAMAGE_EFFECTS = new Set([
   "EFFECT_HIGH_CRITICAL",  // the +1 crit stage is critChanceFor's (B6-2); AI scoring ported #9
   "EFFECT_RETURN",         // friendship-based power handled in calcDamage
   "EFFECT_FRUSTRATION",    // friendship-based power handled in calcDamage
+  "EFFECT_HIDDEN_POWER",   // hiddenpowercalc then BattleScript_EffectHit (data/battle_scripts_1.s:1740-1742); type/power via battleMoveData
   "EFFECT_SKY_UPPERCUT",   // hits-through-Fly bypass; inert here (target never Flies)
   // B2b batch 5. Eruption and Water Spout carry NO on-hit mechanic at all --
   // their whole specialness is the HP-scaled base power, which calcDamage now
@@ -6879,7 +6949,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   // type-chart and damage call below (Normal/Fighting stop being no-effect
   // against its Ghost typing -- see typeEffectiveness).
   const foeForesighted = isYou ? s.oppForesighted : s.youForesighted;
-  const moveData = MOVES[moveName];
+  const moveData = battleMoveData(selfMon, moveName);
   const mindKey = isYou ? "mindYou" : "mindOpp";
   const skillKey = isYou ? "skillYou" : "skillOpp";
   const selfHpKey = isYou ? "yourHpPct" : "oppHpPct";
@@ -7046,6 +7116,10 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     s[isYou ? "youTransform" : "oppTransform"] = {
       species: foeMon.species, types: [...foeMon.types], ability: foeMon.ability,
       stats: nonHp, moves: [...foeMon.moves], genderDist: foeMon.genderDist,
+      // the IVs are copied too: they sit before `pp` in struct BattlePokemon
+      // (include/pokemon.h:260-283), the span Cmd_transformdataexecution copies
+      // (src/battle_script_commands.c:7790) -- so Hidden Power is the TARGET's
+      hiddenPower: foeMon.hiddenPower,
     };
     const foeSt = isYou ? s.oppStages : s.youStages;
     if (isYou) s.youStages = { ...foeSt }; else s.oppStages = { ...foeSt };
@@ -7671,7 +7745,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // assignment per hit (Cmd_datahpupdate), so Counter/Mirror Coat
           // can only ever reflect double the FINAL hit of a multi-hit move,
           // never the total.
-          if (eff !== 0) s[foeDamageTakenKey] = { amount: hitDmg, category: moveData.category };
+          // the BASE category: Hidden Power records as Normal, so only Counter
+          // answers it (F_DYNAMIC_TYPE_IGNORE_PHYSICALITY, :1851-1860)
+          if (eff !== 0) s[foeDamageTakenKey] = { amount: hitDmg, category: MOVES[moveName].category };
           // Destiny Bond: if this hit just KO'd a foe with it armed, the
           // attacker instantly faints too (TrySetDestinyBondToHappen + the
           // faint-check at src/battle_script_commands.c:3020-3026) — only if
@@ -7693,7 +7769,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // Any damaging Fire-type move thaws a frozen target, regardless of user
       // (and regardless of substitute — thaw wasn't confirmed to be blocked
       // by a sub, kept as a passive reaction to being hit either way).
-      if (moveData.type === "Fire" && s[foeStatusKey] === "freeze") s[foeStatusKey] = null;
+      // BASE type: Hidden Power Fire does not defrost (:1851-1860).
+      if (MOVES[moveName].type === "Fire" && s[foeStatusKey] === "freeze") s[foeStatusKey] = null;
 
       // Recoil (see RECOIL_FRACTION above): unconditional on any hit (not
       // gated behind secondaryTriggered — MOVE_EFFECT_CERTAIN, no roll at
@@ -8711,7 +8788,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     // Deterministic: whatever was last used AGAINST this mon, if anything.
     const taken = state[actor === "you" ? "youLastTakenMove" : "oppLastTakenMove"];
     if (taken && MOVES[taken]) {
-      return enumerateActionOutcomes(ctx, state, actor, taken, MOVES[taken], targetCharging, isLastToAct, true)
+      return enumerateActionOutcomes(ctx, state, actor, taken, battleMoveData(actor === "you" ? ctx.you : ctx.opp, taken), targetCharging, isLastToAct, true)
         .map((o) => ({ ...o, calledMove: taken }));
     }
     // Nothing to mirror: resolves as itself and fails.
@@ -8728,7 +8805,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
     const share = 1 / pool.length;
     const out = [];
     for (const called of pool) {
-      for (const o of enumerateActionOutcomes(ctx, state, actor, called, MOVES[called], targetCharging, isLastToAct, true)) {
+      for (const o of enumerateActionOutcomes(ctx, state, actor, called, battleMoveData(actor === "you" ? ctx.you : ctx.opp, called), targetCharging, isLastToAct, true)) {
         out.push({ ...o, p: o.p * share, calledMove: called });
       }
     }
@@ -8811,7 +8888,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
         const out = [];
         const share = 1 / candidates.length;
         for (const called of candidates) {
-          for (const o of enumerateActionOutcomes(ctx, state, actor, called, MOVES[called], targetCharging, isLastToAct, true)) {
+          for (const o of enumerateActionOutcomes(ctx, state, actor, called, battleMoveData(actor === "you" ? ctx.you : ctx.opp, called), targetCharging, isLastToAct, true)) {
             out.push({ ...o, p: o.p * share, calledMove: called, sleepRemaining });
           }
         }
@@ -9330,16 +9407,19 @@ function effectiveMon(mon, state, side) {
   const tf = state[side === "you" ? "youTransform" : "oppTransform"];
   const types = state[side === "you" ? "youTypes" : "oppTypes"];
   if (ability == null && item === undefined && moves == null && tf == null && types == null) return mon;
+  // C2: the key names EVERY field the Transform snapshot contributes (stats and
+  // Hidden Power joined it) -- one mon object meeting two same-species foes
+  // must not reuse the first one's copy.
   let byKey = _effectiveMonCache.get(mon);
   if (!byKey) { byKey = new Map(); _effectiveMonCache.set(mon, byKey); }
-  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}|${tf ? tf.species + ":" + tf.moves.join(",") + ":" + tf.ability : ""}|${types ? types.join(",") : ""}`;
+  const key = `${ability ?? ""}|${item === undefined ? " " : item ?? ""}|${moves ? moves.join(",") : ""}|${tf ? tf.species + ":" + tf.moves.join(",") + ":" + tf.ability + ":" + Object.values(tf.stats).join(",") + ":" + (tf.hiddenPower ? tf.hiddenPower.type + tf.hiddenPower.power : "") : ""}|${types ? types.join(",") : ""}`;
   let out = byKey.get(key);
   if (!out) {
     out = { ...mon };
     // B3 batch 7d: Transform first -- the later overrides sit on top of it.
     if (tf) {
       out.species = tf.species; out.types = tf.types; out.ability = tf.ability;
-      out.moves = tf.moves; out.genderDist = tf.genderDist;
+      out.moves = tf.moves; out.genderDist = tf.genderDist; out.hiddenPower = tf.hiddenPower;
       out.stats = { ...tf.stats, hp: mon.stats.hp };
     }
     if (types != null) out.types = types;  // B8d: Color Change, over Transform
@@ -9409,8 +9489,8 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
   // the swap exists.
   ctx = effectiveCtx(ctx, state);
   const { you, opp } = ctx;
-  const yourMoveData = MOVES[yourMove];
-  const oppMoveData = MOVES[oppMove];
+  const yourMoveData = battleMoveData(you, yourMove);
+  const oppMoveData = battleMoveData(opp, oppMove);
   // Priority beats Speed outright; only tie on priority falls back to Speed.
   // Paralysis quarters EFFECTIVE speed for this comparison only (source-
   // confirmed: applied at the turn-order comparison site, never permanently
@@ -9485,8 +9565,8 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
 
 function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
   const { you, opp } = ctx;
-  const yourMoveData = MOVES[yourMove];
-  const oppMoveData = MOVES[oppMove];
+  const yourMoveData = battleMoveData(you, yourMove);
+  const oppMoveData = battleMoveData(opp, oppMove);
   const results = [];
   state = freshTurnDamageTracking(state);
   // B2b batch 9: bounceMove is a PER-TURN flag (gProtectStructs is cleared each
@@ -9854,7 +9934,7 @@ function evaluateTerminal(state) {
 // ALL win-guaranteed (or all loss-guaranteed), an attacking move is always
 // at least as informative a recommendation as a non-damaging one.
 function moveTiebreakScore(ctx, state, moveName) {
-  const moveData = MOVES[moveName];
+  const moveData = battleMoveData(ctx.you, moveName);
   if (moveData.power === 0) return 0;
   const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
   const defStatKey = moveData.category === "physical" ? "def" : "spd";
@@ -10081,6 +10161,8 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
 
 export {
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
+  // amendment 16: the site's Hidden Power type picker lists exactly these
+  HIDDEN_POWER_TYPES,
   // B7a: surfaced so the test can pin the stage arithmetic to source's integer
   // form directly, instead of inferring it through damage.
   applyStatStage,

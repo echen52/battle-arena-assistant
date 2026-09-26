@@ -18,7 +18,8 @@ const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };
 
 // Every one of these is named and ledgered: Assist and Beat Up by amendment
 // 12; Metronome through its draw pool (it throws on Conversion); the nine
-// Metronome-only effects amendment 12 left unported; Sketch and Snatch, which
+// Metronome-only effects amendment 12 left unported (Hidden Power has since
+// left the list: amendment 16); Sketch and Snatch, which
 // no opponent set carries and which B5 records rather than ports.
 const EXPECTED_THROWS = {
   "Assist": "effect:EFFECT_ASSIST",
@@ -28,7 +29,6 @@ const EXPECTED_THROWS = {
   "Conversion": "effect:EFFECT_CONVERSION",
   "Conversion 2": "effect:EFFECT_CONVERSION_2",
   "False Swipe": "effect:EFFECT_FALSE_SWIPE",
-  "Hidden Power": "effect:EFFECT_HIDDEN_POWER",
   "Metronome": "effect:EFFECT_CONVERSION",
   "Nature Power": "effect:EFFECT_NATURE_POWER",
   "Sketch": "effect:EFFECT_SKETCH",
