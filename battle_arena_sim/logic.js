@@ -7498,8 +7498,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       if (!hit || eff === 0) {
         s[fcKey] = 0;
       } else {
+        furyCutterPower = counterHitPower(s, actor, moveData);
         if (s[fcKey] !== 5) s[fcKey] += 1;
-        furyCutterPower = moveData.power * Math.pow(2, s[fcKey] - 1);
       }
     }
     if (bideUnleash !== null) furyCutterPower = bideUnleash;
@@ -7523,9 +7523,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       } else {
         // A first hit is one made without STATUS2_MULTIPLETURNS already set.
         const timer = (s[lockKey]?.kind === "rollout" ? s[lockKey].n : 5) - 1;
+        furyCutterPower = counterHitPower(s, actor, moveData);
         s[lockKey] = timer === 0 ? null : { move: moveName, kind: "rollout", n: timer };
-        furyCutterPower = moveData.power * Math.pow(2, 5 - timer - 1)
-          * (vf(s, isYou ? "youDefenseCurled" : "oppDefenseCurled") ? 2 : 1);
       }
     }
     // B3 batch 1: HI JUMP KICK'S CRASH, on the MISS side of the damage path --
@@ -9203,6 +9202,26 @@ function disableTimerBranches(ctx, state, actor, moveData, results) {
 // same battleDamageOptions builder. A second, probe-only damage estimate would
 // be the drift anti-pattern this project exists downstream of, and would go
 // wrong the moment either copy gained a modifier the other lacked.
+// C2 (found by the full grid): the power a LANDED hit of a counter-driven move
+// takes, from the state BEFORE the action -- Cmd_furycuttercalc
+// (src/battle_script_commands.c:8580-8602) and Cmd_rolloutdamagecalculation
+// (:8536-8569). applyMoveCore takes its power from here too, so the Focus Band
+// probe below cannot drift from the hit it is probing.
+function counterHitPower(state, actor, moveData) {
+  const isYou = actor === "you";
+  if (moveData.effect === "EFFECT_FURY_CUTTER") {
+    const c = state[isYou ? "youFuryCutter" : "oppFuryCutter"];
+    return moveData.power * Math.pow(2, (c === 5 ? 5 : c + 1) - 1);
+  }
+  if (moveData.effect === "EFFECT_ROLLOUT") {
+    const lock = state[isYou ? "youLock" : "oppLock"];
+    const timer = (lock?.kind === "rollout" ? lock.n : 5) - 1;
+    return moveData.power * Math.pow(2, 5 - timer - 1)
+      * (vf(state, isYou ? "youDefenseCurled" : "oppDefenseCurled") ? 2 : 1);
+  }
+  return null;
+}
+
 function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   const isYou = actor === "you";
   const foeMon = isYou ? ctx.opp : ctx.you;
@@ -9229,8 +9248,16 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   // not KO where a magnitude 10 does, so "can this hit kill?" has no single
   // answer for the move any more. Branches that cannot kill keep the collapse
   // rule's single branch; only the lethal ones split.
-  const lethal = (r) => calcDamage(selfMon, foeMon, moveName,
-    battleDamageOptions(ctx, state, actor, moveData, r.variablePower ?? null)) >= foeHp;
+  // C2: Fury Cutter / Rollout / Ice Ball carry no drawn power -- theirs comes
+  // from their counters (counterHitPower). Bide's body is reached only on the
+  // unleash (storing turns stop at CANCELER_BIDE) or the set turn: the unleash
+  // deals twice the stored damage, the set turn deals none.
+  const bideLock = state[isYou ? "youLock" : "oppLock"];
+  const probePower = moveData.effect === "EFFECT_BIDE"
+    ? (bideLock?.kind === "bide" ? bideLock.dmg * 2 : 0)
+    : counterHitPower(state, actor, moveData);
+  const lethal = (r) => (probePower === 0 ? false : calcDamage(selfMon, foeMon, moveName,
+    battleDamageOptions(ctx, state, actor, moveData, r.variablePower ?? probePower)) >= foeHp);
   if (!results.some((r) => r.hit && r.variablePower !== "heal" && lethal(r))) {
     return results; // no branch can KO, so the proc is unobservable in any of them
   }
