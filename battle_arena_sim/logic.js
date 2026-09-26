@@ -10163,6 +10163,8 @@ export {
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
   // amendment 16: the site's Hidden Power type picker lists exactly these
   HIDDEN_POWER_TYPES,
+  // Phase D: the differential harness asks the AI exactly as search() does
+  effectiveCtx,
   // B7a: surfaced so the test can pin the stage arithmetic to source's integer
   // form directly, instead of inferring it through damage.
   applyStatStage,
