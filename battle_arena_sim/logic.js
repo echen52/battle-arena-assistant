@@ -315,7 +315,11 @@ function defenseFamilyTail(ctx, wastedIfPhysical) {
   }
   const wasted = wastedIfPhysical ? ctx.targetLastMoveWasPhysical : !ctx.targetLastMoveWasPhysical;
   if (wasted) return [{ p: 1, delta: -2 }]; // guaranteed, no roll
-  return [{ p: 60 / 256, delta: 0 }, { p: 196 / 256, delta: -2 }];
+  // Phase D F8: AI_CV_DefenseUp4's / AI_CV_SpDefUp4's roll (60 / 256 jumps to
+  // End) FALLS THROUGH into AI_CV_DefenseUp5's own 60 roll -- two independent
+  // rolls, so the -2 lands on (196/256)^2. This used to roll once.
+  const pass = 60 / 256 + (196 / 256) * (60 / 256);
+  return [{ p: pass, delta: 0 }, { p: 1 - pass, delta: -2 }];
 }
 function defenseFamilyViability(ctx, stageKey, wastedIfPhysical) {
   let dist = [{ p: 1, delta: 0 }];
@@ -325,7 +329,7 @@ function defenseFamilyViability(ctx, stageKey, wastedIfPhysical) {
     dist = combineDist(dist, [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }]);
   }
   if (ctx.userHpPct >= 70) {
-    // 200/256: fully done. 56/256: still falls into the tail below (source
+    // AI_CV_DefenseUp3 / AI_CV_SpDefUp3: 200/256 fully done. 56/256: still falls into the tail below (source
     // asymmetry vs the attack family — the HP>=70 exemption here is only
     // probabilistic, not guaranteed).
     const tail = defenseFamilyTail(ctx, wastedIfPhysical);
@@ -2136,8 +2140,10 @@ const AI_HANDLERS = {
     checkViability: (ctx) => {
       const enc = (a) => CHANGE_SELF_ABILITY_ENCOURAGED.has(a);
       if (enc(ctx.userAbility)) return [{ p: 1, delta: -1 }];
+      // AI_CV_ChangeSelfAbility3 (:2367-2369): if_random_less_than 50 jumps PAST
+      // the +2, so +2 on 206/256 (Phase D F8; was 128/256).
       return taRead(ctx, (a) => (!enc(a) ? [{ p: 1, delta: -1 }]
-        : [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }]));
+        : [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 2 }]));
     },
   },
 
