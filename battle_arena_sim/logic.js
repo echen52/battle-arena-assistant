@@ -96,7 +96,9 @@ function buildMon(config) {
   const { base } = dex;
 
   const stats = {
-    hp:  calcStat(base.hp,  iv.hp,  evs.hp  || 0, config.level, "hp",  config.nature, true),
+    // Phase D F5: CalculateMonStats special-cases Shedinja to max HP 1
+    // (src/pokemon.c:2845-2852).
+    hp:  config.species === "Shedinja" ? 1 : calcStat(base.hp,  iv.hp,  evs.hp  || 0, config.level, "hp",  config.nature, true),
     atk: calcStat(base.atk, iv.atk, evs.atk || 0, config.level, "atk", config.nature, false),
     def: calcStat(base.def, iv.def, evs.def || 0, config.level, "def", config.nature, false),
     spa: calcStat(base.spa, iv.spa, evs.spa || 0, config.level, "spa", config.nature, false),
