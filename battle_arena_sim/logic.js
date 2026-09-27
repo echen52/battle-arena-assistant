@@ -7349,6 +7349,15 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   // including Self Destruct, against a Protect-heavy opponent — a real tell
   // that Self Destruct was being treated as a "safe, no-cost" move whenever
   // protected against).
+  // Phase D F6: DAMP. Cmd_tryexplosion (src/battle_script_commands.c:6556-)
+  // scans EVERY battler, the user included; any Damp stops the move BEFORE
+  // setatkhptozero -- the user survives, nothing is hit, and
+  // BattleScript_DampStopsExplosion prints STRINGID_PKMNPREVENTSUSAGE with no
+  // result flag (+1 - 3). After attackcanceler, so into a Protect too.
+  if (moveData.effect === "EFFECT_EXPLOSION" && (ctx.you.ability === "Damp" || ctx.opp.ability === "Damp")) {
+    s[skillKey] += arenaSkillDelta("landed", ["STRINGID_PKMNPREVENTSUSAGE"]);
+    return;
+  }
   if (moveData.effect === "EFFECT_EXPLOSION") s[selfHpKey] = 0;
 
   if (blockedByProtect) {
@@ -8469,6 +8478,17 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // TRUANT flips its counter every end of turn.
   if (you.ability === "Truant" && s.yourHpPct > 0) setVf(s, "youTruantLoaf", !vf(s, "youTruantLoaf"));
   if (opp.ability === "Truant" && s.oppHpPct > 0) setVf(s, "oppTruantLoaf", !vf(s, "oppTruantLoaf"));
+  // Phase D F6: SPEED BOOST, the same ENDTURN_ABILITIES pass (src/battle_util.c:
+  // 2642-2652): +1 Speed below +6 unless isFirstTurn == 2 -- which a lead never
+  // is here: TryDoEventsBeforeFirstTurn's TurnValuesCleanUp(FALSE) takes it 2 -> 1
+  // before turn 1 (src/battle_main.c:3051, :3901, :4875-4876). So every turn end.
+  for (const [side, mon, hpKey] of [["you", you, "yourHpPct"], ["opp", opp, "oppHpPct"]]) {
+    const st = side === "you" ? s.youStages : s.oppStages;
+    if (mon.ability === "Speed Boost" && s[hpKey] > 0 && st.spe < 6) {
+      if (side === "you") s.youStages = { ...st, spe: st.spe + 1 }; else s.oppStages = { ...st, spe: st.spe + 1 };
+      recordAbility(s, side, "Speed Boost"); // F2a: ENDTURN records on the holder
+    }
+  }
 
   // Leftovers: 1/16 max HP, no-op at full HP, never overheals past max.
   if (s.yourHpPct > 0 && s.yourHpPct < 100 && you.item === "Leftovers") {

@@ -168,7 +168,7 @@ export const CURRENT = {
   "Exploud 3": { move: "Explosion", winProb: 0.5 },
   "Donphan 1": { move: "Explosion", winProb: 0.5 },
   // A9's state-sensitive set
-  "Quagsire 3": { move: "Explosion", winProb: 0.4996093809604645 }, // B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5
+  "Quagsire 3": { move: "Earthquake", winProb: 0.09649695013649762 }, // B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5; Phase D F6: DAMP -- Quagsire 3's Damp stops the Metagross lead's Explosion (Cmd_tryexplosion), which the advice relied on; neutralising only the Damp check restores it; was Explosion 0.4996093809604645
   "Swampert 1": { move: "Explosion", winProb: 0.5 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.5000737108290196 Meteor Mash, the advice FLIPS
   "Snorlax 2": { move: "Meteor Mash", winProb: 0.8146986831037795 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.8027441776394845
   "Ludicolo 1": { move: "Explosion", winProb: 0.5 },
