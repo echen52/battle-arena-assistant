@@ -1,5 +1,9 @@
 // ── move-data.js ───────────────────────────────────────────────────────────
 // Full move dex (354 entries), converted from battle_moves.json.
+// Phase D F10: checked field by field against the ROM table, src/data/battle_moves.h,
+// by arena-solver/tools/move-data-audit.mjs (0 differences). It found Return and
+// Frustration at power 102 (the max-friendship value); the ROM has 1 -- the real
+// power is computed in battle (getFriendshipPower), and the AI reads the table.
 // `category` is DERIVED from type per Gen I-III rules (physical/special is
 // determined by the move's type, not per-move — that split starts Gen IV):
 //   Physical types: Bug, Fighting, Flying, Ghost, Ground, Normal, Poison, Rock, Steel
@@ -3129,7 +3133,7 @@ export const MOVES = {
   "Return": {
     "type": "Normal",
     "category": "physical",
-    "power": 102,
+    "power": 1,
     "accuracy": 100,
     "pp": 20,
     "effect": "EFFECT_RETURN",
@@ -3159,7 +3163,7 @@ export const MOVES = {
   "Frustration": {
     "type": "Normal",
     "category": "physical",
-    "power": 102,
+    "power": 1,
     "accuracy": 100,
     "pp": 20,
     "effect": "EFFECT_FRUSTRATION",

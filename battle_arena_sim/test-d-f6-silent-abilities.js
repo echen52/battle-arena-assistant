@@ -24,7 +24,6 @@
 // Found by the emulator differential ("Speed Boost activates at the end of the
 // first turn in the ROM, not the sim") and the audit of name-only references.
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { buildMon, buildStartState, resolveTurn, arenaSkillDelta, skillDelta } from "./logic.js";
 
 let failures = 0;
@@ -94,7 +93,7 @@ console.log("-- the audit that let them through --");
   // ability-audit.mjs now scans battle code only and exits 1 on any MISSING
   // ability; run against the pre-F6 engine it reports Damp and Speed Boost.
   let code = 0, out = "";
-  try { out = execFileSync("node", [fileURLToPath(new URL("../../arena-solver/tools/ability-audit.mjs", import.meta.url))], { encoding: "utf8" }); }
+  try { out = execFileSync("node", ["C:/Users/azncu/Desktop/pokemon_code/arena-solver/tools/ability-audit.mjs"], { encoding: "utf8" }); }
   catch (e) { code = e.status; out = e.stdout ?? ""; }
   ok(code === 0 && !/MISSING/.test(out), `ability-audit: no MISSING ability, exit 0 (exit ${code})`);
 }

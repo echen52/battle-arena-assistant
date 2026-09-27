@@ -217,7 +217,10 @@ export const CURRENT_DIST = {
   // B7a: Charcoal boosts its Flamethrower in the AI's OWN damage estimate too,
   // so AI_TryToFaint stops splitting with Protect. Was [["Protect", 0.5], ["Flamethrower", 0.5]].
   "Rapidash 1": [["Flamethrower", 0.9375], ["Protect", 0.0625]],
-  "Anabel Silver Entei": [["Fire Blast", 0.7917938232421875], ["Calm Mind", 0.2082061767578125]],
+  // Phase D F10: Return is power 1 in the ROM's table, so the AI never counts it
+  // in get_how_powerful_move_is; it now takes no -1 and is sometimes chosen. Was
+  // [["Fire Blast", 0.7917938232421875], ["Calm Mind", 0.2082061767578125]].
+  "Anabel Silver Entei": [["Fire Blast", 0.7526677449544271], ["Calm Mind", 0.18216451009114584], ["Return", 0.06516774495442709]],
   "Exploud 3": [["Overheat", 0.90625], ["ThunderPunch", 0.09375]],
   "Donphan 1": [["Earthquake", 0.671875], ["Swagger", 0.328125]],
   "Heracross 2": [["Bulk Up", 0.6639811197916666], ["Earthquake", 0.3094579378763835], ["Megahorn", 0.02656094233194987]],

@@ -3165,9 +3165,13 @@ function calcDamage(attacker, defender, moveName, {
       default: break;
     }
   }
-  const effectivePower = moveName === "Flail" || moveName === "Reversal" ? getFlailPower(attackerHpPct)
+  // Phase D F10: EVERY AI estimate reads the table power -- source clears
+  // gDynamicBasePower first (src/battle_ai_script_commands.c:1188-1189,
+  // 1471-1474), so Return / Frustration / Flail / Reversal are power 1 to the
+  // AI, exactly as its power > 1 gates expect.
+  const effectivePower = aiEstimate ? move.power
+    : moveName === "Flail" || moveName === "Reversal" ? getFlailPower(attackerHpPct)
     : (move.effect === "EFFECT_RETURN" || move.effect === "EFFECT_FRUSTRATION") ? getFriendshipPower(move.effect, attacker.friendship)
-    : aiEstimate ? move.power
     : variablePowerFor(move, attacker, defender, attackerHpPct, variablePower, moveName);
 
   const atkStatKey = move.category === "physical" ? "atk" : "spa";
