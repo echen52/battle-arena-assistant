@@ -8222,15 +8222,20 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // on eff !== 0: a type-immune hit never reaches negativedamage in source
       // (MOVE_RESULT_NO_EFFECT skips it), and without this gate the min-1 floor
       // would wrongly heal 1 off a 0 basis. Capped at full HP, mirroring the
-      // Volt/Water-Absorb heal above. Liquid Ooze (jumpifability BS_TARGET,
-      // LIQUID_OOZE -> manipulatedamage DMG_CHANGE_SIGN, which flips the heal into
-      // self-damage) is an ACCEPTED LIMITATION here, not modeled: the target is
-      // always Metagross/Clear Body in this pool and Metagross carries no drain,
-      // so a drain never targets a Liquid Ooze holder.
+      // Volt/Water-Absorb heal above. Liquid Ooze is modelled just below (Phase
+      // D F7; it was an "accepted limitation" while only Metagross was ever the
+      // target -- the full player grid ended that).
       if (DRAIN_EFFECTS.has(moveData.effect) && eff !== 0) {
-        if (foeMon.ability === "Liquid Ooze") recordAbility(s, isYou ? "opp" : "you", "Liquid Ooze"); // F2a (see F7)
         const heal = Math.max(1, Math.floor(drainBasis / 2));
-        s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
+        // Phase D F7: a Liquid Ooze TARGET flips the heal into damage to the
+        // attacker (BattleScript_EffectAbsorb, bs:345-349). Dream Eater's script
+        // (bs:453-461) has no such check: it always heals, and records nothing.
+        if (moveData.effect === "EFFECT_ABSORB" && foeMon.ability === "Liquid Ooze") {
+          recordAbility(s, isYou ? "opp" : "you", "Liquid Ooze"); // F2a
+          s[selfHpKey] = hpSub(s[selfHpKey], heal, selfMon.stats.hp);
+        } else {
+          s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
+        }
       }
       // B7b: Shell Bell (src/battle_util.c:3787-3806). Heals the ATTACKER
       // floor(dmg / param) with param 8, min 1, but ONLY when the move had an
@@ -8519,28 +8524,29 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // maxHP/8 of the seeded mon (floored, min 1, capped at its CURRENT hp — you
   // can't drain more than you have), transfers that SAME raw amount as
   // healing to whoever planted it (capped at their max HP), skipped entirely
-  // if either side has already fainted, and skipped for the receiver only if
-  // they hold Liquid Ooze (:1509-1523, data/battle_scripts_1.s:3265-3280 —
-  // exact "no heal happens" behavior confirmed; whether Liquid Ooze ALSO
-  // deals damage back was not chased further, flagged as unconfirmed).
+  // if either side has already fainted.
+  // Phase D F7: Liquid Ooze is the SEEDED mon's (jumpifability BS_ATTACKER,
+  // data/battle_scripts_1.s:3271), and it turns the heal into DAMAGE to the
+  // seeder (the DMG_CHANGE_SIGN is skipped). This used to check the seeder and
+  // only withhold the heal.
   if (s.youSeeded && s.yourHpPct > 0 && s.oppHpPct > 0) {
     if (you.ability === "Liquid Ooze") recordAbility(s, "you", "Liquid Ooze"); // F2a: bs:3271 (see F7)
     const maxDrain = Math.max(1, Math.floor(you.stats.hp / 8));
     const currentHp = Math.round((s.yourHpPct / 100) * you.stats.hp);
     const drain = Math.min(maxDrain, currentHp);
     s.yourHpPct = hpSub(s.yourHpPct, drain, you.stats.hp);
-    if (opp.ability !== "Liquid Ooze") {
-      s.oppHpPct = hpAdd(s.oppHpPct, drain, opp.stats.hp);
-    }
+    // Phase D F7: the SEEDED mon's Liquid Ooze (jumpifability BS_ATTACKER,
+    // bs:3271) skips the sign flip -- the seeder takes the drain as damage.
+    if (you.ability === "Liquid Ooze") s.oppHpPct = hpSub(s.oppHpPct, drain, opp.stats.hp);
+    else s.oppHpPct = hpAdd(s.oppHpPct, drain, opp.stats.hp);
   }
   if (s.oppSeeded && s.oppHpPct > 0 && s.yourHpPct > 0) {
     const maxDrain = Math.max(1, Math.floor(opp.stats.hp / 8));
     const currentHp = Math.round((s.oppHpPct / 100) * opp.stats.hp);
     const drain = Math.min(maxDrain, currentHp);
     s.oppHpPct = hpSub(s.oppHpPct, drain, opp.stats.hp);
-    if (you.ability !== "Liquid Ooze") {
-      s.yourHpPct = hpAdd(s.yourHpPct, drain, you.stats.hp);
-    }
+    if (opp.ability === "Liquid Ooze") s.yourHpPct = hpSub(s.yourHpPct, drain, you.stats.hp); // F7
+    else s.yourHpPct = hpAdd(s.yourHpPct, drain, you.stats.hp);
   }
 
   // Burn/poison residual: maxHP/8 (Gen III — NOT 1/16 as in later generations).
