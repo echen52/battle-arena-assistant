@@ -722,6 +722,11 @@ const TRICK_CONFUSE_HOLD_EFFECTS = new Set([
   "HOLD_EFFECT_CONFUSE_SPICY", "HOLD_EFFECT_CONFUSE_DRY", "HOLD_EFFECT_CONFUSE_SWEET",
   "HOLD_EFFECT_CONFUSE_BITTER", "HOLD_EFFECT_CONFUSE_SOUR",
 ]);
+// AI_CV_Thief_EncourageItemsToSteal (:1860-1867).
+const THIEF_ENCOURAGED_HOLD_EFFECTS = new Set([
+  "HOLD_EFFECT_CURE_SLP", "HOLD_EFFECT_CURE_STATUS", "HOLD_EFFECT_RESTORE_HP", "HOLD_EFFECT_EVASION_UP",
+  "HOLD_EFFECT_LEFTOVERS", "HOLD_EFFECT_LIGHT_BALL", "HOLD_EFFECT_THICK_CLUB",
+]);
 // AI_CV_Recycle_ItemsToEncourage (:2366-2372).
 const RECYCLE_ENCOURAGED_HOLD_EFFECTS = new Set([
   "HOLD_EFFECT_CURE_PAR", "HOLD_EFFECT_CURE_SLP", "HOLD_EFFECT_CURE_PSN",
@@ -1961,6 +1966,16 @@ const AI_HANDLERS = {
       }
       return [{ p: 1, delta: -3 }];
     },
+  },
+  // Phase D F2b: AI_CV_Thief (data/battle_ai_scripts.s:1848-1858, dispatched
+  // :722; no CBM) had no handler -- ai-dispatch-audit's one reachable gap.
+  // +1 on 206/256 for a target holding an encouraged item, else -2. The AI
+  // believes NONE (see targetHoldEffect), so in play this is a flat -2; the
+  // list is kept whole and pinned to the script by the test.
+  EFFECT_THIEF: {
+    checkViability: (ctx) => (THIEF_ENCOURAGED_HOLD_EFFECTS.has(ctx.targetHoldEffect)
+      ? [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 1 }]
+      : [{ p: 1, delta: -2 }]),
   },
   EFFECT_RECYCLE: {
     // AI_CBM_Recycle (:554-557): -10 with nothing used up to recycle.
@@ -3957,7 +3972,14 @@ function chooseOpponentMoves(opp, you, state) {
     // B2b batch 10. The AI reads hold EFFECTS, not item names, and it reads
     // them through the same generated table the battle does.
     userHoldEffect: (itemData(opp.item) || {}).holdEffect ?? null,
-    targetHoldEffect: (itemData(you.item) || {}).holdEffect ?? null,
+    // Phase D F2b: get_hold_effect AI_TARGET is GetItemHoldEffect(BATTLE_HISTORY->
+    // itemEffects[target]) (src/battle_ai_script_commands.c:2032-2047), and
+    // itemEffects holds a HOLD EFFECT read back as an ITEM ID. The only effects
+    // ever recorded are Focus Band (39) and Leftovers (43); items 39 and 43 are
+    // the Blue and White Flutes, which have no hold effect (src/data/items.h).
+    // So the AI sees NONE in every reachable singles state -- it never learns
+    // the player's item. This used to be the TRUE hold effect.
+    targetHoldEffect: null,
     userUsedItem: state.oppUsedItem != null,
     userUsedHoldEffect: state.oppUsedItem ? ((itemData(state.oppUsedItem) || {}).holdEffect ?? null) : null,
     userStockpile: state.oppStockpile,
@@ -10243,6 +10265,8 @@ export {
   // the UNCAPPED ordering directly rather than inferring them from hit rates.
   accuracyCalc,
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
+  // Phase D F2b: pinned to the script's list by its test.
+  THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
   // assert on the roll classes directly instead of re-deriving them.
   enumerateAiRollOutcomes, AI_SIM_ROLLS, buildAiDamageState,
