@@ -32,8 +32,12 @@ const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } else 
 const mk = (species, moves, over = {}) => buildMon({
   species, level: 50, nature: "Hardy", evs: {}, ability: "Pressure", item: null, moves, friendship: 255, ...over,
 });
+// The head acts on what get_ability AI_TARGET answers. These probes give leads
+// abilities their species need not have, so the AI is told the ability as
+// already RECORDED (F2a's youAbilityRecord) -- the head, not the guess, is
+// what this file tests; test-d-f2a covers the guess.
 const P = (opp, you, over = {}) => {
-  const d = chooseOpponentMoves(opp, you, buildStartState({ you, opp, overrides: over }));
+  const d = chooseOpponentMoves(opp, you, buildStartState({ you, opp, overrides: { youAbilityRecord: you.ability, ...over } }));
   return Object.fromEntries(d.map((c) => [c.move, c.prob]));
 };
 const near = (a, b) => Math.abs((a ?? 0) - b) < 1e-9;

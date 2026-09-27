@@ -28,6 +28,9 @@ import {
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { FRONTIER_POOL } from "./frontier-pool.js";
 import { LEADS, B2B1 } from "./anchors.js";
+// Phase D F2a: the AI sees the target's ability through a belief (recorded,
+// trapping, or the species guess); these probes state it as already seen.
+const seen = (ability) => ({ targetAbilityBelief: [{ p: 1, ability }], targetAbilityIs: (a) => a === ability });
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } };
@@ -41,7 +44,7 @@ const neutralCtx = () => ({
   userAtkStage: 0, userDefStage: 0, userSpeStage: 0, userSpAtkStage: 0,
   userSpDefStage: 0, userAccStage: 0, userEvasionStage: 0,
   targetStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, accuracy: 0, evasion: 0 },
-  targetAbility: "Overgrow", targetFaster: false,
+  ...seen("Overgrow"), targetFaster: false,
   targetForesighted: false, userFocusEnergy: false,
   userTypes: ["Normal"], targetTypes: ["Normal"],
   targetToxicPoisoned: false, targetLeechSeeded: false, userIngrained: false, targetCursed: false,
@@ -61,9 +64,9 @@ console.log("-- PART 1: every handler RESPONDS to the state its source reads --"
   // AI_CBM_DefenseDown -> CheckIfAbilityBlocksStatChange.
   const minDef = { ...neutralCtx(), targetStages: { ...neutralCtx().targetStages, def: -6 } };
   ok(H.EFFECT_DEFENSE_DOWN.checkBadMove(minDef) === -10, "Defense-down into a -6 Def target must score -10");
-  ok(H.EFFECT_DEFENSE_DOWN.checkBadMove({ ...neutralCtx(), targetAbility: "Clear Body" }) === -10,
+  ok(H.EFFECT_DEFENSE_DOWN.checkBadMove({ ...neutralCtx(), ...seen("Clear Body") }) === -10,
     "Clear Body must reach Score_Minus10 through CheckIfAbilityBlocksStatChange");
-  ok(H.EFFECT_DEFENSE_DOWN.checkBadMove({ ...neutralCtx(), targetAbility: "White Smoke" }) === -10,
+  ok(H.EFFECT_DEFENSE_DOWN.checkBadMove({ ...neutralCtx(), ...seen("White Smoke") }) === -10,
     "White Smoke must reach Score_Minus10 too");
   ok(H.EFFECT_DEFENSE_DOWN.checkBadMove(neutralCtx()) === 0, "an ordinary ability must not be penalised");
 
@@ -79,7 +82,7 @@ console.log("-- PART 1: every handler RESPONDS to the state its source reads --"
     "Tickle's viability row names AI_CV_DefenseDown -- it must be the SAME function object, not a copy");
 
   // AI_CBM_SpeedDown's own two extra gates.
-  ok(H.EFFECT_SPEED_DOWN.checkBadMove({ ...neutralCtx(), targetAbility: "Speed Boost" }) === -10,
+  ok(H.EFFECT_SPEED_DOWN.checkBadMove({ ...neutralCtx(), ...seen("Speed Boost") }) === -10,
     "Speed Boost must score -10 for a speed-down move");
   ok(H.EFFECT_SPEED_DOWN.checkBadMove({ ...neutralCtx(), targetStages: { ...neutralCtx().targetStages, spe: -6 } }) === -10,
     "a -6 Speed target must score -10");
@@ -93,7 +96,7 @@ console.log("-- PART 1: every handler RESPONDS to the state its source reads --"
     "Tickle into a -6 Atk target must score -10");
   ok(H.EFFECT_TICKLE.checkBadMove({ ...neutralCtx(), targetStages: { ...neutralCtx().targetStages, def: -6 } }) === -8,
     "Tickle into a -6 Def target must score -8 (Score_Minus8, not Score_Minus10)");
-  ok(H.EFFECT_TICKLE.checkBadMove({ ...neutralCtx(), targetAbility: "Clear Body" }) === 0,
+  ok(H.EFFECT_TICKLE.checkBadMove({ ...neutralCtx(), ...seen("Clear Body") }) === 0,
     "AI_CBM_Tickle ends on its own `end` -- it must NOT fall through to the Clear Body tail");
 
   // EFFECT_MINIMIZE shares both labels with EFFECT_EVASION_UP.

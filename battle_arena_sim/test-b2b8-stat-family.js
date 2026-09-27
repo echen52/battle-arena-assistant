@@ -10,6 +10,9 @@
 // comes from include/constants/battle_move_effects.h at a3c551fe.
 import fs from "node:fs";
 import { AI_HANDLERS, buildMon, buildStartState, applyMove, skillDelta } from "./logic.js";
+// Phase D F2a: the AI sees the target's ability through a belief (recorded,
+// trapping, or the species guess); these probes state it as already seen.
+const seen = (ability) => ({ targetAbilityBelief: [{ p: 1, ability }], targetAbilityIs: (a) => a === ability });
 
 const PE = "C:/Users/azncu/Desktop/pokemon_code/pokeemerald/";
 let failures = 0;
@@ -80,18 +83,18 @@ console.log("-- PART 2: the AI does NOT ignore Hyper Cutter, and the engine used
   // preserved blind spot -- true of the TAIL, false of the routine.
   const base = {
     targetStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, accuracy: 0, evasion: 0 },
-    targetAbility: "Pressure", userHpPct: 100, targetHpPct: 100, targetTypes: ["Normal"],
+    ...seen("Pressure"), userHpPct: 100, targetHpPct: 100, targetTypes: ["Normal"],
   };
   for (const effect of ["EFFECT_ATTACK_DOWN", "EFFECT_ATTACK_DOWN_2"]) {
-    ok(AI_HANDLERS[effect].checkBadMove({ ...base, targetAbility: "Hyper Cutter" }) === -10,
+    ok(AI_HANDLERS[effect].checkBadMove({ ...base, ...seen("Hyper Cutter") }) === -10,
       `${effect} must score -10 against Hyper Cutter`);
     ok(AI_HANDLERS[effect].checkBadMove(base) === 0, `${effect} must score 0 against an ordinary ability`);
   }
   // The shared tail is still the tail: Clear Body and White Smoke block every
   // member of the family, Hyper Cutter only the Attack ones.
-  ok(AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN.checkBadMove({ ...base, targetAbility: "Hyper Cutter" }) === 0,
+  ok(AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN.checkBadMove({ ...base, ...seen("Hyper Cutter") }) === 0,
     "but SpAtk Down must NOT care about Hyper Cutter -- that check belongs to AI_CBM_AttackDown alone");
-  ok(AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN.checkBadMove({ ...base, targetAbility: "Clear Body" }) === -10,
+  ok(AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN.checkBadMove({ ...base, ...seen("Clear Body") }) === -10,
     "...while Clear Body blocks it, through the shared tail");
   console.log("   Hyper Cutter: -10 on both Attack-down effects, 0 on SpAtk-down; Clear Body blocks all");
 }
@@ -103,7 +106,7 @@ console.log("-- PART 3: the SpAtkDown quirk -- it reads the target's ATTACK stag
   // DEFAULT_STAT_STAGE` (:1154). In the SPECIAL Attack handler. Reproduced.
   const mk = (atk, spa) => ({
     targetStages: { atk, def: 0, spa, spd: 0, spe: 0, accuracy: 0, evasion: 0 },
-    targetAbility: "Pressure", userHpPct: 100, targetHpPct: 100, targetTypes: ["Fire"],
+    ...seen("Pressure"), userHpPct: 100, targetHpPct: 100, targetTypes: ["Fire"],
   });
   const H = AI_HANDLERS.EFFECT_SPECIAL_ATTACK_DOWN;
   const flat = ev(H.checkViability(mk(0, 0)));

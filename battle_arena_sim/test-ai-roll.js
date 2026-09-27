@@ -63,7 +63,9 @@ console.log("-- PART 2: no silent fallback to the collapsed roll (hard constrain
   const you = buildMon(METAGROSS), opp = buildMon({ ...cfg, friendship: 255 });
   let threw = false, msg = "";
   try {
-    scoreOpponentMoveDist(opp, you, "Flamethrower", { targetHpPct: 100, targetTypes: you.types });
+    scoreOpponentMoveDist(opp, you, "Flamethrower", { targetHpPct: 100, targetTypes: you.types,
+      // Phase D F2a: the head reads the AI's belief of the ability before TryToFaint
+      targetAbilityBelief: [{ p: 1, ability: you.ability }], targetAbilityIs: (ab) => ab === you.ability });
   } catch (e) { threw = true; msg = e.message; }
   ok(threw, "scoreOpponentMoveDist must THROW for a damaging move with no ctx.aiRolls");
   ok(/aiRolls/.test(msg), "the throw names ctx.aiRolls");

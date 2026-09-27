@@ -680,10 +680,166 @@ const AI_NO_DISPATCH_EFFECTS = new Set([
   "EFFECT_TRANSFORM", "EFFECT_WISH",
 ]);
 
+// Phase D F2a -- what the AI knows of the PLAYER's ability.
+//
+// get_ability AI_TARGET (Cmd_get_ability, src/battle_ai_script_commands.c:
+// 1350-1404) answers from BATTLE_HISTORY->abilities[target] once recorded;
+// else the TRUE ability if it is Shadow Tag / Magnet Pull / Arena Trap; else
+// the species' ability (gBattleMons[].species -- the transformed species after
+// Transform), with a FRESH `Random() & 1` between the two of a two-ability
+// species at EVERY execution. So each get_ability site is its own independent
+// draw: `taRead` mixes the rest of the routine over the belief, and a path with
+// two reads (the head then the Soundproof check; AttackDown / AccDown then
+// CheckIfAbilityBlocksStatChange; Magnitude then HighRiskForDamage) nests two
+// independent mixtures. There is deliberately no ctx.targetAbility any more.
+//
+// check_ability (the `if_ability` macro, asm/macros/battle_ai_script.inc:575-
+// 578; Cmd_check_ability :1407-1455) is different and deterministic: history,
+// else a trapping ability, else for a two-ability species "unable to answer"
+// (never a match), else the one species ability. Only AI_CBM_SpeedDown (:289)
+// uses it on the target in singles.
+const TRAP_ABILITIES = new Set(["Shadow Tag", "Magnet Pull", "Arena Trap"]);
+function aiTargetAbilityBelief(record, mon) {
+  if (record != null) return [{ p: 1, ability: record }];
+  if (TRAP_ABILITIES.has(mon.ability)) return [{ p: 1, ability: mon.ability }];
+  const sp = SPECIES[mon.species]?.abilities;
+  if (!sp || sp.length === 0) throw new Error(`aiTargetAbilityBelief: no species abilities for "${mon.species}"`);
+  return sp.length === 2 ? [{ p: 0.5, ability: sp[0] }, { p: 0.5, ability: sp[1] }] : [{ p: 1, ability: sp[0] }];
+}
+function aiTargetAbilityCheck(record, mon, ability) {
+  if (record != null) return record === ability;
+  if (TRAP_ABILITIES.has(mon.ability)) return mon.ability === ability;
+  const sp = SPECIES[mon.species].abilities;
+  return sp.length === 1 && sp[0] === ability;
+}
+const asDist = (r) => (Array.isArray(r) ? r : [{ p: 1, delta: r }]);
+// One execution of get_ability AI_TARGET: f(ability) is everything the script
+// does after it, returning a scalar delta or a [{p, delta}] distribution.
+function taRead(ctx, f) {
+  const b = ctx.targetAbilityBelief;
+  if (!b) throw new Error("taRead: ctx.targetAbilityBelief missing -- build ctx through chooseOpponentMoves");
+  if (b.length === 1) return f(b[0].ability);
+  const out = [];
+  for (const { p, ability } of b) for (const d of asDist(f(ability))) out.push({ p: p * d.p, delta: d.delta });
+  return out;
+}
+
+// RecordAbilityBattle (src/battle_ai_script_commands.c:643) for the PLAYER --
+// BATTLE_HISTORY->abilities[0], the only history this engine's one AI reads.
+// The call sites follow source's, event by event (survey: phase-d-log F2).
+function recordAbility(s, side, ability) {
+  if (side === "you" && ability) s.youAbilityRecord = ability;
+}
+
+// The move scripts' own ability checks (jumpifability / jumpifcantmakeasleep /
+// tryexplosion / tryinfatuating / tryKO / healpartystatus / the Soundproof
+// block at attackcanceler), called once the move has passed the canceler.
+// Source's attackcanceler Protect branch only sets MISSED and CONTINUES the
+// script (src/battle_script_commands.c:991-1001), so the checks placed before
+// accuracycheck record into a Protect and on a miss alike; the ones after it
+// need a landed move.
+function recordScriptAbilityChecks(ctx, s, actor, moveName, moveData, hit, blockedByProtect) {
+  const isYou = actor === "you";
+  const self = isYou ? ctx.you : ctx.opp, foe = isYou ? ctx.opp : ctx.you;
+  const selfSide = actor, foeSide = isYou ? "opp" : "you";
+  const fa = foe.ability;
+  const foeSub = s[foeSide + "SubstituteHP"] != null;
+  const foeStatus = s[foeSide + "Status"];
+  // ABILITYEFFECT_MOVES_BLOCK (bsc.c:932), inside attackcanceler.
+  if (fa === "Soundproof" && SOUND_MOVES.has(moveName)) { recordAbility(s, foeSide, fa); return; }
+  switch (moveData.effect) {
+    case "EFFECT_TOXIC": case "EFFECT_POISON":        // bs:690, :990 -- first check
+      if (fa === "Immunity") recordAbility(s, foeSide, fa); break;
+    case "EFFECT_PARALYZE":                           // bs:1011 -- first check
+      if (fa === "Limber") recordAbility(s, foeSide, fa); break;
+    case "EFFECT_CONFUSE": case "EFFECT_TEETER_DANCE": // bs:907, :2580
+      if (fa === "Own Tempo") recordAbility(s, foeSide, fa); break;
+    case "EFFECT_WILL_O_WISP":                        // bs:2181, after Sub / burned / Fire
+      if (!foeSub && foeStatus !== "burn" && !foe.types.includes("Fire") && fa === "Water Veil") recordAbility(s, foeSide, fa);
+      break;
+    case "EFFECT_YAWN":                               // bs:2455-2456 -- first checks
+      if (fa === "Vital Spirit" || fa === "Insomnia") recordAbility(s, foeSide, fa); break;
+    case "EFFECT_SLEEP":                              // bs:290 jumpifcantmakeasleep, after Sub / asleep
+      if (!foeSub && foeStatus !== "sleep" && !uproarActive(s) && (fa === "Insomnia" || fa === "Vital Spirit")) recordAbility(s, foeSide, fa);
+      break;
+    case "EFFECT_ROAR":                               // bs:597 -- first check
+      if (fa === "Suction Cups") recordAbility(s, foeSide, fa); break;
+    case "EFFECT_EXPLOSION":                          // Cmd_tryexplosion (:6560-6575): the first Damp
+      if (ctx.you.ability === "Damp") recordAbility(s, "you", "Damp"); // battler from 0 -- the player
+      break;
+    case "EFFECT_REST":                               // bs:740: target = the user (opponent controller
+      if (s[selfSide + "Status"] !== "sleep" && !uproarActive(s)  // sets gBattlerTarget = user)
+          && (self.ability === "Insomnia" || self.ability === "Vital Spirit")) recordAbility(s, selfSide, self.ability);
+      break;
+    case "EFFECT_PERISH_SONG":                        // bs:1578: every battler with Soundproof
+      if (ctx.you.ability === "Soundproof") recordAbility(s, "you", "Soundproof"); break;
+    case "EFFECT_HEAL_BELL":                          // Cmd_healpartystatus (:8394): Heal Bell only
+      if (moveName === "Heal Bell" && self.ability === "Soundproof") recordAbility(s, selfSide, "Soundproof"); break;
+    case "EFFECT_OHKO": {                             // accuracycheck NO_ACC_CALC_CHECK_LOCK_ON, typecalc, tryKO
+      if (blockedByProtect) break;
+      const inv = s[foeSide + "Charging"]?.invulnBit;
+      if (inv && s[foeSide + "AlwaysHitTurns"] == null) break;
+      if (fa === "Levitate" && moveData.type === "Ground") { recordAbility(s, foeSide, fa); break; } // typecalc :1382
+      if (typeEffectiveness(moveData.type, foe.types, s[foeSide + "Foresighted"]) === 0) break;
+      if (fa === "Sturdy") recordAbility(s, foeSide, fa);                                          // tryKO :7518
+      break;
+    }
+  }
+  if (!hit) return;
+  switch (moveData.effect) {
+    case "EFFECT_SWAGGER": case "EFFECT_FLATTER":     // bs:1625 / :2168, after the stat raise
+      if (!foeSub && !(s[foeSide + "Confused"] && (s[foeSide + "Stages"][moveData.effect === "EFFECT_SWAGGER" ? "atk" : "spa"] >= 6))
+          && fa === "Own Tempo") recordAbility(s, foeSide, fa);
+      break;
+    case "EFFECT_ATTRACT":                            // Cmd_tryinfatuating (:7680) -- its first check
+      if (fa === "Oblivious") recordAbility(s, foeSide, fa); break;
+  }
+}
+
+// CheckWonderGuardAndLevitate (bsc.c:1426-1500), reached only from a MISSED
+// accuracy ROLL (Cmd_accuracycheck :1181) -- not from Protect, a semi-
+// invulnerable target or a sure hit, which never roll.
+function recordMissedTypecalcAbility(ctx, s, actor, moveName, moveData) {
+  if (moveData.power === 0 || moveName === "Struggle") return;
+  const isYou = actor === "you";
+  const foe = isYou ? ctx.opp : ctx.you, foeSide = isYou ? "opp" : "you";
+  const inv = s[foeSide + "Charging"]?.invulnBit;
+  if (inv && !INVULN_BYPASS[inv]?.[moveName]) return;
+  if (foe.ability === "Levitate" && moveData.type === "Ground") recordAbility(s, foeSide, "Levitate");
+  if (foe.ability === "Wonder Guard") {
+    const { hadSuper, hadNVE } = typeEffectivenessBreakdown(moveData.type, foe.types, s[foeSide + "Foresighted"]);
+    if (!(hadSuper && !hadNVE)) recordAbility(s, foeSide, "Wonder Guard");
+  }
+}
+
+// AI_CBM_Confuse (data/battle_ai_scripts.s:386-391), dispatched for
+// EFFECT_CONFUSE and EFFECT_SWAGGER (:169): already confused -5, then its own
+// get_ability (Own Tempo -10), then Safeguard -10.
+const aiCbmConfuse = (ctx) => {
+  if (ctx.targetConfused) return -5;
+  return taRead(ctx, (a) => (a === "Own Tempo" || ctx.targetSafeguarded ? -10 : 0));
+};
+
+// AI_CBM_Attract's gender tail (data/battle_ai_scripts.s:459-): -10 unless the
+// two genders are opposite; either may be uncertain for a variable-ratio species.
+function attractGenderDist(ctx) {
+  const bucket = new Map();
+  for (const u of ctx.userGenderDist) {
+    for (const t of ctx.targetGenderDist) {
+      const p = u.p * t.p;
+      if (p === 0) continue;
+      const compatible = u.gender !== "genderless" && t.gender !== "genderless" && u.gender !== t.gender;
+      const delta = compatible ? 0 : -10;
+      bucket.set(delta, (bucket.get(delta) || 0) + p);
+    }
+  }
+  return [...bucket.entries()].map(([delta, p]) => ({ p, delta }));
+}
+
 // CheckIfAbilityBlocksStatChange (data/battle_ai_scripts.s:308-312) -- the
-// shared tail every single-stat-lowering AI_CBM_* `goto`s into.
+// shared tail every single-stat-lowering AI_CBM_* `goto`s into. Its own read.
 const abilityBlocksStatChange = (ctx) =>
-  (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") ? -10 : 0;
+  taRead(ctx, (a) => ((a === "Clear Body" || a === "White Smoke") ? -10 : 0));
 
 // AI_CV_DefenseDown (data/battle_ai_scripts.s:1124-1135), shared by
 // EFFECT_DEFENSE_DOWN and EFFECT_TICKLE (both if_effect rows name this label).
@@ -714,8 +870,7 @@ function defenseDownViability(ctx) {
 // in source, not "at least 2x" -- a real, preserved quirk.
 const highRiskForDamage = (ctx) => {
   if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-  if (ctx.targetAbility === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2) return -10;
-  return 0;
+  return taRead(ctx, (a) => (a === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2 ? -10 : 0));
 };
 
 // AI_CV_Trick_EffectsToEncourage (data/battle_ai_scripts.s:2344-2352) and its
@@ -907,7 +1062,7 @@ const AI_HANDLERS = {
     // shared Clear Body / White Smoke tail.
     checkBadMove: (ctx) => {
       if (ctx.targetStages.spe <= -6) return -10;
-      if (ctx.targetAbility === "Speed Boost") return -10;
+      if (ctx.targetAbilityIs("Speed Boost")) return -10; // if_ability: check_ability (F2a)
       return abilityBlocksStatChange(ctx);
     },
     // AI_CV_SpeedDown (:1142-1152): if the target already outspeeds the user,
@@ -1019,10 +1174,12 @@ const AI_HANDLERS = {
     // Steel/Poison type-immunity check.
     checkBadMove: (ctx) => {
       if (ctx.targetTypes.includes("Steel") || ctx.targetTypes.includes("Poison")) return -10;
-      if (ctx.targetAbility === "Immunity") return -10;
-      if (ctx.targetStatus !== null) return -10;
-      if (ctx.targetSafeguarded) return -10;
-      return 0;
+      return taRead(ctx, (a) => {
+        if (a === "Immunity") return -10;
+        if (ctx.targetStatus !== null) return -10;
+        if (ctx.targetSafeguarded) return -10;
+        return 0;
+      });
     },
     // AI_CV_Toxic — see toxicFamilyViability above (shared with EFFECT_LEECH_SEED).
     checkViability: toxicFamilyViability,
@@ -1046,23 +1203,14 @@ const AI_HANDLERS = {
     // batch) to accept that, exactly like checkViability already does.
     checkBadMove: (ctx) => {
       if (ctx.targetInfatuated) return [{ p: 1, delta: -10 }];
-      if (ctx.targetAbility === "Oblivious") return [{ p: 1, delta: -10 }];
-      const bucket = new Map();
-      for (const u of ctx.userGenderDist) {
-        for (const t of ctx.targetGenderDist) {
-          const p = u.p * t.p;
-          if (p === 0) continue;
-          const compatible = u.gender !== "genderless" && t.gender !== "genderless" && u.gender !== t.gender;
-          const delta = compatible ? 0 : -10;
-          bucket.set(delta, (bucket.get(delta) || 0) + p);
-        }
-      }
-      return [...bucket.entries()].map(([delta, p]) => ({ p, delta }));
+      return taRead(ctx, (a) => (a === "Oblivious" ? [{ p: 1, delta: -10 }] : attractGenderDist(ctx)));
     },
   },
   EFFECT_CONFUSE: {
-    // AI_CBM_Confuse: only penalized if target already confused / Own Tempo / Safeguard.
-    checkBadMove: (ctx) => (ctx.targetConfused ? -5 : 0),
+    // AI_CBM_Confuse (:386-391). Phase D F2a: this handler had only the
+    // "already confused" check -- a half-port; Swagger's copy was whole. Both
+    // now share aiCbmConfuse.
+    checkBadMove: aiCbmConfuse,
     // AI_CV_Confuse — COMPLETE handler, source-verified (data/battle_ai_scripts.s:1467-1477).
     // Real structure: target HP>70% -> no penalty at all. Else a 50%-chance
     // -1 (the ONLY random roll in this handler), then UNCONDITIONAL further
@@ -1148,9 +1296,7 @@ const AI_HANDLERS = {
   EFFECT_OHKO: {
     checkBadMove: (ctx) => {
       if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Sturdy") return -10;
-      if (ctx.userLevel < ctx.targetLevel) return -10;
-      return 0;
+      return taRead(ctx, (a) => (a === "Sturdy" || ctx.userLevel < ctx.targetLevel ? -10 : 0));
     },
     checkViability: () => 0,
   },
@@ -1170,10 +1316,12 @@ const AI_HANDLERS = {
     // handler sampled across the whole file; only AI_CV_* ever rolls dice).
     checkBadMove: (ctx) => {
       if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10; // e.g. Electric vs Ground
-      if (ctx.targetAbility === "Limber") return -10;
-      if (ctx.targetStatus !== null) return -10; // STATUS1_ANY — already has a major status
-      if (ctx.targetSafeguarded) return -10;
-      return 0;
+      return taRead(ctx, (a) => {
+        if (a === "Limber") return -10;
+        if (ctx.targetStatus !== null) return -10; // STATUS1_ANY — already has a major status
+        if (ctx.targetSafeguarded) return -10;
+        return 0;
+      });
     },
     // AI_CV_Paralyze (data/battle_ai_scripts.s:1524-1534) — the "if_random_less_than
     // roll" shape: a single clean 20/256 dice roll gates the bonus, nested
@@ -1207,8 +1355,7 @@ const AI_HANDLERS = {
     // ctx wiring in chooseOpponentMoves and the analyzeMatchup option below.
     checkBadMove: (ctx) => {
       if (ctx.targetUsablePartyMons === 0) return -10;
-      if (ctx.targetAbility === "Suction Cups") return -10;
-      return 0;
+      return taRead(ctx, (a) => (a === "Suction Cups" ? -10 : 0));
     },
     // AI_CV_Roar (data/battle_ai_scripts.s:1290-1303). Control-flow note: the
     // 5 "if_stat_level_more_than ... AI_CV_Roar2" checks JUMP AWAY from the
@@ -1306,11 +1453,12 @@ const AI_HANDLERS = {
     // fail vs Grass-types" exemption relevant to Spore/Sleep Powder — same
     // known gap as flagged on EFFECT_PARALYZE's Stun Spore).
     checkBadMove: (ctx) => {
-      if (ctx.targetAbility === "Insomnia") return -10;
-      if (ctx.targetAbility === "Vital Spirit") return -10;
-      if (ctx.targetStatus !== null) return -10;
-      if (ctx.targetSafeguarded) return -10;
-      return 0;
+      return taRead(ctx, (a) => {
+        if (a === "Insomnia" || a === "Vital Spirit") return -10;
+        if (ctx.targetStatus !== null) return -10;
+        if (ctx.targetSafeguarded) return -10;
+        return 0;
+      });
     },
     // AI_CV_Sleep (:778-787) — ported LITERALLY as written even though it
     // reads unintuitively: it checks whether AI_TARGET (the PLAYER, per
@@ -1536,12 +1684,7 @@ const AI_HANDLERS = {
     // AI_CBM_Confuse (:386-391) — Swagger shares this exact CBM per source
     // (:169). Duplicated here (not referencing AI_HANDLERS.EFFECT_CONFUSE
     // directly) since that handler is explicitly off-limits to touch.
-    checkBadMove: (ctx) => {
-      if (ctx.targetConfused) return -5;
-      if (ctx.targetAbility === "Own Tempo") return -10;
-      if (ctx.targetSafeguarded) return -10;
-      return 0;
-    },
+    checkBadMove: aiCbmConfuse,
     // AI_CV_Swagger (:1462-1490). If the opponent's OWN moveset has Psych
     // Up, it takes a COMPLETELY different branch gated on the TARGET's OWN
     // Atk stage (real > -3, i.e. NOT heavily lowered, is the COMMON case)
@@ -1757,10 +1900,13 @@ const AI_HANDLERS = {
     // separately in the executor below), just a correlated proxy the AI uses
     // for its own scoring.
     checkBadMove: (ctx) => {
-      if (ctx.targetAbility === "Water Veil") return -10;
-      if (ctx.targetStatus !== null) return -10;
-      if (typeEffectiveness("Fire", ctx.targetTypes) <= 0.5) return -10;
-      if (ctx.targetSafeguarded) return -10;
+      return taRead(ctx, (a) => {
+        if (a === "Water Veil") return -10;
+        if (ctx.targetStatus !== null) return -10;
+        if (typeEffectiveness("Fire", ctx.targetTypes) <= 0.5) return -10;
+        if (ctx.targetSafeguarded) return -10;
+        return 0;
+      });
       return 0;
     },
   },
@@ -1769,9 +1915,7 @@ const AI_HANDLERS = {
     // shared CheckIfAbilityBlocksStatChange tail (Clear Body/White Smoke).
     checkBadMove: (ctx) => {
       if (ctx.targetStages.accuracy <= -6) return -10;
-      if (ctx.targetAbility === "Keen Eye") return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
+      return taRead(ctx, (a) => (a === "Keen Eye" ? -10 : abilityBlocksStatChange(ctx)));
     },
     checkViability: accuracyDownFamilyViability,
   },
@@ -1794,25 +1938,21 @@ const AI_HANDLERS = {
     // one example.
     checkBadMove: (ctx) => {
       if (ctx.targetStages.atk <= -6) return -10;
-      if (ctx.targetAbility === "Hyper Cutter") return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
+      return taRead(ctx, (a) => (a === "Hyper Cutter" ? -10 : abilityBlocksStatChange(ctx)));
     },
     checkViability: attackDownFamilyViability,
   },
   EFFECT_SPECIAL_DEFENSE_DOWN_2: {
     checkBadMove: (ctx) => {
       if (ctx.targetStages.spd <= -6) return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
+      return abilityBlocksStatChange(ctx);
     },
     checkViability: (ctx) => statDownDefenseFamilyViability(ctx, "spd"),
   },
   EFFECT_EVASION_DOWN: {
     checkBadMove: (ctx) => {
       if (ctx.targetStages.evasion <= -6) return -10;
-      if (ctx.targetAbility === "Clear Body" || ctx.targetAbility === "White Smoke") return -10;
-      return 0;
+      return abilityBlocksStatChange(ctx);
     },
     checkViability: (ctx) => statDownDefenseFamilyViability(ctx, "evasion"),
   },
@@ -1852,7 +1992,7 @@ const AI_HANDLERS = {
   EFFECT_MAGNITUDE: {
     // AI_CBM_Magnitude (:365-367) adds a Levitate check and then FALLS THROUGH
     // into AI_CBM_HighRiskForDamage -- it does not replace it.
-    checkBadMove: (ctx) => (ctx.targetAbility === "Levitate" ? -10 : highRiskForDamage(ctx)),
+    checkBadMove: (ctx) => taRead(ctx, (a) => (a === "Levitate" ? -10 : highRiskForDamage(ctx))),
   },
   EFFECT_ENDEAVOR: {
     checkBadMove: highRiskForDamage,                        // dispatched :203
@@ -1953,7 +2093,7 @@ const AI_HANDLERS = {
   EFFECT_TRICK: {
     // AI_CBM_TrickAndKnockOff (:545-548): -10 into Sticky Hold, which is the
     // ability that blocks the swap in execution too.
-    checkBadMove: (ctx) => (ctx.targetAbility === "Sticky Hold" ? -10 : 0),
+    checkBadMove: (ctx) => taRead(ctx, (a) => (a === "Sticky Hold" ? -10 : 0)),
     // AI_CV_Trick (:2322-2353). The AI wants to GIVE AWAY a bad item, and the
     // two tables that decide "bad" are generated, not retyped: Choice Band
     // alone in one, plus the confusing berries and Macho Brace in the other.
@@ -1995,8 +2135,9 @@ const AI_HANDLERS = {
   EFFECT_ROLE_PLAY: {
     checkViability: (ctx) => {
       const enc = (a) => CHANGE_SELF_ABILITY_ENCOURAGED.has(a);
-      if (enc(ctx.userAbility) || !enc(ctx.targetAbility)) return [{ p: 1, delta: -1 }];
-      return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }];
+      if (enc(ctx.userAbility)) return [{ p: 1, delta: -1 }];
+      return taRead(ctx, (a) => (!enc(a) ? [{ p: 1, delta: -1 }]
+        : [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }]));
     },
   },
 
@@ -2159,10 +2300,12 @@ const AI_HANDLERS = {
   EFFECT_EXPLOSION: {
     checkBadMove: (ctx) => {
       if (typeEffectiveness(ctx.moveType, ctx.targetTypes) === 0) return -10;
-      if (ctx.targetAbility === "Damp") return -10;
-      if (ctx.userUsablePartyMons !== 0) return 0;
-      if (ctx.targetUsablePartyMons !== 0) return -10;
-      return -1;
+      return taRead(ctx, (a) => {
+        if (a === "Damp") return -10;
+        if (ctx.userUsablePartyMons !== 0) return 0;
+        if (ctx.targetUsablePartyMons !== 0) return -10;
+        return -1;
+      });
     },
     checkViability: (ctx) => {
       const ev = ctx.targetStages.evasion;
@@ -2535,7 +2678,7 @@ const AI_HANDLERS = {
   // since batch 4, same as FOCUS_PUNCH above (partial entry retired); the
   // Sticky Hold discouragement and the target-HP gate were always live.
   EFFECT_KNOCK_OFF: {
-    checkBadMove: (ctx) => (ctx.targetAbility === "Sticky Hold" ? -10 : 0),
+    checkBadMove: (ctx) => taRead(ctx, (a) => (a === "Sticky Hold" ? -10 : 0)),
     checkViability: (ctx) => {
       if (ctx.targetHpPct < 30) return 0;
       if (!ctx.userPastFirstTurn) return 0;
@@ -3284,22 +3427,28 @@ const AI_SOUNDPROOF_MOVES = new Set([
 ]);
 for (const m of AI_SOUNDPROOF_MOVES) if (!MOVES[m]) throw new Error(`AI_SOUNDPROOF_MOVES names unknown move "${m}"`);
 const AI_ABSORB_TYPE = { "Volt Absorb": "Electric", "Water Absorb": "Water", "Flash Fire": "Fire" };
-function checkBadMoveHead(moveName, ctx) {
+// F2a: the whole of AI_CheckBadMove as one distribution -- the head's read,
+// the Soundproof check's own read, then `rest()` (the effect's own AI_CBM_*,
+// reached only on paths where neither ended the script).
+function checkBadMoveChain(moveName, ctx, rest) {
+  const soundproof = () => taRead(ctx, (a) =>
+    (a === "Soundproof" && AI_SOUNDPROOF_MOVES.has(moveName) ? -10 : rest()));
   if (moveName === "Fissure" || moveName === "Horn Drill" || isPowerfulMoveEligible(moveName)) {
     const type = MOVES[moveName].type;
     const eff = typeEffectiveness(type, ctx.targetTypes, ctx.targetForesighted);
     if (eff === 0) return -10;
-    const ability = ctx.targetAbility;
-    if (AI_ABSORB_TYPE[ability] !== undefined) {
-      if (AI_ABSORB_TYPE[ability] === type) return -12;
-    } else if (ability === "Wonder Guard") {
-      if (eff !== 2) return -10;
-    } else if (ability === "Levitate") {
-      if (type === "Ground") return -10;
-    }
+    return taRead(ctx, (ability) => {
+      if (AI_ABSORB_TYPE[ability] !== undefined) {
+        if (AI_ABSORB_TYPE[ability] === type) return -12;
+      } else if (ability === "Wonder Guard") {
+        if (eff !== 2) return -10;
+      } else if (ability === "Levitate") {
+        if (type === "Ground") return -10;
+      }
+      return soundproof();
+    });
   }
-  if (ctx.targetAbility === "Soundproof" && AI_SOUNDPROOF_MOVES.has(moveName)) return -10;
-  return 0;
+  return soundproof();
 }
 
 // Returns the move's full score distribution: [{ p, score }], summing to 1.
@@ -3366,23 +3515,13 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
   // identity, not effect — see its handler comment).
   const moveCtx = { ...ctx, moveType: move.type, moveName };
 
-  // Phase D F1: AI_CheckBadMove's generic head runs BEFORE the effect dispatch,
-  // and a hit there ends the script (see checkBadMoveHead), so the effect's own
-  // AI_CBM_* is only reached when the head scored nothing.
-  const headDelta = checkBadMoveHead(moveName, moveCtx);
-  if (headDelta !== 0) {
-    dist = combineDist(dist, [{ p: 1, delta: headDelta }]);
-  } else if (handler?.checkBadMove) {
-    // Almost every checkBadMove is a plain scalar (AI_CheckBadMove has no
-    // live randomness in most branches ported so far). EFFECT_ATTRACT is the
-    // first exception — its badness genuinely depends on an uncertain
-    // gender (either side's, for a variable-ratio species) — so this mirrors
-    // checkViability's existing array-distribution convention just below,
-    // rather than adding a second, parallel mechanism.
-    const result = handler.checkBadMove(moveCtx);
-    const badMoveDist = Array.isArray(result) ? result : [{ p: 1, delta: result }];
-    dist = combineDist(dist, badMoveDist);
-  }
+  // AI_CheckBadMove as one distribution (Phase D F1 head, F2a reads): the
+  // head and the Soundproof check each end the script on a hit, so the
+  // effect's own AI_CBM_* runs only on the paths that reach it. A handler may
+  // return a scalar or a [{p, delta}] distribution (Attract's gender, every
+  // get_ability read over a two-ability species).
+  dist = combineDist(dist, asDist(checkBadMoveChain(moveName, moveCtx,
+    () => (handler?.checkBadMove ? handler.checkBadMove(moveCtx) : 0))));
 
   // AI_TryToFaint — generic, applies to any damaging move (data/battle_ai_scripts.s:2616-2622).
   if (move.power > 0) {
@@ -3908,7 +4047,11 @@ function chooseOpponentMoves(opp, you, state) {
     userIngrained: state.oppIngrained,
     targetLeechSeeded: state.youSeeded,
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
-    targetAbility: you.ability,
+    // Phase D F2a: what get_ability / check_ability AI_TARGET answer -- the
+    // recorded ability (youAbilityRecord), else a trapping ability, else the
+    // species guess. Never the true ability as such.
+    targetAbilityBelief: aiTargetAbilityBelief(state.youAbilityRecord, you),
+    targetAbilityIs: (ability) => aiTargetAbilityCheck(state.youAbilityRecord, you, ability),
     targetStatus: state.youStatus, // null | "paralysis" | "freeze" | "burn" | "poison" — real STATUS1_ANY gate
     // Phase D F3: the player side's LIVE Safeguard (if_side_affecting AI_TARGET,
     // SIDE_STATUS_SAFEGUARD). Was hardcoded false after B3 had built Safeguard.
@@ -4520,6 +4663,9 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     // Yawn: null = not drowsy, else turns until real sleep infliction is
     // attempted (starts at 2 — src/battle_util.c ENDTURN_YAWN, :1753-1771).
     youYawnTurns: null, oppYawnTurns: null,
+    // Phase D F2a: BATTLE_HISTORY->abilities[player] -- what the AI has seen of
+    // the player's ability (null = nothing recorded). Only the AI reads it.
+    youAbilityRecord: null,
     // Perish Song: whether this side has ever been perish-songed this match
     // (Soundproof/already-set exempts a side at cast time — see
     // EFFECT_EXECUTORS.EFFECT_PERISH_SONG for why no countdown/faint field
@@ -4554,6 +4700,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   // end3. Two Trace holders both stay Trace.
   if (you.ability === "Trace" && opp.ability) base.youAbilityOverride = opp.ability;
   if (opp.ability === "Trace" && you.ability) base.oppAbilityOverride = you.ability === "Trace" ? "Trace" : you.ability;
+  recordBattleStartAbilities(base, you, opp); // Phase D F2a
   if (!overrides) return snapStartHp(base, you, opp); // unchanged path otherwise
   // B3 batch 7a: a legacy per-flag key becomes its volFlags bit instead of an
   // undeclared property (which would also break the state's shape).
@@ -4635,6 +4782,30 @@ function snapStartHp(st, you, opp) {
 function intimidateBlocked(mon, state, side) {
   if (mon.ability === "Clear Body" || mon.ability === "Hyper Cutter" || mon.ability === "White Smoke") return true;
   return state[side === "you" ? "youSubstituteHP" : "oppSubstituteHP"] != null;
+}
+// Phase D F2a: what TryDoEventsBeforeFirstTurn (src/battle_main.c:3862-3883)
+// writes to the player's ability history, in its order -- the switch-in
+// weather abilities (fastest first; the second of two equal ones does not
+// fire), then ABILITYEFFECT_INTIMIDATE1, then ABILITYEFFECT_TRACE. The last two
+// are called with battler 0 and the shared record line (src/battle_util.c:3195)
+// uses that argument: EVERY Intimidate at the start -- the AI's included --
+// records INTIMIDATE as the PLAYER's ability; the AI's Intimidate script then
+// records the player's Clear Body / Hyper Cutter / White Smoke if it has one
+// (data/battle_scripts_1.s:4030-4032). Trace records the traced ability onto
+// battler 0 -- which is the player's resulting ability whichever side traced.
+// A speed tie between two equal weather abilities would be a coin flip; every
+// weather-ability species has that one ability only (test-d-f2a checks it), so
+// the record cannot change the AI's belief and the tie is not branched.
+function recordBattleStartAbilities(base, you, opp) {
+  if (!you || !opp) return;
+  if (permanentWeatherFromAbility(you) && (opp.ability !== you.ability || you.stats.spe > opp.stats.spe)) {
+    recordAbility(base, "you", you.ability);
+  }
+  if (you.ability === "Intimidate" || opp.ability === "Intimidate") recordAbility(base, "you", "Intimidate");
+  if (opp.ability === "Intimidate" && base.youSubstituteHP == null
+      && ["Clear Body", "Hyper Cutter", "White Smoke"].includes(you.ability)) recordAbility(base, "you", you.ability);
+  if (you.ability === "Trace" && opp.ability) recordAbility(base, "you", opp.ability);
+  else if (opp.ability === "Trace" && you.ability) recordAbility(base, "you", you.ability);
 }
 function applyIntimidateOnSwitchIn(base, you, opp) {
   if (!you || !opp) return; // stateless callers (some tests) build without mons
@@ -4909,7 +5080,10 @@ function applyFlinch(ctx, s, actor, foeHadSubstitute, certain) {
   const foe = isYou ? ctx.opp : ctx.you;
   if (foe.ability === "Shield Dust" || foeHadSubstitute || (isYou ? s.oppHpPct : s.yourHpPct) <= 0) return;
   if (foe.ability === "Inner Focus") {
-    if (certain) s[isYou ? "skillYou" : "skillOpp"] -= 3;
+    if (certain) {
+      s[isYou ? "skillYou" : "skillOpp"] -= 3;
+      recordAbility(s, isYou ? "opp" : "you", "Inner Focus"); // F2a
+    }
     return;
   }
   s.turnFlags |= isYou ? TF_OPP_FLINCHED : TF_YOU_FLINCHED;
@@ -5443,8 +5617,12 @@ function statDownExecutor(stageKey, amount, blockingAbility) {
     // `certain` or the move is Curse. Every stat-lowering MOVE in this engine
     // routes through this one function, which is why the check belongs here.
     if (s[actor === "you" ? "oppMistTurns" : "youMistTurns"] != null) return "failed";
-    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
-    if (blockingAbility && foeMon.ability === blockingAbility) return "failed";
+    const foeSideRec = actor === "you" ? "opp" : "you";
+    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke"
+        || (blockingAbility && foeMon.ability === blockingAbility)) {
+      recordAbility(s, foeSideRec, foeMon.ability); // F2a: ChangeStatBuffs :7003 / :7018 / :7031
+      return "failed";
+    }
     const foeStages = actor === "you" ? s.oppStages : s.youStages;
     bumpStage(foeStages, stageKey, -amount);
   };
@@ -6255,7 +6433,7 @@ const EFFECT_EXECUTORS = {
     const self = isYou ? ctx.you : ctx.opp;
     const foe = isYou ? ctx.opp : ctx.you;
     if (!self.item && !foe.item) return "failed";
-    if (foe.ability === "Sticky Hold") return "failed";
+    if (foe.ability === "Sticky Hold") { recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); return "failed"; } // F2a :9233
     s[isYou ? "youItemOverride" : "oppItemOverride"] = foe.item ?? null;
     s[isYou ? "oppItemOverride" : "youItemOverride"] = self.item ?? null;
   },
@@ -6349,8 +6527,11 @@ const EFFECT_EXECUTORS = {
     // Clear Body / White Smoke and Mist -- because statbuffchange is what
     // applies them, and Memento passes STAT_CHANGE_ALLOW_PTR, not `certain`.
     if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null) return;
+    // F2a: ChangeStatBuffs checks Mist before the abilities, so a record needs no Mist.
+    const mistUp = s[isYou ? "oppMistTurns" : "youMistTurns"] != null;
+    if (!mistUp && ["Clear Body", "White Smoke", "Hyper Cutter"].includes(foeMon.ability)) recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
     if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return;
-    if (s[isYou ? "oppMistTurns" : "youMistTurns"] != null) return;
+    if (mistUp) return;
     if (foeMon.ability !== "Hyper Cutter") bumpStage(foeStages, "atk", -2);
     bumpStage(foeStages, "spa", -2);
   },
@@ -6531,8 +6712,12 @@ const EFFECT_EXECUTORS = {
     const isYou = actor === "you";
     const foeMon = isYou ? ctx.opp : ctx.you;
     if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"]) return "failed";
-    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
     const foeStages = isYou ? s.oppStages : s.youStages;
+    // F2a: the record follows the script -- both-at-minimum fails first
+    // (bs:2656-2657), then statbuffchange: Mist, then the abilities.
+    if (!(foeStages.atk <= -6 && foeStages.def <= -6) && s[isYou ? "oppMistTurns" : "youMistTurns"] == null
+        && ["Clear Body", "White Smoke", "Hyper Cutter"].includes(foeMon.ability)) recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
+    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
     if (foeStages.atk <= -6 && foeStages.def <= -6) return "failed";
     if (foeMon.ability !== "Hyper Cutter") bumpStage(foeStages, "atk", -1);
     bumpStage(foeStages, "def", -1);
@@ -6995,11 +7180,17 @@ function applyMove(ctx, s, actor, ...rest) {
     s[side === "you" ? "youStatus" : "oppStatus"] = st;
     if (st === "poison") s[side === "you" ? "youToxicCounter" : "oppToxicCounter"] = null; // toxic passes as poison
   };
-  // MOVEEND_SYNCHRONIZE_TARGET
-  if (foe.ability === "Synchronize" && foePre == null && SYNC_STATUSES.has(s[foeKey])) give(selfSide, self, s[foeKey]);
+  // MOVEEND_SYNCHRONIZE_TARGET (records on the trigger, landed or not -- F2a)
+  if (foe.ability === "Synchronize" && foePre == null && SYNC_STATUSES.has(s[foeKey])) {
+    recordAbility(s, foeSide, "Synchronize");
+    give(selfSide, self, s[foeKey]);
+  }
   // MOVEEND_SYNCHRONIZE_ATTACKER
   if (self.ability === "Synchronize" && selfPre == null && SYNC_STATUSES.has(s[selfKey])
-      && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) give(foeSide, foe, s[selfKey]);
+      && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) {
+    recordAbility(s, selfSide, "Synchronize");
+    give(foeSide, foe, s[selfKey]);
+  }
 }
 
 function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered = false, statusPrevented = false, thawed = false, endureTriggered = false, sleepRemaining = null, sleepDuration = null, protectTriggered = false, blockedByProtect = false, attractPrevented = false, attractGenderCompatible = null, hitCount = null, focusBanded = false, disableTimer = null, calledMove = null, variablePower = null, cancelReason = null, lockTurns = null, contactProc = null, contactSleep = null, crit = 0) {
@@ -7141,6 +7332,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   }
 
   s[mindKey] += mindDelta(mindMove);
+  recordScriptAbilityChecks(ctx, s, actor, moveName, moveData, hit, blockedByProtect); // Phase D F2a
 
   // Explosion/Self Destruct (effect: "EFFECT_EXPLOSION"): the user's HP is
   // set to 0 UNCONDITIONALLY, confirmed from the real move script
@@ -7470,6 +7662,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   if (moveData.effect === "EFFECT_RECHARGE" && hit) {
     s[isYou ? "youRecharge" : "oppRecharge"] = { move: moveName, timer: 2 };
   }
+  if (moveData.effect === "EFFECT_KNOCK_OFF" && hit && foeMon.item && foeMon.ability === "Sticky Hold"
+      && !foeHadSubstitute && s[foeHpKey] > 0) recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); // F2a
   if (moveData.effect === "EFFECT_KNOCK_OFF" && hit && foeMon.item
       && foeMon.ability !== "Sticky Hold") {
     s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
@@ -7488,6 +7682,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // NOTHING and the target to be holding SOMETHING, and Sticky Hold blocks it.
     const thiefItem = isYou ? s.youItemOverride !== undefined ? s.youItemOverride : ctx.you.item
       : s.oppItemOverride !== undefined ? s.oppItemOverride : ctx.opp.item;
+    if (foeMon.item && foeMon.ability === "Sticky Hold" && !foeHadSubstitute) recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); // F2a
     if (!thiefItem && foeMon.item && foeMon.ability !== "Sticky Hold") {
       s[isYou ? "youItemOverride" : "oppItemOverride"] = foeMon.item;
       s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
@@ -7549,8 +7744,15 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   // Ability interactions (Soundproof/Levitate/Wonder Guard/Absorb/Flash
   // Fire) checked before normal resolution — Soundproof applies to status
   // moves too, so this check runs regardless of moveData.power.
+  // Phase D F2a: a missed roll still runs CheckWonderGuardAndLevitate. (OHKO
+  // moves record through recordScriptAbilityChecks: their roll is in tryKO.)
+  if (!hit && moveData.effect !== "EFFECT_OHKO") recordMissedTypecalcAbility(ctx, s, actor, moveName, moveData);
   if (hit || moveData.power === 0) {
     const interaction = resolveAbilityInteraction(moveName, moveData, selfMon, foeMon, foeForesighted);
+    // F2a: typecalc records Levitate / Wonder Guard (bsc.c:1382, :1418),
+    // ABILITYEFFECT_ABSORBING the absorbers (src/battle_util.c:3195 via
+    // JumpIfMoveFailed :1021); Soundproof was recorded at the canceler.
+    if (interaction.type !== "normal") recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
     if (interaction.type === "blocked") {
       s[skillKey] += interaction.skillDelta;
       return;
@@ -7873,6 +8075,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // `jumpifmove MOVE_STRUGGLE` UNCONDITIONALLY, before the Rock Head check
       // runs at all. This stopped being moot in batch 11, when Struggle became
       // reachable as the no-legal-move fallback.
+      if (recoilDivisor && moveName !== "Struggle" && selfMon.ability === "Rock Head") recordAbility(s, isYou ? "you" : "opp", "Rock Head"); // F2a
       if (recoilDivisor && (moveName === "Struggle" || selfMon.ability !== "Rock Head")) {
         const recoilDmg = Math.max(1, Math.floor(recoilBasis / recoilDivisor));
         s[selfHpKey] = hpSub(s[selfHpKey], recoilDmg, selfMon.stats.hp);
@@ -7952,12 +8155,16 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           && eff !== 0 && dmg > 0 && !foeHadSubstitute && s[foeHpKey] > 0
           && !foeMon.types.includes(moveData.type)) {
         s[isYou ? "oppTypes" : "youTypes"] = [moveData.type];
+        recordAbility(s, isYou ? "opp" : "you", "Color Change"); // F2a
       }
       // B8: THE CONTACT ABILITIES, applied to the ATTACKER after the hit. The
       // conditions match contactAbilityBranches; the attacker must still be up
       // (recoil has already been taken by now).
       if (moveData.power > 0 && moveFlags(moveName).makesContact && eff !== 0 && dmg > 0
           && !foeHadSubstitute && s[selfHpKey] > 0 && (hitCount ?? 1) === 1) {
+        // F2a: ABILITYEFFECT_ON_DAMAGE records on the trigger itself, whether or
+        // not the status then lands (src/battle_util.c:2767-2866 -> :3195).
+        if (foeMon.ability === "Rough Skin" || contactProc) recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
         if (foeMon.ability === "Rough Skin") {
           // :2767-2781 -- no roll: 1/16 of the ATTACKER's max HP, min 1.
           const rs = Math.max(1, Math.floor(selfMon.stats.hp / 16));
@@ -7965,7 +8172,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         }
         if (contactProc === "attract") {
           s[isYou ? "youAttracted" : "oppAttracted"] = true;
-        } else if (contactProc) {
+        } else if (contactProc && contactProc !== "record") {
           const side = isYou ? "you" : "opp";
           if (canTakeContactStatus(s, side, contactProc, selfMon)) {
             s[selfStatusKey] = contactProc;
@@ -7975,6 +8182,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
             }
           }
         }
+      } else if (contactProc === "record" && (hitCount ?? 1) > 1 && eff !== 0 && dmg > 0 && !foeHadSubstitute) {
+        recordAbility(s, isYou ? "opp" : "you", foeMon.ability); // F2a: a record-only multi-hit trigger
       } else if (moveData.power > 0 && moveFlags(moveName).makesContact && foeMon.ability === "Rough Skin"
                  && (hitCount ?? 1) > 1 && eff !== 0 && !foeHadSubstitute) {
         throw new Error(`"${moveName}" is a multi-hit contact move into Rough Skin (${foeMon.species}): ` +
@@ -8010,6 +8219,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // always Metagross/Clear Body in this pool and Metagross carries no drain,
       // so a drain never targets a Liquid Ooze holder.
       if (DRAIN_EFFECTS.has(moveData.effect) && eff !== 0) {
+        if (foeMon.ability === "Liquid Ooze") recordAbility(s, isYou ? "opp" : "you", "Liquid Ooze"); // F2a (see F7)
         const heal = Math.max(1, Math.floor(drainBasis / 2));
         s[selfHpKey] = hpAdd(s[selfHpKey], heal, selfMon.stats.hp);
       }
@@ -8235,6 +8445,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // and ENDTURN_ITEMS1=2 — src/battle_util.c:2601-2619).
   if (weather === "rain") {
     if (you.ability === "Rain Dish" && s.yourHpPct > 0 && s.yourHpPct < 100) {
+      recordAbility(s, "you", "Rain Dish"); // F2a
       const heal = Math.max(1, Math.floor(you.stats.hp / 16));
       s.yourHpPct = hpAdd(s.yourHpPct, heal, you.stats.hp);
     }
@@ -8249,6 +8460,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // SHED SKIN clears the whole major status and STATUS2_NIGHTMARE.
   for (const side of ["you", "opp"]) {
     if (!shedSkinCure?.[side]) continue;
+    recordAbility(s, side, "Shed Skin"); // F2a: ENDTURN_ABILITIES records the cure
     s[side === "you" ? "youStatus" : "oppStatus"] = null;
     s[side === "you" ? "youSleepTurns" : "oppSleepTurns"] = null;
     s[side === "you" ? "youToxicCounter" : "oppToxicCounter"] = null;
@@ -8292,6 +8504,7 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   // exact "no heal happens" behavior confirmed; whether Liquid Ooze ALSO
   // deals damage back was not chased further, flagged as unconfirmed).
   if (s.youSeeded && s.yourHpPct > 0 && s.oppHpPct > 0) {
+    if (you.ability === "Liquid Ooze") recordAbility(s, "you", "Liquid Ooze"); // F2a: bs:3271 (see F7)
     const maxDrain = Math.max(1, Math.floor(you.stats.hp / 8));
     const currentHp = Math.round((s.yourHpPct / 100) * you.stats.hp);
     const drain = Math.min(maxDrain, currentHp);
@@ -9283,15 +9496,23 @@ function contactAbilityBranches(ctx, state, actor, moveName, moveData, results) 
   const selfSide = isYou ? "you" : "opp";
   // Each proc: [probability, outcome fields]. Unobservable ones are dropped.
   const procs = [];
+  // Phase D F2a: a trigger that cannot land is no longer unobservable when the
+  // HOLDER is the player -- it records the ability for the AI. Those triggers
+  // become a "record" branch; for the AI's own holder they stay dropped.
+  const recordable = !isYou;
   if (ab in CONTACT_STATUS_ABILITY) {
     const st = CONTACT_STATUS_ABILITY[ab];
     if (canTakeContactStatus(state, selfSide, st, attacker)) procs.push([1 / 3, { contactProc: st }]);
+    else if (recordable) procs.push([1 / 3, { contactProc: "record" }]);
   } else if (ab === "Effect Spore") {
-    if (canTakeContactStatus(state, selfSide, "poison", attacker)) procs.push([1 / 30, { contactProc: "poison" }]);
-    if (canTakeContactStatus(state, selfSide, "paralysis", attacker)) procs.push([1 / 30, { contactProc: "paralysis" }]);
+    let landed = 0;
+    if (canTakeContactStatus(state, selfSide, "poison", attacker)) { procs.push([1 / 30, { contactProc: "poison" }]); landed += 1 / 30; }
+    if (canTakeContactStatus(state, selfSide, "paralysis", attacker)) { procs.push([1 / 30, { contactProc: "paralysis" }]); landed += 1 / 30; }
     if (canTakeContactStatus(state, selfSide, "sleep", attacker)) {
       for (const d of [2, 3, 4, 5]) procs.push([1 / 120, { contactProc: "sleep", contactSleep: d }]);
+      landed += 1 / 30;
     }
+    if (recordable && landed < 1 / 10) procs.push([1 / 10 - landed, { contactProc: "record" }]);
   } else if (ab === "Cute Charm") {
     // Gender uses the engine's Attract treatment: a per-use compatibility
     // probability from each species' gender distribution.
@@ -9304,6 +9525,19 @@ function contactAbilityBranches(ctx, state, actor, moveName, moveData, results) 
     }
   }
   if (procs.length === 0) return results;
+  // F2a: when EVERY trigger is record-only nothing changes between hits, so a
+  // multi-hit move records with 1 - (1 - q)^hits -- exact, no per-hit chain.
+  if (procs.every(([, f]) => f.contactProc === "record")) {
+    const q = procs.reduce((a, [p]) => a + p, 0);
+    const out = [];
+    for (const r of results) {
+      if (r.hit !== true || r.variablePower === "heal" || r.variablePower === "failed") { out.push(r); continue; }
+      const pRec = 1 - Math.pow(1 - q, r.hitCount ?? 1);
+      out.push({ ...r, p: r.p * pRec, contactProc: "record" });
+      out.push({ ...r, p: r.p * (1 - pRec) });
+    }
+    return out;
+  }
   if (results.some((r) => r.hit && (r.hitCount ?? 1) > 1)) {
     throw new Error(`"${moveName}" is a multi-hit contact move into ${ab} (${holder.species}). Source rolls ` +
       `ABILITYEFFECT_ON_DAMAGE after EVERY hit; the per-hit chain is not modelled. Port it before this ` +
