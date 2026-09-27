@@ -4713,6 +4713,15 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   if (you.ability === "Trace" && opp.ability) base.youAbilityOverride = opp.ability;
   if (opp.ability === "Trace" && you.ability) base.oppAbilityOverride = you.ability === "Trace" ? "Trace" : you.ability;
   recordBattleStartAbilities(base, you, opp); // Phase D F2a
+  // Phase D F16: then the switch-in items, fastest first (src/battle_main.c:
+  // 3884-3894). ITEMEFFECT_ON_SWITCH_IN (src/battle_util.c:3305-3330) has one
+  // case that can matter here, White Herb, which restores what Intimidate just
+  // lowered and is consumed (BattleScript_WhiteHerbEnd2 -> removeitem,
+  // data/battle_scripts_1.s:4345-4354) -- the same restore as the end-of-turn
+  // case, so it is that code. Each side restores only its own stages, so the
+  // order between the two cannot matter. (HOLD_EFFECT_DOUBLE_PRIZE is prize
+  // money.) The engine used to leave the drop until the end of turn 1.
+  applySwitchInItems(base, you, opp);
   if (!overrides) return snapStartHp(base, you, opp); // unchanged path otherwise
   // B3 batch 7a: a legacy per-flag key becomes its volFlags bit instead of an
   // undeclared property (which would also break the state's shape).
@@ -4818,6 +4827,12 @@ function recordBattleStartAbilities(base, you, opp) {
       && ["Clear Body", "Hyper Cutter", "White Smoke"].includes(you.ability)) recordAbility(base, "you", you.ability);
   if (you.ability === "Trace" && opp.ability) recordAbility(base, "you", opp.ability);
   else if (opp.ability === "Trace" && you.ability) recordAbility(base, "you", you.ability);
+}
+function applySwitchInItems(base, you, opp) {
+  if (!you || !opp) return;
+  for (const [side, mon] of [["you", you], ["opp", opp]]) {
+    if (itemData(mon.item)?.holdEffect === "HOLD_EFFECT_RESTORE_STATS") tryEndOfTurnItem(base, side, mon);
+  }
 }
 function applyIntimidateOnSwitchIn(base, you, opp) {
   if (!you || !opp) return; // stateless callers (some tests) build without mons
