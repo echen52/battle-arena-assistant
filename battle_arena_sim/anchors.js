@@ -159,7 +159,7 @@ export const A6_PRE = {
 export const CURRENT = {
   // A2's roll-sensitive set
   "Entei 1": { move: "Explosion", winProb: 0.046614478031794235 },
-  "Rhydon 1": { move: "Earthquake", winProb: 0.29616676691898647 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.2583394646841043
+  "Rhydon 1": { move: "Earthquake", winProb: 0.24072430208602924 }, // F14: Quick Claw -- ONE gRandomTurnNumber decides the AI's speed read and the turn order; the search now takes the joint draw (F13's AI ignoring it: 0.29616676691898647; AI mixture with an independent order draw: 0.24632796691809244); was 0.29616676691898647;  B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.2583394646841043
   "Rhydon 3": { move: "Earthquake", winProb: 0.08420545496232806 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.03589395753741264
   "Rhydon 4": { move: "Earthquake", winProb: 0.08420545496232806 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.03589395753741264
   "Houndoom 1": { move: "Earthquake", winProb: 0.1224732079558866 }, // F13: the AI is the script interpreter -- the same distributions summed in another order (max per-move difference 1.1e-16 over 5,423 AI calls in these five cells); was 0.12247320795588662;  B7c: holds Focus Band; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.11759039545588663
@@ -191,7 +191,7 @@ export const CURRENT = {
   "Lucy Silver Milotic": { move: "Shadow Ball", winProb: 0.9059897259451317 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9859237670898438
   "Tucker Gold Swampert": { move: "Earthquake", winProb: 0.5314903259277344 }, // B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.52921875
   "Regirock 2": { move: "Meteor Mash", winProb: 0.4142447724693017 }, // B7c: holds Quick Claw; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.40152383887764
-  "Golem 1": { move: "Meteor Mash", winProb: 0.9558105218525705 }, // B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9630743324033422
+  "Golem 1": { move: "Meteor Mash", winProb: 0.9523363279839184 }, // F14: Quick Claw's draw is shared by the AI and the turn order; the joint draw moves it DOWN where an independent draw would move it up (0.9559831483133733); was 0.9558105218525705;  B7c: holds Quick Claw -- and the advice FLIPS; B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.9630743324033422
 };
 
 // Cross-lead cells, keyed "Lead|Set". A3's poison-sensitive set.
@@ -210,7 +210,7 @@ export const CURRENT_CELLS = {
 // collapse, visible.
 export const CURRENT_DIST = {
   "Entei 1": [["Flamethrower", 0.8851824601491293], ["Double Team", 0.08635433514912924], ["Calm Mind", 0.02846320470174154]],
-  "Rhydon 1": [["Earthquake", 0.68212890625], ["Rock Tomb", 0.31787109375]],
+  "Rhydon 1": [["Earthquake", 0.7457021549344063], ["Rock Tomb", 0.2542978450655937]], // F14: the mixture over the Quick Claw draw (fired, the AI believes it moves first); was 0.68212890625 / 0.31787109375
   "Rhydon 3": [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
   "Rhydon 4": [["Earthquake", 0.9375], ["Horn Drill", 0.0625]],
   "Houndoom 1": [["Flamethrower", 0.7916666666666666], ["Counter", 0.10416666666666667], ["Will-O-Wisp", 0.10416666666666667]],
@@ -228,7 +228,7 @@ export const CURRENT_DIST = {
   "Lucy Silver Milotic": [["Mirror Coat", 0.5], ["Surf", 0.5]],
   "Tucker Gold Swampert": [["Earthquake", 0.65625], ["Mirror Coat", 0.34375]],
   "Regirock 2": [["Earthquake", 0.4674479166666667], ["Counter", 0.4674479166666667], ["Explosion", 0.06510416666666667]],
-  "Golem 1": [["Rock Tomb", 0.49951171875], ["Earthquake", 0.406494140625], ["Counter", 0.093994140625]],
+  "Golem 1": [["Earthquake", 0.45644455030560493], ["Rock Tomb", 0.39961089938879013], ["Counter", 0.14394455030560493]], // F14: the mixture over the Quick Claw draw; was Rock Tomb 0.49951171875 / Earthquake 0.406494140625 / Counter 0.093994140625
 };
 
 // ── B2B1 — the sets B2b batch 1 (the stat-stage family) made solvable ──────

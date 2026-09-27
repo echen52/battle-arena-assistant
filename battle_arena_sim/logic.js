@@ -4324,10 +4324,33 @@ const _aiInterpMemo = new WeakMap();
 // the parity run (arena-solver/tools/ai-parity.mjs) found wrong in four classes
 // the scripts get right by construction: get_weather's stale funcResult,
 // Counter's misaligned if_has_move, TryToFaint's x4 bonus on status moves, and
-// Mirror Move reading gLastMoves. The Quick Claw draw is F14's: until then
-// the AI is run as if it did not fire, as the handlers were.
+// Mirror Move reading gLastMoves. Phase D F14: `opts.qc` conditions on the
+// turn's Quick Claw draw; without it the result is the mixture over the draw.
+// The search does not use the mixture -- see aiTurnPlans.
 function chooseOpponentMoves(opp, you, state, opts = {}) {
-  return chooseOpponentMovesInterp(opp, you, state, { qc: false, ...opts }); // F14 adds the draw
+  return chooseOpponentMovesInterp(opp, you, state, opts);
+}
+
+// Phase D F14: ONE gRandomTurnNumber decides Quick Claw for the AI's speed
+// read AND for the turn order (src/battle_main.c:3923 draws it before action
+// selection; :4653 / :4687 compare against it in GetWhoStrikesFirst, which
+// Cmd_if_user_goes and the turn order both call). The two are correlated, so
+// the turn cannot be the AI's mixture times resolveTurn's own mixture: it is,
+// per draw outcome, P(outcome) x the AI given it x resolveTurn given it.
+// Returns [{ p, qc, cands }]; qc undefined means the draw cannot change the
+// AI's choice here (no holder, or both outcomes give the same distribution),
+// so resolveTurn marginalises it itself -- exactly, and without splitting a
+// subtree it would only duplicate.
+function aiTurnPlans(ec, state) {
+  const h = aiQuickClawHolders(ec.opp, ec.you);
+  const holder = h.opp || h.you;
+  if (!holder) return [{ p: 1, qc: undefined, cands: chooseOpponentMoves(ec.opp, ec.you, state, { qc: false }) }];
+  const fired = chooseOpponentMoves(ec.opp, ec.you, state, { qc: true });
+  const not = chooseOpponentMoves(ec.opp, ec.you, state, { qc: false });
+  const same = fired.length === not.length && fired.every((x, i) => x.move === not[i].move && x.prob === not[i].prob);
+  if (same) return [{ p: 1, qc: undefined, cands: not }];
+  const pFire = quickClawThreshold(holder.param) / QUICK_CLAW_RANDOM_SPACE;
+  return [{ p: pFire, qc: true, cands: fired }, { p: 1 - pFire, qc: false, cands: not }];
 }
 
 // The hand-ported handlers (A2 through F12), superseded by F13 and kept only
@@ -10178,7 +10201,7 @@ function resolutionChanged(a, b) {
     || a.weatherType !== b.weatherType; // Forecast reads the weather
 }
 
-function resolveTurn(ctx, state, yourMove, oppMove) {
+function resolveTurn(ctx, state, yourMove, oppMove, { qc } = {}) {
   // Resolve the overrides ONCE per turn, here, so that every downstream read of
   // mon.ability / mon.item sees the swapped values without any of them knowing
   // the swap exists.
@@ -10248,6 +10271,10 @@ function resolveTurn(ctx, state, yourMove, oppMove) {
   // priority, so a priority gap makes firedOrder === baseOrder automatically.
   const sameShape = firedBranches.length === baseBranches.length
     && firedBranches.every((b, i) => b.order[0] === baseBranches[i].order[0] && b.p === baseBranches[i].p);
+  // F14: a caller that already conditioned on the draw (the search, via
+  // aiTurnPlans) gets that outcome's order only.
+  if (qc === true) return runBranches(firedBranches);
+  if (qc === false) return runBranches(baseBranches);
   if (sameShape) return runBranches(baseBranches);
 
   const pFire = quickClawThreshold((youQC || oppQC).param) / QUICK_CLAW_RANDOM_SPACE;
@@ -10716,9 +10743,11 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null, prune = fa
   // (STATUS2_MULTIPLETURNS, the same branch again).
   const oppForced = state.oppCharging ? state.oppCharging.move : (state.oppRecharge?.move || state.oppLock?.move);
   const youForced = state.youCharging ? state.youCharging.move : (state.youRecharge?.move || state.youLock?.move);
-  const oppCandidates = oppForced
-    ? [{ move: oppForced, prob: 1 }]
-    : (() => { const ec = effectiveCtx(ctx, state); return chooseOpponentMoves(ec.opp, ec.you, state); })();
+  // F14: the opponent's choice per Quick Claw outcome (aiTurnPlans). A forced
+  // move asks no AI, so its turn marginalises the draw in resolveTurn.
+  const plans = oppForced
+    ? [{ p: 1, qc: undefined, cands: [{ move: oppForced, prob: 1 }] }]
+    : aiTurnPlans(effectiveCtx(ctx, state), state);
   const yourMoveChoices = youForced ? [youForced]
     : (() => { const ec = effectiveCtx(ctx, state); return selectableMoves(ec.you.moves, state, "you", ec.opp, "you"); })();
 
@@ -10741,10 +10770,10 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null, prune = fa
     let seen = 0;
     let cut = false;
     const branches = [];
-    for (const { move: oppMove, prob: oppProb } of oppCandidates) {
-      const raw = resolveTurn(ctx, state, yourMove, oppMove);
+    for (const { move: oppMove, prob: oppProb, planP, qc } of plans.flatMap((pl) => pl.cands.map((c) => ({ ...c, planP: pl.p, qc: pl.qc })))) {
+      const raw = resolveTurn(ctx, state, yourMove, oppMove, { qc });
       for (const b of raw) {
-        const weight = b.p * oppProb;
+        const weight = b.p * oppProb * planP;
         const sub = search(ctx, b.state, turnsRemaining - 1, retain, tt, prune);
         expected += weight * sub.winProb;
         seen += weight;
@@ -10881,6 +10910,7 @@ export {
   // Phase D F13: the interpreter path, and the view it reads.
   chooseOpponentMovesInterp, chooseOpponentMovesHandlers, buildAiView, selectableMoves,
   typeCalcRows, // F17
+  aiTurnPlans, // F14
   // Phase D F2b: pinned to the script's list by its test.
   THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
