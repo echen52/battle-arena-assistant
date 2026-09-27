@@ -1286,8 +1286,18 @@ const AI_HANDLERS = {
     },
   },
   EFFECT_ALWAYS_HIT: {
-    // AI_CV_AlwaysHit: only scores if target evasion raised or user acc lowered.
-    checkViability: () => 0, // neither condition modeled yet — extend if a matchup needs it
+    // AI_CV_AlwaysHit (data/battle_ai_scripts.s:1075-1089). Phase D F9: this
+    // returned 0 ("neither condition modeled yet") although both stages are.
+    // Raw stages converted to display: evasion > +4 / accuracy < -4 -> +1 then
+    // AlwaysHit2; evasion > +2 / accuracy < -2 -> AlwaysHit2 alone.
+    // AI_CV_AlwaysHit2: if_random_less_than 100 -> end, else +1 (156/256).
+    checkViability: (ctx) => {
+      const eva = ctx.targetStages.evasion, acc = ctx.userAccStage;
+      const alwaysHit2 = [{ p: 100 / 256, delta: 0 }, { p: 156 / 256, delta: 1 }];
+      if (eva > 4 || acc < -4) return combineDist([{ p: 1, delta: 1 }], alwaysHit2);
+      if (eva > 2 || acc < -2) return alwaysHit2;
+      return 0;
+    },
   },
   // EFFECT_OHKO (Horn Drill/Fissure/Guillotine/Sheer Cold) — the first power>0
   // effect ever added to AI_HANDLERS (every other entry here is a power=0
