@@ -2205,11 +2205,9 @@ const AI_HANDLERS = {
 
   // AI_CBM_FutureSight (:500-504, dispatched :184): -12 if a delayed attack
   // is already queued on EITHER side (SIDE_STATUS_FUTUREATTACK), else +5.
-  // No AI_CV_FutureSight exists in source. The queued state is NOT part of
-  // the modeled battle state (no delayed-attack tracking anywhere in this
-  // engine) — the two ctx flags default false in chooseOpponentMoves,
-  // registering the gap honestly the same way targetCantEscape does; a fresh
-  // state therefore always scores the real +5.
+  // No AI_CV_FutureSight exists in source. The two ctx flags read the live
+  // youFutureSight / oppFutureSight (B3 batch 5b; wired in Phase D F3 -- they
+  // were hardcoded false until then).
   EFFECT_FUTURE_SIGHT: {
     checkBadMove: (ctx) =>
       ctx.futureSightQueuedOnUserSide || ctx.futureSightQueuedOnTargetSide ? -12 : 5,
@@ -3897,7 +3895,9 @@ function chooseOpponentMoves(opp, you, state) {
     // Added for EFFECT_PARALYZE/EFFECT_ROAR/EFFECT_REST (this batch):
     targetAbility: you.ability,
     targetStatus: state.youStatus, // null | "paralysis" | "freeze" | "burn" | "poison" — real STATUS1_ANY gate
-    targetSafeguarded: false, // Safeguard not modeled yet — default false, same convention as above
+    // Phase D F3: the player side's LIVE Safeguard (if_side_affecting AI_TARGET,
+    // SIDE_STATUS_SAFEGUARD). Was hardcoded false after B3 had built Safeguard.
+    targetSafeguarded: state.youSafeguardTurns != null,
     // EFFECT_ATTRACT (this batch): AI_USER is the opponent itself, AI_TARGET
     // is the player — each mon's genderDist was computed once in buildMon.
     // targetInfatuated mirrors STATUS2_INFATUATION — doesn't matter WHO the
@@ -4018,17 +4018,19 @@ function chooseOpponentMoves(opp, you, state) {
     // false -- measured inert in sim-audit.md §2.3. The duplicate is deleted;
     // the real one is the only one. See test-a6-dead-context.js, and the
     // no-duplicate-keys check that now guards the whole file.
-    // Protect/Detect (AI_CV_Protect) — reuses the shared decay counter and
-    // the real (now-wired) targetLeechSeeded flag; everything else it needs
-    // that isn't modeled yet (badly-poisoned/cursed/perish-song/infatuation/
-    // yawn, on either side) defaults false, same convention as above.
+    // Protect/Detect (AI_CV_Protect) — reuses the shared decay counter; every
+    // status it reads on either side is live state (Phase D F3 wired the last
+    // three: the user's Perish Song and both sides' Yawn).
     userProtectCount: state.oppProtectUses,
     userToxicPoisoned: state.oppToxicCounter != null, // A3: mirrored for the opponent's own side
     // A6: userInfatuated is the opponent's OWN infatuation. It was false
     // because only the player could be infatuated; A5 made oppAttracted real.
-    userCursed: state.oppCursed, userPerishSonged: false, userInfatuated: state.oppAttracted,
+    // Phase D F3: userPerishSonged and the two Yawn flags were hardcoded false
+    // after B3 built Perish Song and Yawn (STATUS3_PERISH_SONG / STATUS3_YAWN,
+    // read by AI_CV_Protect :1899, :1902, :1910).
+    userCursed: state.oppCursed, userPerishSonged: vf(state, "oppPerishSonged"), userInfatuated: state.oppAttracted,
     userSeeded: state.oppSeeded, // real — the opponent itself currently seeded by Leech Seed
-    userYawnPending: false, targetYawnPending: false,
+    userYawnPending: state.oppYawnTurns != null, targetYawnPending: state.youYawnTurns != null,
     targetHasRestoreHpOrDefenseCurlMove: you.moves.some((m) => ["EFFECT_RESTORE_HP", "EFFECT_DEFENSE_CURL"].includes(MOVES[m]?.effect)),
     targetLastMoveWasLockOn: state.youLastMove != null && MOVES[state.youLastMove].effect === "EFFECT_LOCK_ON",
     // Weather (Sunny Day/Rain Dance/Sandstorm/Hail). get_weather
@@ -4045,12 +4047,17 @@ function chooseOpponentMoves(opp, you, state) {
     userLevel: opp.level, targetLevel: you.level,
     // Batch-1 lockstep additions: the opponent's OWN major status
     // (AI_CBM_DamageDuringSleep's `if_not_status AI_USER, STATUS1_SLEEP`
-    // check for EFFECT_SNORE), and the Future Sight queued-state flags —
-    // delayed attacks are NOT modeled state, so these are always false here
-    // (see EFFECT_FUTURE_SIGHT's handler comment; same honest-default
-    // convention as targetCantEscape above).
+    // check for EFFECT_SNORE), and the Future Sight queued-state flags.
+    // Phase D F3: these were hardcoded false ("delayed attacks are not
+    // modelled") and stayed so after B3 built Future Sight -- the AI chose it
+    // again with P 1 while one was pending, which the ROM never does.
+    // SIDE_STATUS_FUTUREATTACK is set on the target's side by
+    // Cmd_trysetfutureattack (src/battle_script_commands.c:8937) and cleared
+    // when the attack lands (src/battle_util.c:1818-1823): exactly the
+    // lifetime of youFutureSight / oppFutureSight.
     userStatus: state.oppStatus,
-    futureSightQueuedOnUserSide: false, futureSightQueuedOnTargetSide: false,
+    futureSightQueuedOnUserSide: state.oppFutureSight != null,
+    futureSightQueuedOnTargetSide: state.youFutureSight != null,
     // Batch-3 lockstep additions:
     // if_side_affecting AI_TARGET, SIDE_STATUS_REFLECT (AI_CV_BrickBreak) —
     // the player's own LIVE Reflect screen, the same modeled side-status
