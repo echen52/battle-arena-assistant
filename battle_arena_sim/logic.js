@@ -15,7 +15,12 @@
 import { SPECIES } from "./species-data.js";
 import { MOVES } from "./move-data.js";
 import { ITEM_DATA, itemData } from "./item-data.js";
-import { ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED } from "./ai-tables.js";
+import {
+  ENCORE_ENCOURAGED_EFFECTS, MIRROR_MOVE_ENCOURAGED,
+  // Phase D F12: every other singles-reachable script table, generated too.
+  CHANGE_SELF_ABILITY_ENCOURAGED, RECYCLE_ENCOURAGED_ITEMS, TRICK_EFFECTS_TO_ENCOURAGE,
+  TRICK_EFFECTS_TO_ENCOURAGE_2, THIEF_ITEMS_TO_STEAL, ATTACK_DOWN_PHYSICAL_TYPES, SP_ATK_DOWN_SPECIAL_TYPES,
+} from "./ai-tables.js";
 import { moveFlags, secondaryChance } from "./move-flags.js";
 import { CRIT_EFFECTS } from "./crit-effects.js";
 import { lowKickPower } from "./species-weights.js";
@@ -431,7 +436,7 @@ function speedDownFamilyViability(ctx) {
 // Source's own comment on the physical list notes it "seems likely" to have
 // been meant as "is the target a physical type" and that Flying, Poison and
 // Ghost were left out; the special list below is the one the ROM ships.
-const SP_ATK_DOWN_SPECIAL_TYPICAL_TYPES = ["Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark"];
+const SP_ATK_DOWN_SPECIAL_TYPICAL_TYPES = [...SP_ATK_DOWN_SPECIAL_TYPES]; // generated (F12)
 function statDownOffenseFamilyViability(ctx, stageKey, typicalTypes) {
   let dist = [{ p: 1, delta: 0 }];
   // THE QUIRK: `atk`, deliberately, for both members of this family.
@@ -447,7 +452,7 @@ function statDownOffenseFamilyViability(ctx, stageKey, typicalTypes) {
   return dist;
 }
 
-const ATTACK_DOWN_PHYSICAL_TYPICAL_TYPES = ["Normal", "Fighting", "Ground", "Rock", "Bug", "Steel"];
+const ATTACK_DOWN_PHYSICAL_TYPICAL_TYPES = [...ATTACK_DOWN_PHYSICAL_TYPES]; // generated (F12)
 function attackDownFamilyViability(ctx) {
   let dist = [{ p: 1, delta: 0 }];
   if (ctx.targetStages.atk !== 0) {
@@ -877,29 +882,13 @@ const highRiskForDamage = (ctx) => {
   return taRead(ctx, (a) => (a === "Wonder Guard" && typeEffectiveness(ctx.moveType, ctx.targetTypes) !== 2 ? -10 : 0));
 };
 
-// AI_CV_Trick_EffectsToEncourage (data/battle_ai_scripts.s:2344-2352) and its
-// "2" variant (:2354-2356): the hold effects the AI is happy to hand over.
-const TRICK_CONFUSE_HOLD_EFFECTS = new Set([
-  "HOLD_EFFECT_CONFUSE_SPICY", "HOLD_EFFECT_CONFUSE_DRY", "HOLD_EFFECT_CONFUSE_SWEET",
-  "HOLD_EFFECT_CONFUSE_BITTER", "HOLD_EFFECT_CONFUSE_SOUR",
-]);
 // AI_CV_Thief_EncourageItemsToSteal (:1860-1867).
-const THIEF_ENCOURAGED_HOLD_EFFECTS = new Set([
-  "HOLD_EFFECT_CURE_SLP", "HOLD_EFFECT_CURE_STATUS", "HOLD_EFFECT_RESTORE_HP", "HOLD_EFFECT_EVASION_UP",
-  "HOLD_EFFECT_LEFTOVERS", "HOLD_EFFECT_LIGHT_BALL", "HOLD_EFFECT_THICK_CLUB",
-]);
-// AI_CV_Recycle_ItemsToEncourage (:2366-2372).
-const RECYCLE_ENCOURAGED_HOLD_EFFECTS = new Set([
-  "HOLD_EFFECT_CURE_PAR", "HOLD_EFFECT_CURE_SLP", "HOLD_EFFECT_CURE_PSN",
-  "HOLD_EFFECT_CURE_BRN", "HOLD_EFFECT_CURE_FRZ", "HOLD_EFFECT_CURE_CONFUSION",
-  "HOLD_EFFECT_CURE_STATUS", "HOLD_EFFECT_RESTORE_HP", "HOLD_EFFECT_RESTORE_PCT_HP",
-]);
-// AI_CV_ChangeSelfAbility_AbilitiesToEncourage (:2382-2400) -- the abilities
-// worth stealing or swapping into.
-const CHANGE_SELF_ABILITY_ENCOURAGED = new Set([
-  "Speed Boost", "Battle Armor", "Sand Veil", "Static", "Flash Fire", "Wonder Guard",
-  "Effect Spore", "Swift Swim", "Huge Power", "Rain Dish", "Cute Charm", "Shed Skin",
-]);
+const THIEF_ENCOURAGED_HOLD_EFFECTS = THIEF_ITEMS_TO_STEAL; // generated (F12)
+// Phase D F12: AI_CV_Recycle_ItemsToEncourage and AI_CV_ChangeSelfAbility_
+// AbilitiesToEncourage are GENERATED (ai-tables.js). The hand copies were wrong:
+// Recycle had nine hold effects where the script lists three ITEMS (Chesto,
+// Lum, Starf Berry); ChangeSelfAbility stopped at 12 of 16 (no Marvel Scale,
+// Pure Power, Chlorophyll, Shield Dust).
 
 const AI_HANDLERS = {
   // -- B2b batch 4: support, status-clearing and status-inflicting --------
@@ -2113,8 +2102,9 @@ const AI_HANDLERS = {
     // alone in one, plus the confusing berries and Macho Brace in the other.
     checkViability: (ctx) => {
       const mine = ctx.userHoldEffect, theirs = ctx.targetHoldEffect;
-      const enc2 = (h) => h === "HOLD_EFFECT_CHOICE_BAND";
-      const enc = (h) => enc2(h) || h === "HOLD_EFFECT_MACHO_BRACE" || TRICK_CONFUSE_HOLD_EFFECTS.has(h);
+      // AI_CV_Trick_EffectsToEncourage2 / _EffectsToEncourage (generated, F12)
+      const enc2 = (h) => TRICK_EFFECTS_TO_ENCOURAGE_2.has(h);
+      const enc = (h) => TRICK_EFFECTS_TO_ENCOURAGE.has(h);
       if (enc2(mine)) return enc2(theirs) ? [{ p: 1, delta: -3 }] : [{ p: 1, delta: 5 }];
       if (enc(mine)) {
         if (enc(theirs)) return [{ p: 1, delta: -3 }];
@@ -2140,7 +2130,7 @@ const AI_HANDLERS = {
     checkBadMove: (ctx) => (ctx.userUsedItem ? 0 : -10),
     // AI_CV_Recycle (:2355-2364): +2 on a 206/256 roll for an encouraged item,
     // -2 for anything else.
-    checkViability: (ctx) => (RECYCLE_ENCOURAGED_HOLD_EFFECTS.has(ctx.userUsedHoldEffect)
+    checkViability: (ctx) => (RECYCLE_ENCOURAGED_ITEMS.has(ctx.userUsedItemConstant)
       ? [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 1 }]
       : [{ p: 1, delta: -2 }]),
   },
@@ -4149,6 +4139,8 @@ function chooseOpponentMoves(opp, you, state) {
     targetHoldEffect: null,
     userUsedItem: state.oppUsedItem != null,
     userUsedHoldEffect: state.oppUsedItem ? ((itemData(state.oppUsedItem) || {}).holdEffect ?? null) : null,
+    // F12: Cmd_get_used_held_item answers with the ITEM, which Recycle's table lists.
+    userUsedItemConstant: state.oppUsedItem ? ((itemData(state.oppUsedItem) || {}).constant ?? null) : null,
     userStockpile: state.oppStockpile,
     userWaterSport: vf(state, "oppWaterSport"),
     targetNightmared: state.youNightmared,

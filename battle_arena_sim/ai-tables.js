@@ -14,3 +14,45 @@ export const ENCORE_ENCOURAGED_EFFECTS = new Set(["EFFECT_DREAM_EATER","EFFECT_A
 // AI_CV_MirrorMove's if_in_hwords table (data/battle_ai_scripts.s:854-894).
 // 39 moves, mapped onto this engine's own move names.
 export const MIRROR_MOVE_ENCOURAGED = new Set(["Sleep Powder","Lovely Kiss","Spore","Hypnosis","Sing","GrassWhistle","Shadow Punch","Sand-Attack","SmokeScreen","Toxic","Guillotine","Horn Drill","Fissure","Sheer Cold","Cross Chop","Aeroblast","Confuse Ray","Sweet Kiss","Screech","Cotton Spore","Scary Face","Fake Tears","Metal Sound","Thunder Wave","Glare","Poison Powder","Shadow Ball","DynamicPunch","Hyper Beam","ExtremeSpeed","Thief","Covet","Attract","Swagger","Torment","Flatter","Trick","Superpower","Skill Swap"]);
+
+// AI_CV_ChangeSelfAbility_AbilitiesToEncourage (data/battle_ai_scripts.s:2373-2390): 16 abilities -- Role Play / Skill Swap want to TAKE one of these (AI_CV_ChangeSelfAbility).
+export const CHANGE_SELF_ABILITY_ENCOURAGED = new Set(["Speed Boost","Battle Armor","Sand Veil","Static","Flash Fire","Wonder Guard","Effect Spore","Swift Swim","Huge Power","Rain Dish","Cute Charm","Shed Skin","Marvel Scale","Pure Power","Chlorophyll","Shield Dust"]);
+
+// AI_CV_Recycle_ItemsToEncourage (data/battle_ai_scripts.s:2438-2442): 3 ITEM constants (compared with the low byte of usedHeldItems, Cmd_get_used_held_item; the engine compares itemData(item).constant).
+export const RECYCLE_ENCOURAGED_ITEMS = new Set(["ITEM_CHESTO_BERRY","ITEM_LUM_BERRY","ITEM_STARF_BERRY"]);
+
+// AI_CV_Trick_EffectsToEncourage (data/battle_ai_scripts.s:2344-2352): 7 hold effects the AI is glad to hand over.
+export const TRICK_EFFECTS_TO_ENCOURAGE = new Set(["HOLD_EFFECT_CONFUSE_SPICY","HOLD_EFFECT_CONFUSE_DRY","HOLD_EFFECT_CONFUSE_SWEET","HOLD_EFFECT_CONFUSE_BITTER","HOLD_EFFECT_CONFUSE_SOUR","HOLD_EFFECT_MACHO_BRACE","HOLD_EFFECT_CHOICE_BAND"]);
+
+// AI_CV_Trick_EffectsToEncourage2 (data/battle_ai_scripts.s:2354-2356): 1 Trick3's list.
+export const TRICK_EFFECTS_TO_ENCOURAGE_2 = new Set(["HOLD_EFFECT_CHOICE_BAND"]);
+
+// AI_CV_Thief_EncourageItemsToSteal (data/battle_ai_scripts.s:1860-1868): 7 hold effects worth stealing.
+export const THIEF_ITEMS_TO_STEAL = new Set(["HOLD_EFFECT_CURE_SLP","HOLD_EFFECT_CURE_STATUS","HOLD_EFFECT_RESTORE_HP","HOLD_EFFECT_EVASION_UP","HOLD_EFFECT_LEFTOVERS","HOLD_EFFECT_LIGHT_BALL","HOLD_EFFECT_THICK_CLUB"]);
+
+// AI_CV_DefenseUp_PhysicalTypes (data/battle_ai_scripts.s:944-954): 9 types.
+export const DEFENSE_UP_PHYSICAL_TYPES = new Set(["Normal","Fighting","Poison","Ground","Flying","Rock","Bug","Ghost","Steel"]);
+
+// AI_CV_SpDefUp_PhysicalTypes (data/battle_ai_scripts.s:1015-1025): 9 types.
+export const SP_DEF_UP_PHYSICAL_TYPES = new Set(["Normal","Fighting","Poison","Ground","Flying","Rock","Bug","Ghost","Steel"]);
+
+// AI_CV_AttackDown_PhysicalTypeList (data/battle_ai_scripts.s:1115-1122): 6 types.
+export const ATTACK_DOWN_PHYSICAL_TYPES = new Set(["Normal","Fighting","Ground","Rock","Bug","Steel"]);
+
+// AI_CV_SpAtkDown_SpecialTypeList (data/battle_ai_scripts.s:1175-1184): 8 types.
+export const SP_ATK_DOWN_SPECIAL_TYPES = new Set(["Fire","Water","Grass","Electric","Psychic","Ice","Dragon","Dark"]);
+
+// AI_CV_LightScreen_SpecialTypeList (data/battle_ai_scripts.s:1385-1394): 8 types.
+export const LIGHT_SCREEN_SPECIAL_TYPES = new Set(["Fire","Water","Grass","Electric","Psychic","Ice","Dragon","Dark"]);
+
+// AI_CV_Reflect_PhysicalTypeList (data/battle_ai_scripts.s:1504-1514): 9 types.
+export const REFLECT_PHYSICAL_TYPES = new Set(["Normal","Fighting","Flying","Poison","Ground","Rock","Bug","Ghost","Steel"]);
+
+// AI_CV_Counter_PhysicalTypeList (data/battle_ai_scripts.s:1675-1685): 9 types.
+export const COUNTER_PHYSICAL_TYPES = new Set(["Normal","Fighting","Flying","Poison","Ground","Rock","Bug","Ghost","Steel"]);
+
+// AI_CV_MirrorCoat_SpecialTypeList (data/battle_ai_scripts.s:2173-2182): 8 types.
+export const MIRROR_COAT_SPECIAL_TYPES = new Set(["Fire","Water","Grass","Electric","Psychic","Ice","Dragon","Dark"]);
+
+// AI_CV_SandstormResistantTypes (data/battle_ai_scripts.s:2243-2247): 3 types.
+export const SANDSTORM_RESISTANT_TYPES = new Set(["Ground","Rock","Steel"]);
