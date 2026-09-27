@@ -10515,13 +10515,17 @@ function printTree(node, indent = "", turnLabel = "Turn", minProb = 0.02) {
 // being analyzed), so this is a simplifying assumption until that's tracked.
 // C1: `tree: false` runs the search headless (see search) -- the result
 // carries move, winProb and allOptions[{move, winProb}], and no branches.
+// Phase D F11: a Frontier trainer's mon is built as FillTrainerParty builds it
+// (src/battle_tower.c:1739-1748): friendship MAX_FRIENDSHIP (255), but 0 if the
+// set carries Frustration. This used to force 255 on every opponent, so an
+// opponent's Frustration hit at power 0 in every solved cell.
+function buildFrontierOpponent(oppConfig) {
+  return buildMon({ ...oppConfig, friendship: (oppConfig.moves ?? []).includes("Frustration") ? 0 : 255 });
+}
+
 function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = yourHpPct, oppHpPctAtStart = oppHpPct, yourUsablePartyMons = 2, oppUsablePartyMons = 2, tree = true, transposition = true, prune = false } = {}) {
   const you = buildMon(youConfig);
-  // Frontier trainer mons are generated at max friendship (255) — a real,
-  // verified fact about this dataset's source, not a convenience default —
-  // so EFFECT_RETURN/EFFECT_FRUSTRATION resolve correctly for the opponent
-  // side regardless of buildMon's own moveset-based guess (see buildMon).
-  const opp = buildMon({ ...oppConfig, friendship: 255 });
+  const opp = buildFrontierOpponent(oppConfig);
   // C2: headless, nothing reads a branch's label, so none are built.
   const ctx = tree ? { you, opp } : { you, opp, noLabels: true };
   const state = buildStartState({ yourHpPct, oppHpPct, yourHpPctAtStart, oppHpPctAtStart, yourUsablePartyMons, oppUsablePartyMons, you, opp });
@@ -10558,6 +10562,8 @@ export {
   // B3 batch 7a: the volFlags accessor, for tests that inspect a folded flag.
   vf, VF,
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
+  // Phase D F11: the opponent as the ROM builds it (friendship by Frustration).
+  buildFrontierOpponent,
   // Change #11 guard tables — exported so the coverage test pins them to the
   // live pool rather than duplicating them.
   HANDLED_EFFECTS, ACCEPTED_UNMODELED_EFFECTS,
