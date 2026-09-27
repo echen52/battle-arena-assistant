@@ -380,7 +380,7 @@ export const MODIFIER_ANCHORS = {
     pre: { move: "Ice Beam", winProb: 0.15360000000000004 },
     causedBy: "opponent ability: Thick Fat" },
   "Charizard 4": { lead: "Gengar", ability: null,
-    move: "Thunderbolt", winProb: 0.4601318359375, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.424140625); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.45662500000000006 Ice Punch, the advice FLIPS
+    move: "Thunderbolt", winProb: 0.17734374999999997, // B4a (chance status secondaries) -- the Gengar lead's ICE PUNCH freezes 10% and the advice FLIPS from Thunderbolt (zeroing Ice Punch alone restores Thunderbolt 0.424140625); B6-2: crits (the crits-off engine reproduces the pre-crit universe byte for byte); was 0.45662500000000006 Ice Punch, the advice FLIPS; Phase D F1: the AI_CheckBadMove head -- Charizard 4's EARTHQUAKE into the Levitate lead now scores -10 (neutralising the Levitate line alone restores 0.4601318359375); was 0.4601318359375
     pre: { move: "Thunderbolt", winProb: 0.42414062500000005 },
     causedBy: "opponent ability: Blaze" },
 };

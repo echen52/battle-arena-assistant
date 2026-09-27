@@ -3237,6 +3237,58 @@ function isPowerfulMoveEligible(moveName) {
   return !!m && m.power > 1 && !IGNORED_POWERFUL_MOVE_EFFECTS.has(m.effect);
 }
 
+// Phase D F1 -- the generic head of AI_CheckBadMove (data/battle_ai_scripts.s:
+// 51-100), found by the emulator differential (Blaziken's Earthquake into a
+// Levitate Latios: P 1 in the sim, never in the ROM). Two parts:
+//
+// AI_CBM_CheckIfNegatesType (:57-88), reached by Fissure and Horn Drill
+// (if_move, :53-54) and by every move get_how_powerful_move_is does not call
+// MOVE_POWER_OTHER -- its own power > 1 and sIgnoredPowerfulMoveEffects gate
+// (src/battle_ai_script_commands.c:1174-1187), i.e. isPowerfulMoveEligible:
+//   - if_type_effectiveness x0 -> -10. Cmd_if_type_effectiveness (:1515-1556)
+//     reads TypeCalc's DAMAGE, not its flags (the non-BUGFIX build), so x0 is
+//     exactly a zero type product: Levitate only sets flags in TypeCalc
+//     (src/battle_script_commands.c:1554-1557) and is NOT x0 here -- it has its
+//     own line below. Foresight lifts the Ghost row (the TYPE_FORESIGHT break).
+//   - target Volt Absorb / Water Absorb / Flash Fire and the move's BASE type
+//     (get_curr_move_type reads gBattleMoves) Electric / Water / Fire -> -12.
+//   - target Wonder Guard unless if_type_effectiveness x2 -> -10. An EXACT
+//     category: STAB SE (120) is requantised to x2 and passes, x4 does not.
+//   - target Levitate and a Ground move -> -10.
+// AI_CheckBadMove_CheckSoundproof (:89-100), reached by EVERY move: target
+//   Soundproof and one of the nine moves the script lists -> -10. (Nine: the
+//   battle's sSoundMovesTable also has Hyper Voice, which the AI list omits.)
+//
+// Score_Minus10 / Score_Minus12 (:620-626) end with `end`, which ends
+// AI_CheckBadMove for this move (Cmd_end, :2209-2213; the processing loop moves
+// on to the next script, :602-611) -- so a nonzero head result means the
+// effect's own AI_CBM_* is never reached. TryToFaint and CheckViability are
+// separate scripts and still run.
+//
+// targetAbility is what get_ability AI_TARGET returns; see finding F2.
+const AI_SOUNDPROOF_MOVES = new Set([
+  "Growl", "Roar", "Sing", "Supersonic", "Screech", "Snore", "Uproar", "Metal Sound", "GrassWhistle",
+]);
+for (const m of AI_SOUNDPROOF_MOVES) if (!MOVES[m]) throw new Error(`AI_SOUNDPROOF_MOVES names unknown move "${m}"`);
+const AI_ABSORB_TYPE = { "Volt Absorb": "Electric", "Water Absorb": "Water", "Flash Fire": "Fire" };
+function checkBadMoveHead(moveName, ctx) {
+  if (moveName === "Fissure" || moveName === "Horn Drill" || isPowerfulMoveEligible(moveName)) {
+    const type = MOVES[moveName].type;
+    const eff = typeEffectiveness(type, ctx.targetTypes, ctx.targetForesighted);
+    if (eff === 0) return -10;
+    const ability = ctx.targetAbility;
+    if (AI_ABSORB_TYPE[ability] !== undefined) {
+      if (AI_ABSORB_TYPE[ability] === type) return -12;
+    } else if (ability === "Wonder Guard") {
+      if (eff !== 2) return -10;
+    } else if (ability === "Levitate") {
+      if (type === "Ground") return -10;
+    }
+  }
+  if (ctx.targetAbility === "Soundproof" && AI_SOUNDPROOF_MOVES.has(moveName)) return -10;
+  return 0;
+}
+
 // Returns the move's full score distribution: [{ p, score }], summing to 1.
 // B7c-4. SOURCE CHECK FIRST, and it changed the disposition.
 //
@@ -3301,7 +3353,13 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
   // identity, not effect — see its handler comment).
   const moveCtx = { ...ctx, moveType: move.type, moveName };
 
-  if (handler?.checkBadMove) {
+  // Phase D F1: AI_CheckBadMove's generic head runs BEFORE the effect dispatch,
+  // and a hit there ends the script (see checkBadMoveHead), so the effect's own
+  // AI_CBM_* is only reached when the head scored nothing.
+  const headDelta = checkBadMoveHead(moveName, moveCtx);
+  if (headDelta !== 0) {
+    dist = combineDist(dist, [{ p: 1, delta: headDelta }]);
+  } else if (handler?.checkBadMove) {
     // Almost every checkBadMove is a plain scalar (AI_CheckBadMove has no
     // live randomness in most branches ported so far). EFFECT_ATTRACT is the
     // first exception — its badness genuinely depends on an uncertain
