@@ -173,26 +173,22 @@ console.log("-- PART 4: an EXACT speed tie is a 0.5 / 0.5 branch --");
 }
 
 console.log();
-console.log("-- PART 5: the AI's OWN tie belief is a separate coin flip (B7c-4) --");
+console.log("-- PART 5: the AI's OWN tie belief (B7c-4, corrected by Phase D F13) --");
 {
-  // SOURCE CHECK, which is what decided this was a fix rather than an asymmetry
-  // to preserve. `if_target_faster` is `if_user_goes 1`
-  // (asm/macros/battle_ai_script.inc:595), i.e. Cmd_if_user_goes
-  // (src/battle_ai_script_commands.c:1268) calling GetWhoStrikesFirst(..., TRUE)
-  // -- THE SAME function the battle's turn order uses. With ignoreChosenMoves
-  // both moves are MOVE_NONE, priority 0, so it lands on the same
-  // `speed1 == speed2 && Random() & 1` arm. The AI's belief is a coin flip too,
-  // so the engine being deterministic there was a divergence, not a quirk.
+  // `if_target_faster` is `if_user_goes 1` (asm/macros/battle_ai_script.inc:
+  // 595-597), Cmd_if_user_goes calling GetWhoStrikesFirst(user, target, TRUE).
+  // B7c-4 read that function's tie arm as a clean coin between "user first" and
+  // "target first" and made a tie the 0.5/0.5 mixture of the two beliefs. It is
+  // not: on equal speed the arm is `if (speed1 == speed2 && Random() & 1)
+  // strikesFirst = 2; else if (speed1 < speed2) strikesFirst = 1;`
+  // (src/battle_main.c:4744-4750), so a tie returns 2 or 0 and NEVER 1. The AI
+  // never believes the target is faster on a tie; `if_user_faster` (0) is a
+  // fresh coin at each read. (The battle's own order has its own arm.)
   //
-  // The DISAGREEMENT is real and IS preserved: the AI's draw and the battle's
-  // order draw are separate Random() calls, so on a tie the AI can believe it
-  // moves first and then move second.
-  //
-  // Probed through the REAL API rather than a hand-built ctx. An earlier draft
-  // assembled a ctx by hand, missed fields the handler reads, and produced NaN
-  // -- the same fragile pattern that has bitten this suite before. Speed only
-  // reaches scoring THROUGH targetFaster, so three states that differ only in
-  // Speed EVs isolate it exactly.
+  // So for a set whose moves reach only if_target_faster, the tied distribution
+  // is EXACTLY the "opponent is faster" one. B7c-4's mixture (recorded then:
+  // worst deviation 0 against the mean) is what F13's interpreter replaced; the
+  // emulator agreed with the interpreter on all 3,872 AI decisions it can check.
   const mk = (spe) => buildMon({ species: "Ditto", level: 50, nature: "Hardy", evs: { spe },
     ability: "Limber", item: null, moves: ["Rest", "Body Slam", "Swagger", "Protect"], friendship: 255 });
   const distOf = (you, opp) => {
@@ -209,19 +205,12 @@ console.log("-- PART 5: the AI's OWN tie belief is a separate coin flip (B7c-4) 
   const believesSlower = distOf(mk(252), mk(0)); // opponent is slower, so the target IS faster
   const believesFaster = distOf(mk(0), mk(252)); // opponent is faster
 
-  let worst = 0;
-  for (const k of tied.keys()) {
-    const mean = ((believesSlower.get(k) || 0) + (believesFaster.get(k) || 0)) / 2;
-    worst = Math.max(worst, Math.abs(tied.get(k) - mean));
-  }
-  ok([...tied.keys()].some((k) => Math.abs((believesSlower.get(k) || 0) - (believesFaster.get(k) || 0)) > 1e-9),
-    "this probe is only meaningful if the two beliefs score differently");
-  ok(worst === 0,
-    `a tie must be EXACTLY the 0.5/0.5 mixture of the two beliefs (worst deviation ${worst})`);
-  ok(Math.abs([...tied.values()].reduce((a, b) => a + b, 0) - 1) < 1e-12,
-    "the tied distribution must still sum to 1");
-  console.log(`   Rest: believes-faster ${(believesSlower.get("Rest") || 0).toFixed(6)}, believes-slower ${(believesFaster.get("Rest") || 0).toFixed(6)}, tied ${tied.get("Rest").toFixed(6)}`);
-  console.log(`   max |tie - mean of the two beliefs| across all moves: ${worst}`);
+  const keys = new Set([...tied.keys(), ...believesSlower.keys(), ...believesFaster.keys()]);
+  const dev = (a, b) => Math.max(...[...keys].map((k) => Math.abs((a.get(k) || 0) - (b.get(k) || 0))));
+  ok(dev(believesSlower, believesFaster) > 1e-9, "this probe is only meaningful if the two beliefs score differently");
+  ok(dev(tied, believesFaster) === 0, `a tie must be EXACTLY the "opponent faster" belief -- never "target faster" (deviation ${dev(tied, believesFaster)})`);
+  ok(Math.abs([...tied.values()].reduce((a, b) => a + b, 0) - 1) < 1e-12, "the tied distribution must still sum to 1");
+  console.log(`   Rest: target-faster ${(believesSlower.get("Rest") || 0).toFixed(6)}, opponent-faster ${(believesFaster.get("Rest") || 0).toFixed(6)}, tied ${(tied.get("Rest") || 0).toFixed(6)}`);
 }
 
 console.log();

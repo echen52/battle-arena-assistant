@@ -27,6 +27,9 @@ import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { TYPE_EFFECTIVENESS } from "./type-table.js";
 import { GENDER_RATIO } from "./gender-data.js";
+// Phase D F13: the ROM's AI program and its interpreter.
+import { AI_CONST } from "./ai-program.js";
+import { runAi, chooseFromScores } from "./ai-interpreter.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. STAT CALCULATION
@@ -225,6 +228,18 @@ function battleMoveData(mon, moveName) {
 // a matching row leaves 1 (Ground into Skarmory: Flying x0, then Steel x2), and
 // each row floors on its own. `noEffect` is whether any x0 row applied -- the
 // battle's MOVE_RESULT_DOESNT_AFFECT_FOE; the AI (retail) reads only `dmg`.
+// The rows indexed by attacking type, in table order; `past` marks a row after
+// the TYPE_FORESIGHT separator (where the walk stops for a foresighted target).
+const TYPE_ROWS_BY_ATTACKER = (() => {
+  const m = new Map();
+  let past = false;
+  for (const r of TYPE_EFFECTIVENESS) {
+    if (r === "FORESIGHT") { past = true; continue; }
+    if (!m.has(r[0])) m.set(r[0], []);
+    m.get(r[0]).push({ def: r[1], mul: r[2], past });
+  }
+  return m;
+})();
 function typeCalcRows(dmg, moveType, defTypes, foresighted = false) {
   const t1 = defTypes[0], t2 = defTypes[1] ?? defTypes[0];
   let noEffect = false;
@@ -233,11 +248,10 @@ function typeCalcRows(dmg, moveType, defTypes, foresighted = false) {
     if (dmg === 0 && m !== 0) dmg = 1;
     if (m === 0) noEffect = true;
   };
-  for (const r of TYPE_EFFECTIVENESS) {
-    if (r === "FORESIGHT") { if (foresighted) break; continue; }
-    if (r[0] !== moveType) continue;
-    if (r[1] === t1) mod(r[2]);
-    if (r[1] === t2 && t1 !== t2) mod(r[2]);
+  for (const r of TYPE_ROWS_BY_ATTACKER.get(moveType) ?? []) {
+    if (r.past && foresighted) break;
+    if (r.def === t1) mod(r.mul);
+    if (r.def === t2 && t1 !== t2) mod(r.mul);
   }
   return { dmg, noEffect };
 }
@@ -4048,7 +4062,277 @@ function aiHpPercent(pct, maxHp) {
   const hp = Math.round((pct * maxHp) / 100);
   return Math.floor((100 * hp) / maxHp);
 }
-function chooseOpponentMoves(opp, you, state) {
+// ── Phase D F13: the AI as the ROM runs it ──────────────────────────────────
+// buildAiView renders engine state as the numbers the ROM's AI reads (ids from
+// ai-program.js's AI_CONST: moves, effects, types, abilities, items, and the
+// STATUS1/2/3 / SIDE_STATUS / B_WEATHER bits the scripts test);
+// chooseOpponentMovesInterp runs ai-interpreter.js over it for every A2 roll
+// class. `knowledge.history` selects what the AI knows of the player's moves:
+// "moveset" (the handlers' assumption, for the parity check) or the real
+// BATTLE_HISTORY once F2c lands.
+const AIK = AI_CONST;
+const aiNorm = (s) => String(s).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+const AI_MOVE_ID = new Map(Object.entries(AIK).filter(([k]) => k.startsWith("MOVE_") && !k.startsWith("MOVE_RESULT_")
+  && !k.startsWith("MOVE_POWER_") && !k.startsWith("MOVE_TARGET_") && !k.startsWith("MOVE_MOST") && !k.startsWith("MOVE_NOT")
+  && !k.startsWith("MOVE_EFFECT_") && !k.startsWith("MOVE_LIMITATION")).map(([k, v]) => [aiNorm(k.slice(5)), v]));
+const AI_ABILITY_ID = new Map(Object.entries(AIK).filter(([k]) => k.startsWith("ABILITY_")).map(([k, v]) => [aiNorm(k.slice(8)), v]));
+const aiMoveId = (name) => {
+  if (name == null) return 0;
+  const v = AI_MOVE_ID.get(aiNorm(name));
+  if (v === undefined) throw new Error(`buildAiView: no MOVE_* id for "${name}"`);
+  return v;
+};
+const aiAbilityId = (name) => {
+  if (name == null || name === "") return 0;
+  const v = AI_ABILITY_ID.get(aiNorm(name));
+  if (v === undefined) throw new Error(`buildAiView: no ABILITY_* id for "${name}"`);
+  return v;
+};
+const aiTypeId = (t) => {
+  const v = AIK["TYPE_" + String(t).toUpperCase()];
+  if (v === undefined) throw new Error(`buildAiView: no TYPE_* id for "${t}"`);
+  return v;
+};
+const aiItemId = (name) => (name ? AIK[(itemData(name) || {}).constant] ?? (() => { throw new Error(`buildAiView: no ITEM_* id for "${name}"`); })() : 0);
+const aiHoldEffectId = (name) => {
+  const h = name ? (itemData(name) || {}).holdEffect : null;
+  if (!h || h === "HOLD_EFFECT_NONE") return 0;
+  const v = AIK[h];
+  if (v === undefined) throw new Error(`buildAiView: no id for ${h}`);
+  return v;
+};
+// gBattleMoves as ids -> { effect, power, type }; the engine's table equals the
+// ROM's (move-data-audit.mjs), and slot 0 (MOVE_NONE) is all zeros.
+const AI_MOVE_TABLE = (() => {
+  const t = { 0: { effect: 0, power: 0, type: 0 } };
+  for (const [name, m] of Object.entries(MOVES)) {
+    t[aiMoveId(name)] = { effect: AIK[m.effect], power: m.power, type: aiTypeId(m.type) };
+  }
+  return t;
+})();
+const AI_GENDER = { male: AIK.MON_MALE, female: AIK.MON_FEMALE, genderless: AIK.MON_GENDERLESS };
+
+function aiStatus1(state, side) {
+  const st = state[side + "Status"];
+  if (st == null) return 0;
+  if (st === "sleep") return Math.max(1, Math.min(7, state[side + "SleepTurns"] ?? 1)) & AIK.STATUS1_SLEEP;
+  if (st === "poison") {
+    const c = state[side + "ToxicCounter"];
+    return c != null ? (AIK.STATUS1_TOXIC_POISON | ((Math.min(15, c) << 8) & AIK.STATUS1_TOXIC_COUNTER)) : AIK.STATUS1_POISON;
+  }
+  if (st === "burn") return AIK.STATUS1_BURN;
+  if (st === "freeze") return AIK.STATUS1_FREEZE;
+  if (st === "paralysis") return AIK.STATUS1_PARALYSIS;
+  throw new Error(`aiStatus1: unknown status ${st}`);
+}
+function aiStatus2(state, side) {
+  let s = 0;
+  const lock = state[side + "Lock"];
+  if (state[side + "Confused"]) s |= 1;                                        // any STATUS2_CONFUSION turns
+  if (lock?.kind === "uproar") s |= 1 << 4;
+  if (lock?.kind === "bide") s |= 1 << 8;
+  if (lock?.kind === "rampage") s |= 1 << 10;
+  if (state[side + "Charging"] || lock) s |= AIK.STATUS2_MULTIPLETURNS;
+  if (state[side + "Wrapped"] != null) s |= 1 << 13;
+  if (state[side + "Attracted"]) s |= 1 << (16 + (side === "you" ? 1 : 0));  // INFATUATED_WITH(the other battler)
+  if (vf(state, side + "FocusEnergy")) s |= AIK.STATUS2_FOCUS_ENERGY;
+  if (state[side + "Transform"]) s |= AIK.STATUS2_TRANSFORMED;
+  if (state[side + "Recharge"]) s |= AIK.STATUS2_RECHARGE;
+  if (state[side + "Raging"]) s |= AIK.STATUS2_RAGE;
+  if (state[side + "SubstituteHP"] != null) s |= AIK.STATUS2_SUBSTITUTE;
+  if (state[side + "DestinyBondActive"]) s |= AIK.STATUS2_DESTINY_BOND;
+  if (vf(state, side + "CantEscape")) s |= AIK.STATUS2_ESCAPE_PREVENTION;
+  if (state[side + "Nightmared"]) s |= AIK.STATUS2_NIGHTMARE;
+  if (state[side + "Cursed"]) s |= AIK.STATUS2_CURSED;
+  if (state[side + "Foresighted"]) s |= AIK.STATUS2_FORESIGHT;
+  if (vf(state, side + "DefenseCurled")) s |= AIK.STATUS2_DEFENSE_CURL;
+  if (state[side + "Tormented"]) s |= AIK.STATUS2_TORMENT;
+  return s >>> 0;
+}
+function aiStatus3(state, side) {
+  let s = 0;
+  if (state[side + "Seeded"]) s |= AIK.STATUS3_LEECHSEED | (side === "you" ? 1 : 0); // + the battler receiving HP
+  if (state[side + "AlwaysHitTurns"] != null) s |= 1 << 3;
+  if (vf(state, side + "PerishSonged")) s |= AIK.STATUS3_PERISH_SONG;
+  const inv = state[side + "Charging"]?.invulnBit;
+  if (inv === "air") s |= AIK.STATUS3_ON_AIR;
+  if (inv === "underground") s |= AIK.STATUS3_UNDERGROUND;
+  if (inv === "underwater") s |= AIK.STATUS3_UNDERWATER;
+  if (vf(state, side + "Minimized")) s |= AIK.STATUS3_MINIMIZED;
+  if (state[side + "Ingrained"]) s |= AIK.STATUS3_ROOTED;
+  const yawn = state[side + "YawnTurns"];
+  if (yawn != null) s |= (yawn << 11) & AIK.STATUS3_YAWN;
+  if (state[side + "Imprisoning"]) s |= AIK.STATUS3_IMPRISONED_OTHERS;
+  if (vf(state, side + "MudSport")) s |= AIK.STATUS3_MUDSPORT;
+  if (vf(state, side + "WaterSport")) s |= AIK.STATUS3_WATERSPORT;
+  return s >>> 0;
+}
+function aiSideStatus(state, side) {
+  let s = 0;
+  if (state[side + "ReflectTurns"] != null) s |= AIK.SIDE_STATUS_REFLECT;
+  if (state[side + "LightScreenTurns"] != null) s |= AIK.SIDE_STATUS_LIGHTSCREEN;
+  if (state[side + "SpikesLayers"] > 0) s |= AIK.SIDE_STATUS_SPIKES;
+  if (state[side + "SafeguardTurns"] != null) s |= AIK.SIDE_STATUS_SAFEGUARD;
+  if (state[side + "FutureSight"] != null) s |= AIK.SIDE_STATUS_FUTUREATTACK;
+  if (state[side + "MistTurns"] != null) s |= AIK.SIDE_STATUS_MIST;
+  return s;
+}
+function aiWeatherBits(state) {
+  const w = state.weatherType; // RAW: get_weather is blind to Cloud Nine / Air Lock
+  if (w == null) return 0;
+  return w === "rain" ? AIK.B_WEATHER_RAIN_TEMPORARY : w === "sandstorm" ? AIK.B_WEATHER_SANDSTORM_TEMPORARY
+    : w === "sun" ? AIK.B_WEATHER_SUN_TEMPORARY : w === "hail" ? AIK.B_WEATHER_HAIL_TEMPORARY
+    : (() => { throw new Error(`aiWeatherBits: unknown weather ${w}`); })();
+}
+function aiMonView(mon, state, side) {
+  const stages = side === "you" ? state.youStages : state.oppStages;
+  const hp = Math.round(((side === "you" ? state.yourHpPct : state.oppHpPct) / 100) * mon.stats.hp);
+  const sp = SPECIES[mon.species]?.abilities ?? [];
+  const types = mon.types.length === 1 ? [mon.types[0], mon.types[0]] : mon.types;
+  return {
+    hp: Math.max(0, hp), maxHP: mon.stats.hp, level: mon.level,
+    ability: aiAbilityId(mon.ability),
+    speciesAbilities: [aiAbilityId(sp[0]), aiAbilityId(sp[1])],
+    types: types.map(aiTypeId),
+    // statStages[8]: HP ATK DEF SPEED SPATK SPDEF ACC EVASION, stored +6
+    stages: [6, stages.atk + 6, stages.def + 6, stages.spe + 6, stages.spa + 6, stages.spd + 6, stages.accuracy + 6, stages.evasion + 6],
+    status1: aiStatus1(state, side), status2: aiStatus2(state, side), status3: aiStatus3(state, side),
+    item: aiItemId(mon.item), holdEffect: aiHoldEffectId(mon.item),
+    moves: [0, 1, 2, 3].map((i) => aiMoveId(mon.moves[i] ?? null)),
+    lastMove: aiMoveId(state[side + "LastMove"] ?? null),
+    isFirstTurn: state[side + "MonFirstTurn"] ? 1 : 0,
+    protectUses: state[side + "ProtectUses"] ?? 0,
+    stockpile: state[side + "Stockpile"] ?? 0,
+    disabledMove: aiMoveId(state[side + "DisabledMove"] ?? null),
+    encoredMove: aiMoveId(state[side + "EncoredMove"] ?? null),
+    tauntTimer: state[side + "TauntTurns"] ?? 0,
+    usedHeldItem: aiItemId(state[side + "UsedItem"]) & 0xff,
+    flashFired: !!state[side + "FlashFireActive"],
+    genders: (mon.genderDist ?? []).map(({ p, gender }) => ({ p, gender: AI_GENDER[gender] })),
+  };
+}
+// Quick Claw in GetWhoStrikesFirst reads gRandomTurnNumber, drawn ONCE at the
+// start of the turn, before action selection (src/battle_main.c:3923, :4013),
+// and the battle's own order reads the same value -- so it is an input here,
+// shared with resolveTurn (F14), never a per-call coin. `qc`: true = the draw
+// fired, false = it did not.
+function aiQuickClawHolders(opp, you) {
+  const q = (m) => { const d = itemData(m.item); return d && d.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? d : null; };
+  return { opp: q(opp), you: q(you) };
+}
+function buildAiView(opp, you, state, { history = "moveset", qc = false, debug = null } = {}) {
+  const weather = effectiveWeather(state, you, opp);
+  const holders = aiQuickClawHolders(opp, you);
+  const INF = Number.MAX_SAFE_INTEGER;
+  const su = qc && holders.opp ? INF : effSpeed(opp, state.oppStatus, state.oppStages.spe, weather);
+  const st = qc && holders.you ? INF : effSpeed(you, state.youStatus, state.youStages.spe, weather);
+  const legal = new Set(selectableMoves(opp.moves, state, "opp", you, "the opponent"));
+  const aiState = buildAiDamageState(state, opp, you);
+  const view = {
+    mon: [aiMonView(you, state, "you"), aiMonView(opp, state, "opp")], // indexed AI_TARGET (0), AI_USER (1)
+    side: [aiSideStatus(state, "you"), aiSideStatus(state, "opp")],
+    weather: aiWeatherBits(state),
+    turnCounter: Math.max(0, (state.turn ?? 1) - 1),
+    usablePartyMons: [state.yourUsablePartyMons ?? 0, state.oppUsablePartyMons ?? 0],
+    party: [[{ hp: 1, status: aiStatus1(state, "you") }], [{ hp: 1, status: aiStatus1(state, "opp") }]],
+    speedCompare: su > st ? "user" : su < st ? "target" : "tie",
+    limited: [0, 1, 2, 3].map((i) => opp.moves[i] != null && !legal.has(opp.moves[i])),
+    history: {
+      ability: aiAbilityId(state.youAbilityRecord),
+      usedMoves: history === "moveset" ? [0, 1, 2, 3].map((i) => aiMoveId(you.moves[i] ?? null)) : null,
+      targetHoldEffect: 0, // F2b: GetItemHoldEffect(itemEffects[target]) is NONE in every reachable state
+      itemEffects: 0,
+    },
+    moveTable: AI_MOVE_TABLE,
+    aiDamage: (slot, roll) => (opp.moves[slot] ? aiCalcDamage(opp, you, opp.moves[slot], aiState, roll) : 0),
+    typeEffDamageVar: (moveId) => aiTypeEffDamageVar(moveId, opp, you, state),
+    debug,
+  };
+  if (!view.history.usedMoves) throw new Error(`buildAiView: history "${history}" is not implemented yet`);
+  return view;
+}
+// Cmd_if_type_effectiveness's damage variable (src/battle_ai_script_commands.c:
+// 1515-1556): TypeCalc on 40 -- STAB x1.5, then the rows in gTypeEffectiveness
+// order (typeCalcRows, F17); Levitate vs Ground skips the rows (flags only,
+// src/battle_script_commands.c:1554-1557) -- then the requantisation (120 -> 80,
+// 240 -> 160, 30 -> 20, 15 -> 10). The retail build never reads the flags, so a
+// x0 row followed by another matching row gives 1, which is no category at all.
+function aiTypeEffDamageVar(moveId, opp, you, state) {
+  const row = AI_MOVE_TABLE[moveId];
+  const moveType = Object.keys(TYPE_CHART).find((t) => aiTypeId(t) === row.type);
+  let d = 40;
+  if (opp.types.map(aiTypeId).includes(row.type)) d = Math.floor((d * 15) / 10);
+  if (!(you.ability === "Levitate" && moveType === "Ground")) d = typeCalcRows(d, moveType, you.types, !!state.youForesighted).dmg;
+  if (d === 120) d = 80;
+  if (d === 240) d = 160;
+  if (d === 30) d = 20;
+  if (d === 15) d = 10;
+  return d;
+}
+// With `opts.qc` given, the decision for that Quick Claw outcome; without it,
+// the mixture over the draw (for callers that do not condition the turn on it).
+function chooseOpponentMovesInterp(opp, you, state, opts = {}) {
+  if (opts.qc === undefined) {
+    const h = aiQuickClawHolders(opp, you);
+    const holder = h.opp || h.you;
+    if (!holder) return chooseOpponentMovesInterp(opp, you, state, { ...opts, qc: false });
+    const pFire = quickClawThreshold(holder.param) / QUICK_CLAW_RANDOM_SPACE;
+    const mix = new Map();
+    for (const [p, qc] of [[pFire, true], [1 - pFire, false]]) {
+      for (const { move, prob } of chooseOpponentMovesInterp(opp, you, state, { ...opts, qc })) mix.set(move, (mix.get(move) ?? 0) + p * prob);
+    }
+    return [...mix.entries()].map(([move, prob]) => ({ move, prob })).sort((a, b) => b.prob - a.prob);
+  }
+  const view = buildAiView(opp, you, state, opts);
+  const ctx = { aiDamageState: buildAiDamageState(state, opp, you), targetHp: view.mon[0].hp,
+    targetHpPct: aiHpPercent(state.yourHpPct, you.stats.hp) };
+  // Memo over EVERYTHING the interpreter can read: the view's data, and what
+  // its two functions read -- the damage state (aiDamage) and the target's
+  // Foresight (typeEffDamageVar; types and ability are in the view). Two
+  // positions equal in all of it get the same answer; the transposition table
+  // cannot see that, since they differ elsewhere (Mind / Skill, the player's
+  // own PP-free counters, ...). Keyed per (opponent, player) mon objects.
+  const { aiDamage, typeEffDamageVar, moveTable, ...viewData } = view; // moveTable is the constant AI_MOVE_TABLE
+  const memoKey = JSON.stringify([viewData, ctx.aiDamageState, !!state.youForesighted]);
+  let byYou = _aiInterpMemo.get(opp);
+  if (!byYou) { byYou = new WeakMap(); _aiInterpMemo.set(opp, byYou); }
+  let memo = byYou.get(you);
+  if (!memo) { memo = new Map(); byYou.set(you, memo); }
+  const hit = memo.get(memoKey);
+  if (hit) return hit;
+  const out = new Map();
+  for (const { p: rollP, rolls } of enumerateAiRollOutcomes(opp, you, ctx)) {
+    const slotRolls = [0, 1, 2, 3].map((i) => (opp.moves[i] ? rolls[opp.moves[i]] ?? 100 : 100));
+    const runs = runAi(view, slotRolls);
+    for (const [slot, p] of chooseFromScores(view, runs)) {
+      const m = opp.moves[slot];
+      out.set(m, (out.get(m) ?? 0) + rollP * p);
+    }
+  }
+  const result = [...out.entries()].map(([move, prob]) => ({ move, prob })).sort((a, b) => b.prob - a.prob);
+  memo.set(memoKey, result);
+  return result;
+}
+const _aiInterpMemo = new WeakMap();
+
+// Phase D F13: the opponent AI IS the script interpreter (ai-interpreter.js over
+// ai-program.js, generated from data/battle_ai_scripts.s and checked byte for
+// byte against the ROM). Against the ROM's own AI_THINKING_STRUCT scores it
+// reproduces 3,872 of 3,873 decisions in 1,698 emulator battles, every turn,
+// at the ROM's simulatedRNG and Quick Claw draw (the miss is a harness anomaly,
+// traces-given/battle-00117). It replaces the hand-ported handlers below, which
+// the parity run (arena-solver/tools/ai-parity.mjs) found wrong in four classes
+// the scripts get right by construction: get_weather's stale funcResult,
+// Counter's misaligned if_has_move, TryToFaint's x4 bonus on status moves, and
+// Mirror Move reading gLastMoves. The Quick Claw draw is F14's: until then
+// the AI is run as if it did not fire, as the handlers were.
+function chooseOpponentMoves(opp, you, state, opts = {}) {
+  return chooseOpponentMovesInterp(opp, you, state, { qc: false, ...opts }); // F14 adds the draw
+}
+
+// The hand-ported handlers (A2 through F12), superseded by F13 and kept only
+// as the parity tool's reference.
+function chooseOpponentMovesHandlers(opp, you, state) {
   const ctx = {
     userHpPct: aiHpPercent(state.oppHpPct, opp.stats.hp),
     targetHpPct: aiHpPercent(state.yourHpPct, you.stats.hp),
@@ -10577,7 +10861,6 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
 }
 
 export {
-  typeCalcRows, // F17
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
   // amendment 16: the site's Hidden Power type picker lists exactly these
   HIDDEN_POWER_TYPES,
@@ -10595,6 +10878,9 @@ export {
   // the UNCAPPED ordering directly rather than inferring them from hit rates.
   accuracyCalc,
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
+  // Phase D F13: the interpreter path, and the view it reads.
+  chooseOpponentMovesInterp, chooseOpponentMovesHandlers, buildAiView, selectableMoves,
+  typeCalcRows, // F17
   // Phase D F2b: pinned to the script's list by its test.
   THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
