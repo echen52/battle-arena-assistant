@@ -1616,14 +1616,10 @@ const AI_HANDLERS = {
   },
   EFFECT_MEAN_LOOK: {
     // AI_CBM_CantEscape (:430-432): target already escape-prevented -> -10.
-    // Not modeled (no switching mechanic to prevent in Arena anyway) —
-    // always false, matches convention for other not-yet-modeled ctx flags.
+    // targetCantEscape is the live youCantEscape flag (Phase D F4).
     checkBadMove: (ctx) => (ctx.targetCantEscape ? -10 : 0),
-    // AI_CV_Trap (:1436-1447) — gated on target already being badly poisoned/
-    // cursed/perish-songed/infatuated (none modeled yet, all default false),
-    // so this currently always resolves to the "goto End" no-score branch.
-    // Kept structurally complete (not just hardcoded to 0) so it activates
-    // correctly the moment any of those statuses gets built.
+    // AI_CV_Trap (:1436-1447) — gated on the target already being badly
+    // poisoned / cursed / perish-songed / infatuated, all live state.
     checkViability: (ctx) => {
       if (ctx.targetToxicPoisoned || ctx.targetCursed || ctx.targetPerishSonged || ctx.targetInfatuated) {
         return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 1 }];
@@ -4008,10 +4004,8 @@ function chooseOpponentMoves(opp, you, state) {
     isFirstTurn: state.turn === 1,
     // Batch 8 (Safeguard/Mean Look):
     userHasSafeguard: state.oppSafeguardTurns != null,
-    // Not modeled yet — no switching mechanic in Arena to prevent, and none
-    // of Toxic-poison/Curse-status/Perish Song/Infatuation are tracked as
-    // their own flags. Defaults false, same convention as other gaps.
-    targetCantEscape: false, targetPerishSonged: vf(state, "youPerishSonged"),
+    // Phase D F4: STATUS2_ESCAPE_PREVENTION on the player (was hardcoded false).
+    targetCantEscape: vf(state, "youCantEscape"), targetPerishSonged: vf(state, "youPerishSonged"),
     // A6: `targetInfatuated: false` USED TO BE REPEATED HERE, ~74 lines after
     // the real assignment above. In a JS object literal the later key wins, so
     // the live wiring at the earlier line was dead and the flag was always
@@ -5920,13 +5914,18 @@ const EFFECT_EXECUTORS = {
     if (s[key] != null) return "failed";
     s[key] = 5;
   },
-  EFFECT_MEAN_LOOK: () => {
-    // Real effect (prevents switching) has ZERO functional consequence in
-    // Arena — there's no switching to prevent in the first place. Always
-    // succeeds; no state change needed since nothing currently reads a
-    // "trapped" flag (would only matter for a future team-workflow context
-    // where it might matter between matchups, which it still wouldn't,
-    // since Arena rounds are independent battles).
+  EFFECT_MEAN_LOOK: (s, actor) => {
+    // Phase D F4. This was a no-op ("no switching in Arena"), but the flag
+    // matters inside one battle. BattleScript_EffectMeanLook (data/
+    // battle_scripts_1.s:1444-1457) fails (ButItFailed, -2) if the target is
+    // already escape-prevented or behind a Substitute, else sets
+    // STATUS2_ESCAPE_PREVENTION (src/battle_script_commands.c:622, :2806) --
+    // which AI_CBM_CantEscape reads, and which only the trapper leaving the
+    // field clears (src/battle_main.c:3164-3165, :3277-3278): never, here.
+    const foe = actor === "you" ? "opp" : "you";
+    if (vf(s, foe + "CantEscape")) return "failed";
+    if (s[foe + "SubstituteHP"] != null) return "failed";
+    setVf(s, foe + "CantEscape", true);
   },
   // Weather — all 4 share the identical fail condition (same type already
   // active, temp OR permanent — checked via a bitmask in source, but a
@@ -9899,6 +9898,8 @@ const VF = {
   youDefenseCurled: 256, oppDefenseCurled: 512, youPerishSonged: 1024, oppPerishSonged: 2048,
   // B8c: gDisableStructs.truantCounter -- set means "loafs on its next action".
   youTruantLoaf: 4096, oppTruantLoaf: 8192,
+  // Phase D F4: STATUS2_ESCAPE_PREVENTION (Mean Look / Block / Spider Web).
+  youCantEscape: 16384, oppCantEscape: 32768,
 };
 function vf(s, name) {
   const bit = VF[name];
