@@ -1962,7 +1962,9 @@ const AI_HANDLERS = {
       if (enc2(mine)) return enc2(theirs) ? [{ p: 1, delta: -3 }] : [{ p: 1, delta: 5 }];
       if (enc(mine)) {
         if (enc(theirs)) return [{ p: 1, delta: -3 }];
-        return [{ p: 128 / 256, delta: 0 }, { p: 128 / 256, delta: 2 }];
+        // AI_CV_Trick4 (:2336-2340): if_random_less_than 50 jumps PAST the +2,
+        // so +2 on 206/256 (Phase D; was 128/256).
+        return [{ p: 50 / 256, delta: 0 }, { p: 206 / 256, delta: 2 }];
       }
       return [{ p: 1, delta: -3 }];
     },

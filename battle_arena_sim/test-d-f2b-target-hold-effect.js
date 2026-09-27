@@ -45,6 +45,10 @@ console.log("-- Trick: the AI never sees the target's item --");
   const a = J(P(opp4(), mk("Metagross", ["Spite"], { ability: "Clear Body", item: "Figy Berry" })));
   const b = J(P(opp4(), mk("Metagross", ["Spite"], { ability: "Clear Body", item: null })));
   ok(a === b, `Figy Berry Linoone: same choice whether the target holds a Figy Berry or nothing (${a} vs ${b})`);
+  // AI_CV_Trick4 (:2336-2340): if_random_less_than 50 jumps PAST the +2, so the
+  // +2 lands on 206/256. Against Spite's 100: P(Trick) = 206/256 + 50/256 / 2.
+  const p4 = P(opp4(), mk("Metagross", ["Spite"], { ability: "Clear Body", item: null }));
+  ok(near(p4["Trick"], 206 / 256 + 25 / 256), `Figy Berry Trick: +2 on 206/256, P 0.90234375 (got ${J(p4)})`);
 }
 
 console.log("-- Thief: AI_CV_Thief is a flat -2 --");
