@@ -25,6 +25,7 @@ import { moveFlags, secondaryChance } from "./move-flags.js";
 import { CRIT_EFFECTS } from "./crit-effects.js";
 import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
+import { TYPE_EFFECTIVENESS } from "./type-table.js";
 import { GENDER_RATIO } from "./gender-data.js";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -214,6 +215,32 @@ function battleMoveData(mon, moveName) {
 // separator when the defender is foresighted (src/battle_script_commands.c:
 // 1388-1394, :1447-1453, :1562-1568), so every row BEFORE it -- all of Ghost's
 // other interactions -- still applies. Nothing else about the chart changes.
+// Phase D F17: the type step as source computes it. TypeCalc / Cmd_typecalc
+// (src/battle_script_commands.c:1536-1590, :1355-1400) walk gTypeEffectiveness
+// in ROW ORDER (type-table.js, generated and checked against the ROM) and, for
+// each row matching the move's type and a defender type (type2 only when it
+// differs from type1), apply ModulateDmgByType (:1321-1326):
+// dmg = dmg * mul / 10, then 1 if that gave 0 and mul is not 0. The walk stops
+// at the TYPE_FORESIGHT row for a foresighted target. So a x0 row followed by
+// a matching row leaves 1 (Ground into Skarmory: Flying x0, then Steel x2), and
+// each row floors on its own. `noEffect` is whether any x0 row applied -- the
+// battle's MOVE_RESULT_DOESNT_AFFECT_FOE; the AI (retail) reads only `dmg`.
+function typeCalcRows(dmg, moveType, defTypes, foresighted = false) {
+  const t1 = defTypes[0], t2 = defTypes[1] ?? defTypes[0];
+  let noEffect = false;
+  const mod = (m) => {
+    dmg = Math.trunc((dmg * m) / 10);
+    if (dmg === 0 && m !== 0) dmg = 1;
+    if (m === 0) noEffect = true;
+  };
+  for (const r of TYPE_EFFECTIVENESS) {
+    if (r === "FORESIGHT") { if (foresighted) break; continue; }
+    if (r[0] !== moveType) continue;
+    if (r[1] === t1) mod(r[2]);
+    if (r[1] === t2 && t1 !== t2) mod(r[2]);
+  }
+  return { dmg, noEffect };
+}
 function typeEffectiveness(moveType, defTypes, foresighted = false) {
   const chart = TYPE_CHART[moveType] || {};
   const piercesGhost = foresighted && (moveType === "Normal" || moveType === "Fighting");
@@ -3329,10 +3356,11 @@ function calcDamage(attacker, defender, moveName, {
   let base = (preFinal + 2) * baseMultiplier * critMult;
 
   const stab = untyped ? 1 : attacker.types.includes(move.type) ? 1.5 : 1;
-  const eff = untyped ? 1 : typeEffectiveness(move.type, defender.types, defenderForesighted);
 
   let dmg = Math.floor(base * stab);
-  dmg = Math.floor(dmg * eff);
+  // F17: the type step row by row, as TypeCalc / Cmd_typecalc do (typeCalcRows).
+  let noEffect = false;
+  if (!untyped) ({ dmg, noEffect } = typeCalcRows(dmg, move.type, defender.types, defenderForesighted));
   // A2: `rollPercent`, when supplied, applies the roll as INTEGER arithmetic —
   // floor(dmg * r / 100) — matching source exactly. The AI's own damage
   // estimate does `gBattleMoveDamage * simulatedRNG[i] / 100` in u32 math
@@ -3346,7 +3374,13 @@ function calcDamage(attacker, defender, moveName, {
   dmg = rollPercent != null
     ? Math.floor((dmg * rollPercent) / 100)
     : Math.floor(dmg * rollFrac);
-  if (eff === 0) return 0; // complete type immunity — the min-1 floor below is for weak-but-effective hits only
+  // F17: the AI's estimate is gBattleMoveDamage * simulatedRNG / 100 as TypeCalc
+  // left it -- a x0 row followed by another leaves 1, so not 0 -- and every
+  // consumer applies its own min-1 (Cmd_get_how_powerful_move_is :1212-1213,
+  // Cmd_if_can_faint :1762-1764). The battle: a x0 row is
+  // MOVE_RESULT_DOESNT_AFFECT_FOE, no damage; otherwise at least 1.
+  if (aiEstimate) return dmg;
+  if (noEffect) return 0;
   return Math.max(1, dmg);
 }
 
@@ -3579,7 +3613,7 @@ function scoreOpponentMoveDist(user, target, moveName, ctx) {
     // instead of this inner condition would silently suppress a bonus source
     // actually grants to power-1 moves — a real divergence a prior proposal
     // in this series would have introduced by "simplifying" the fix upward.
-    if (move.power > 1 && simDmg() >= targetHp) {
+    if (move.power > 1 && Math.max(1, simDmg()) >= targetHp /* Cmd_if_can_faint clamps first, :1762-1764 */) {
       // AI_TryToFaint_TryToEncourageQuickAttack (battle_ai_scripts.s:2629-2636).
       if (move.effect === "EFFECT_EXPLOSION") {
         // :2630 `if_effect EFFECT_EXPLOSION, AI_TryToFaint_End` jumps straight
@@ -3954,7 +3988,7 @@ function computeAiRollOutcomes(opp, you, st, targetHp, relevant) {
   let invariant = true;
   for (const m of relevant) {
     const lo = dmg.get(m)[0], hi = dmg.get(m)[AI_SIM_ROLLS.length - 1];
-    if ((lo >= targetHp) !== (hi >= targetHp)) { invariant = false; break; }
+    if ((Math.max(1, lo) >= targetHp) !== (Math.max(1, hi) >= targetHp)) { invariant = false; break; }
   }
   if (invariant) {
     for (const m of eligible) {
@@ -3986,7 +4020,7 @@ function computeAiRollOutcomes(opp, you, st, targetHp, relevant) {
     let key = "";
     for (let k = 0; k < relevant.length; k++) {
       const m = relevant[k];
-      const ko = dmg.get(m)[idx[k]] >= targetHp ? 1 : 0;
+      const ko = Math.max(1, dmg.get(m)[idx[k]]) >= targetHp ? 1 : 0;
       const notMost = eligible.includes(m) && D(m, idx[k]) < maxD ? 1 : 0;
       key += ko + "" + notMost;
     }
@@ -10543,6 +10577,7 @@ function analyzeMatchup(youConfig, oppConfig, { yourHpPct = 100, oppHpPct = 100,
 }
 
 export {
+  typeCalcRows, // F17
   buildMon, calcDamage, calcConfusionDamage, typeEffectiveness,
   // amendment 16: the site's Hidden Power type picker lists exactly these
   HIDDEN_POWER_TYPES,
