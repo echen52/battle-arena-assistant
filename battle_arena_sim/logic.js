@@ -6081,7 +6081,11 @@ function statDownExecutor(stageKey, amount, blockingAbility) {
     // while the target's side has mistTimer running, unless the change is
     // `certain` or the move is Curse. Every stat-lowering MOVE in this engine
     // routes through this one function, which is why the check belongs here.
-    if (s[actor === "you" ? "oppMistTurns" : "youMistTurns"] != null) return "failed";
+    // Phase D F36: and it is NOT a failure. BattleScript_MistProtected
+    // (data/battle_scripts_1.s:3343-3347) sets no MOVE_RESULT flag and its
+    // STRINGID_PKMNPROTECTEDBYMIST is not a deducting string
+    // (src/battle_arena.c:628-651): AddSkillPoints' final else, +1.
+    if (s[actor === "you" ? "oppMistTurns" : "youMistTurns"] != null) return;
     const foeSideRec = actor === "you" ? "opp" : "you";
     if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke"
         || (blockingAbility && foeMon.ability === blockingAbility)) {
@@ -7199,18 +7203,24 @@ const EFFECT_EXECUTORS = {
     // independent statbuffchanges, Hyper Cutter blocks the Atk half ALONE and
     // the Def half still lands -- which is why this cannot reuse
     // statDownExecutor, whose blockingAbility fails the whole move.
+    //
+    // Phase D F36: the script has NO Substitute check (BattleScript_EffectStatDown
+    // has one at :536; this one does not) and ChangeStatBuffs has none, so
+    // Tickle goes through a Substitute. Mist stops both statbuffchanges first
+    // (src/battle_script_commands.c:6962-6980): nothing lands, no flag, +1.
+    // Hyper Cutter stops the Attack half with STRINGID_PKMNSXPREVENTSYLOSS
+    // (:7022-7034), a deducting string: +1 -3, and the Defense half lands.
     const isYou = actor === "you";
     const foeMon = isYou ? ctx.opp : ctx.you;
-    if (s[isYou ? "oppSubstituteHP" : "youSubstituteHP"]) return "failed";
     const foeStages = isYou ? s.oppStages : s.youStages;
-    // F2a: the record follows the script -- both-at-minimum fails first
-    // (bs:2656-2657), then statbuffchange: Mist, then the abilities.
-    if (!(foeStages.atk <= -6 && foeStages.def <= -6) && s[isYou ? "oppMistTurns" : "youMistTurns"] == null
-        && ["Clear Body", "White Smoke", "Hyper Cutter"].includes(foeMon.ability)) recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
-    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
     if (foeStages.atk <= -6 && foeStages.def <= -6) return "failed";
-    if (foeMon.ability !== "Hyper Cutter") bumpStage(foeStages, "atk", -1);
+    if (s[isYou ? "oppMistTurns" : "youMistTurns"] != null) return;
+    // F2a: ChangeStatBuffs records the blocking ability (:7003, :7031).
+    if (["Clear Body", "White Smoke", "Hyper Cutter"].includes(foeMon.ability)) recordAbility(s, isYou ? "opp" : "you", foeMon.ability);
+    if (foeMon.ability === "Clear Body" || foeMon.ability === "White Smoke") return "failed";
     bumpStage(foeStages, "def", -1);
+    if (foeMon.ability === "Hyper Cutter") return { printed: ["STRINGID_PKMNSXPREVENTSYLOSS"] };
+    bumpStage(foeStages, "atk", -1);
   },
   EFFECT_MINIMIZE: (s, actor) => {
     // BattleScript_EffectMinimize (data/battle_scripts_1.s:1476-1480):
@@ -8947,6 +8957,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   } else {
     const executor = EFFECT_EXECUTORS[moveData.effect];
     let outcome = "landed";
+    // Phase D F36: an executor that lands but prints a DeductSkillPoints
+    // string returns { printed: [...] } (Tickle into Hyper Cutter).
+    let printed = [];
     if (executor) {
       // Status-move executors can report "failed" (e.g. Rest at full HP,
       // Roar with nothing to switch into, paralysis blocked by type/ability)
@@ -8959,6 +8972,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // not MOVE_RESULT_FAILED -- a miss, which BattleArena_AddSkillPoints
       // scores differently from a failure.
       else if (result === "missed") outcome = "miss";
+      else if (result && typeof result === "object") printed = result.printed ?? [];
     } else {
       // A3: the EFFECT_TOXIC exemption that used to live on this branch is GONE.
       // It let Toxic land, score +1 Skill and apply nothing whenever the target
@@ -8991,7 +9005,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // 5 cells of 1392, all four queued for B3.
       throw new Error(`"${moveName}" (effect: ${moveData.effect}) has no execution logic yet — port it into EFFECT_EXECUTORS.`);
     }
-    s[skillKey] += skillDelta(outcome);
+    s[skillKey] += printed.length ? arenaSkillDelta("landed", printed) : skillDelta(outcome);
   }
 }
 
