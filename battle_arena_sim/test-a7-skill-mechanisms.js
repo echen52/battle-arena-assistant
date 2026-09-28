@@ -66,8 +66,13 @@ console.log();
 console.log("-- PART 4: the six ability nets are DERIVED, and unchanged --");
 {
   // These are the values the engine used to hard-code. They must now be
-  // produced by the mechanism, not typed.
-  const historical = { "Wonder Guard": -2, "Levitate": -2, "Soundproof": -2,
+  // produced by the mechanism, not typed. Phase D F22: Soundproof -2 -> -3
+  // (the emulator: four created-lead traces). Its block is
+  // ABILITYEFFECT_MOVES_BLOCK, which Cmd_attackcanceler checks BEFORE setting
+  // HITMARKER_OBEYS (src/battle_script_commands.c:932 vs :960), so
+  // AddSkillPoints never adds the +1 -- the "unchanged" of A7 held for the
+  // hard-coded -2, which was itself wrong.
+  const historical = { "Wonder Guard": -2, "Levitate": -2, "Soundproof": -3,
                        "Flash Fire": -2, "Volt Absorb": -5, "Water Absorb": -5 };
   for (const [ability, want] of Object.entries(historical)) {
     const src = ABILITY_BLOCK_SOURCE[ability];

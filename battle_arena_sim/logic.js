@@ -6156,6 +6156,11 @@ const ARENA_DEDUCT_STRINGS = new Set([
 const ARENA_ADD_SKILL = {
   alreadyStatused: -2, noEffect: -2, protectedBlock: 0, mixed: 1,
   superEffective: 2, notVeryEffective: -1, landed: 1, selfProtected: 0,
+  // Phase D F22: AddSkillPoints is gated on HITMARKER_OBEYS (src/battle_arena.c:
+  // 592), which Cmd_attackcanceler sets only at :960 -- AFTER the
+  // ABILITYEFFECT_MOVES_BLOCK return at :932. A move blocked there scores
+  // nothing at `end`.
+  beforeObeys: 0,
 };
 
 // The composite. `printed` is the list of source string IDs this resolution
@@ -6183,8 +6188,9 @@ function arenaSkillDelta(addBranch, printed = []) {
 //   src/battle_message.c:895-896) are NOT in DeductSkillPoints' switch.
 // Soundproof / Flash Fire: both block BEFORE typecalc (src/battle_util.c:
 //   2659-2674 ABILITYEFFECT_MOVES_BLOCK; :2703-2727 ABILITYEFFECT_ABSORBING),
-//   so no MOVE_RESULT_* is ever set and AddSkillPoints falls through to +1 --
-//   but their strings ARE matched, for -3.
+//   so no MOVE_RESULT_* is ever set and their strings ARE matched, for -3.
+//   Flash Fire's AddSkillPoints then falls through to +1; Soundproof's never
+//   runs (Phase D F22: the block precedes HITMARKER_OBEYS).
 // Volt Absorb / Water Absorb: BattleScript_MoveHPDrain
 //   (data/battle_scripts_1.s:4078-4089) sets MOVE_RESULT_DOESNT_AFFECT_FOE
 //   (line 4088) -> -2, AND prints STRINGID_PKMNRESTOREDHPUSING (line 4086) ->
@@ -6192,7 +6198,10 @@ function arenaSkillDelta(addBranch, printed = []) {
 const ABILITY_BLOCK_SOURCE = {
   "Wonder Guard": { addBranch: "noEffect", printed: ["STRINGID_AVOIDEDDAMAGE"] },
   "Levitate": { addBranch: "noEffect", printed: ["STRINGID_PKMNMAKESGROUNDMISS"] },
-  "Soundproof": { addBranch: "landed", printed: ["STRINGID_PKMNSXBLOCKSY"] },
+  // F22: Soundproof is ABILITYEFFECT_MOVES_BLOCK, before HITMARKER_OBEYS (see
+  // ARENA_ADD_SKILL.beforeObeys): -3 alone, not -3 +1. Flash Fire's
+  // ABSORBING check is after it (:1021), so its +1 stands.
+  "Soundproof": { addBranch: "beforeObeys", printed: ["STRINGID_PKMNSXBLOCKSY"] },
   "Flash Fire": { addBranch: "landed", printed: ["STRINGID_PKMNRAISEDFIREPOWERWITH"] },
   "Volt Absorb": { addBranch: "noEffect", printed: ["STRINGID_PKMNRESTOREDHPUSING"] },
   "Water Absorb": { addBranch: "noEffect", printed: ["STRINGID_PKMNRESTOREDHPUSING"] },
