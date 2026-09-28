@@ -3349,8 +3349,12 @@ function calcDamage(attacker, defender, moveName, {
   // on the STAGE, which is why it is resolved here and not earlier.
   const atkStat = applyStatStage(attack, effAtkStage);
   const effDef = Math.max(1, applyStatStage(defense, effDefStage));
+  // Phase D F32: `2 * attacker->level / 5` is INTEGER division in source
+  // (src/pokemon.c:3246 / :3301); this used a float, so any level that is not a
+  // multiple of 5 hit harder (Lv27: 12.8 for 12). Lv50 is unaffected.
+  const levelTerm = Math.floor((2 * attacker.level) / 5) + 2;
   let preFinal = Math.floor(
-    Math.floor((2 * attacker.level / 5 + 2) * power * atkStat / effDef) / 50
+    Math.floor(levelTerm * power * atkStat / effDef) / 50
   );
 
   // Burn: physical damage halved, UNLESS attacker has Guts (source-confirmed
