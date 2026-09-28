@@ -5671,7 +5671,13 @@ const BERRY_CURE = {
   "Lum Berry": ["paralysis", "sleep", "poison", "burn", "freeze", "confusion"],
 };
 
-// Timing (confirmed from source, both ENDTURN_ITEMS1 and ENDTURN_ITEMS2 call
+// Timing -- CORRECTED by Phase D F28: the cure ALSO runs at every move end
+// (MOVEEND_ITEM_EFFECTS_ALL -> ITEMEFFECT_MOVE_END, src/battle_script_commands.c:
+// 4330-4335; src/battle_util.c:3625-3740), from applyMove; the paragraph below
+// described only the end-of-turn call, and its "a status inflicted early in a
+// turn still fully applies to that turn's OWN action" is wrong: the berry cures
+// it before the holder acts.
+// (Original note:) Timing (confirmed from source, both ENDTURN_ITEMS1 and ENDTURN_ITEMS2 call
 // the SAME ItemBattleEffects(ITEMEFFECT_NORMAL, ...) switch, gated on nothing
 // but "does this status exist right now" — no moveTurn check on any cure
 // case): this is an END-OF-TURN check, NOT immediate-on-infliction. ITEMS1
@@ -5692,7 +5698,11 @@ function tryCureWithBerry(s, side, mon) {
   const sleepTurnsKey = side === "you" ? "youSleepTurns" : "oppSleepTurns";
   const toxicKey = side === "you" ? "youToxicCounter" : "oppToxicCounter";
   if (s[consumedKey]) return;
-  const cures = BERRY_CURE[mon.item];
+  // F28: the item HELD now (a Trick may have moved one), as ItemBattleEffects
+  // reads gBattleMons[battler].item
+  const itemKey = side === "you" ? "youItemOverride" : "oppItemOverride";
+  const held = s[itemKey] !== undefined ? s[itemKey] : mon.item;
+  const cures = BERRY_CURE[held];
   if (!cures) return;
   let used = false;
   if (s[statusKey] && cures.includes(s[statusKey])) {
@@ -5718,7 +5728,7 @@ function tryCureWithBerry(s, side, mon) {
   }
   if (used) {
     s[consumedKey] = true;
-    s[side === "you" ? "youUsedItem" : "oppUsedItem"] = mon.item;
+    s[side === "you" ? "youUsedItem" : "oppUsedItem"] = held;
     // B2b batch 10: a consumed berry now also clears the HELD ITEM, because
     // items became state-mutable in this batch and "consumed" has to mean
     // "not held any more" for Recycle and Trick to be right. Before the
@@ -7609,10 +7619,6 @@ const FOCUS_BAND_SPACE = 100;
 // that appeared during this action -- every psn/par/brn an action can land goes
 // through SetMoveEffect, and sleep/freeze are not synchronized.
 const SYNC_STATUSES = new Set(["poison", "paralysis", "burn"]);
-// F26: set by a successful Trick / Thief during the current action (whose
-// attacker then holds nothing until MOVEEND_CHANGED_ITEMS); read and reset by
-// applyMove. Module-level because it must not enter the state.
-let _changedItemsActor = null;
 function applyMove(ctx, s, actor, ...rest) {
   const isYou = actor === "you";
   const selfKey = isYou ? "youStatus" : "oppStatus";
@@ -7649,7 +7655,22 @@ function applyMove(ctx, s, actor, ...rest) {
   }
   const self = isYou ? ctx.you : ctx.opp;
   const foe = isYou ? ctx.opp : ctx.you;
-  if (self.ability !== "Synchronize" && foe.ability !== "Synchronize") return;
+  if (self.ability === "Synchronize" || foe.ability === "Synchronize") applySynchronize(s, isYou, self, foe, selfKey, foeKey, selfPre, foePre);
+  // Phase D F28: MOVEEND_ITEM_EFFECTS_ALL (src/battle_script_commands.c:4330-
+  // 4335) runs ItemBattleEffects(ITEMEFFECT_MOVE_END) for EVERY battler after
+  // EVERY action, cancelled ones included (src/battle_util.c:3625-3740): the
+  // status berries (Cheri, Pecha, Rawst, Aspear, Chesto, Persim, Lum) cure
+  // right after the move that inflicted the status -- not only at the end of
+  // the turn, as the engine had it. A Thunder-Waved Cheri holder acts
+  // unparalysed that same turn (emulator: traces-given/00832).
+  tryCureWithBerry(s, "you", ctx.you);
+  tryCureWithBerry(s, "opp", ctx.opp);
+}
+// F26: set by a successful Trick / Thief during the current action (whose
+// attacker then holds nothing until MOVEEND_CHANGED_ITEMS); read and reset by
+// applyMove. Module-level because it must not enter the state.
+let _changedItemsActor = null;
+function applySynchronize(s, isYou, self, foe, selfKey, foeKey, selfPre, foePre) {
   const selfSide = isYou ? "you" : "opp", foeSide = isYou ? "opp" : "you";
   const hpOf = (side) => (side === "you" ? s.yourHpPct : s.oppHpPct);
   const give = (side, mon, st) => {

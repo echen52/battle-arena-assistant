@@ -151,11 +151,18 @@ console.log("-- PART 3: Nightmare needs sleep, and bleeds only while it lasts --
   // The other sleep-clearing sites clear it too: HOLD_EFFECT_CURE_SLP /
   // CURE_STATUS (src/battle_util.c:3546, :3570, :3692, :3725).
   const chesto = mk(["Nightmare", "Body Slam", "Rest", "Earthquake"], { item: "Chesto Berry" });
-  const cs = buildStartState({ you: chesto, opp, overrides: { youStatus: "sleep", youSleepTurns: 3 } });
-  applyMove({ you: chesto, opp }, cs, "opp", "Nightmare", true, false);
+  // (Phase D F28: the state is built directly. Applying Nightmare to it, as
+  // this probe used to, now cures the sleep at that move's own end --
+  // ITEMEFFECT_MOVE_END, src/battle_util.c:3678-3686 -- which is what the ROM
+  // does, so a sleeping, nightmared, berry-holding mon only exists as a
+  // constructed state.)
+  const cs = buildStartState({ you: chesto, opp, overrides: { youStatus: "sleep", youSleepTurns: 3, youNightmared: true } });
   ok(cs.youNightmared === true, "(probe check) the Chesto holder is nightmared first");
-  const cured = resolveTurn({ you: chesto, opp }, { ...cs, yourHpPct: 70 }, "Body Slam", "Body Slam")[0].state;
-  ok(cured.youStatus === null && cured.youNightmared === false,
+  // Every branch: the sleep and the nightmare are gone. (Since F28 the cure
+  // lands at the sleeper's own move end, so a Body Slam after it may paralyse
+  // it -- the old end-of-turn cure could only ever leave it statusless.)
+  const curedAll = resolveTurn({ you: chesto, opp }, { ...cs, yourHpPct: 70 }, "Body Slam", "Body Slam");
+  ok(curedAll.every((b) => b.state.youStatus !== "sleep" && b.state.youNightmared === false),
     "a berry that cures the sleep must take the nightmare with it");
   console.log(`   asleep: bleeds to ${bleeding.yourHpPct.toFixed(1)}%; wake-then-Rest and berry-cure both clear the flag`);
 }
