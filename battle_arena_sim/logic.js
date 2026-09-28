@@ -319,6 +319,11 @@ function chargeTurnRequired(moveData, weather) {
 // map to a specific gStatuses3 invulnerability bit. Bounce additionally
 // tries to paralyze on its attack turn (not modeled — none of our current
 // movesets include Bounce; flag if it comes up).
+// Phase D F25: what Cmd_tryswapitems refuses to move -- ITEM_ENIGMA_BERRY and
+// IS_ITEM_MAIL (include/mail.h:6-17; test-d-f25 checks this against the macro).
+const TRICK_UNSWAPPABLE = new Set(["ITEM_ENIGMA_BERRY", "ITEM_ORANGE_MAIL", "ITEM_HARBOR_MAIL",
+  "ITEM_GLITTER_MAIL", "ITEM_MECH_MAIL", "ITEM_WOOD_MAIL", "ITEM_WAVE_MAIL", "ITEM_BEAD_MAIL",
+  "ITEM_SHADOW_MAIL", "ITEM_TROPIC_MAIL", "ITEM_DREAM_MAIL", "ITEM_FAB_MAIL", "ITEM_RETRO_MAIL"]);
 const SEMI_INVULN_BIT = { Dive: "underwater", Dig: "underground", Fly: "onair", Bounce: "onair" };
 
 // Moves that bypass a given invulnerability bit, and whether they get the
@@ -6853,10 +6858,20 @@ const EFFECT_EXECUTORS = {
     const isYou = actor === "you";
     const self = isYou ? ctx.you : ctx.opp;
     const foe = isYou ? ctx.opp : ctx.you;
+    // Phase D F25: BattleScript_EffectTrick checks the TARGET's Substitute
+    // first (`jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE, ButItFailed`,
+    // data/battle_scripts_1.s:2335); the engine let Trick through a
+    // Substitute (emulator: traces/00306, ROM -2, sim +1).
+    if ((isYou ? s.oppSubstituteHP : s.youSubstituteHP) != null) return "failed";
     if (!self.item && !foe.item) return "failed";
+    // ...and an Enigma Berry or mail on either side fails it (:9217-9222).
+    if ([self.item, foe.item].some((it) => it && TRICK_UNSWAPPABLE.has(itemData(it)?.constant))) return "failed";
     if (foe.ability === "Sticky Hold") { recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); return "failed"; } // F2a :9233
     s[isYou ? "youItemOverride" : "oppItemOverride"] = foe.item ?? null;
     s[isYou ? "oppItemOverride" : "youItemOverride"] = self.item ?? null;
+    // ...and a swap clears BOTH battlers' choicedMove (:9254-9258).
+    s.youChoiceLock = null;
+    s.oppChoiceLock = null;
   },
   EFFECT_RECYCLE: (s, actor, ctx) => {
     // Cmd_tryrecycleitem (:9430-9452): restores the user's USED item, and only
@@ -11013,6 +11028,7 @@ export {
   typeCalcRows, // F17
   aiTurnPlans, // F14
   EFFECTIVENESS_CLEARED_EFFECTS, // F21
+  TRICK_UNSWAPPABLE, // F25
   // Phase D F2b: pinned to the script's list by its test.
   THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
