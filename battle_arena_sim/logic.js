@@ -9010,6 +9010,29 @@ function isWeatherChipImmune(weatherType, mon, charging) {
 function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
   const { you, opp } = ctx;
 
+  // Phase D F34: WISH is a FIELD end-turn step -- DoFieldEndTurnEffects runs
+  // ENDTURN_REFLECT, LIGHT_SCREEN, MIST, SAFEGUARD, WISH, then RAIN, SANDSTORM,
+  // SUN, HAIL (src/battle_util.c:1168-1178), all before DoBattlerEndTurnEffects
+  // (src/battle_main.c:3963-3966). The engine healed the wisher AFTER the
+  // poison / burn / Leech Seed ticks, which let a full-HP wisher's heal undo
+  // that turn's residual (emulator: traces/00182, Espeon's Toxic tick). It now
+  // runs first, before the weather damage too.
+  // B2: Wish. ENDTURN_WISH (src/battle_util.c:1319-1338) decrements the counter
+  // and, when it reaches 0, heals the wisher maxHP/2 (min 1). Set to 2 on use,
+  // so it lands at the end of the FOLLOWING turn — a Wish cast on turn 3 of a
+  // 3-turn round never resolves, which falls out of the counter rather than
+  // being special-cased.
+  for (const [k, hpKey, mon] of [["youWishTurns", "yourHpPct", you], ["oppWishTurns", "oppHpPct", opp]]) {
+    if (s[k] == null) continue;
+    s[k] -= 1;
+    if (s[k] > 0) continue;
+    s[k] = null;
+    if (s[hpKey] > 0) {
+      const heal = Math.max(1, Math.floor(mon.stats.hp / 2));
+      s[hpKey] = hpAdd(s[hpKey], heal, mon.stats.hp);
+    }
+  }
+
   // Weather chip damage + duration housekeeping runs FIRST, before EVERYTHING
   // else in this function — DoFieldEndTurnEffects() runs to completion
   // entirely before DoBattlerEndTurnEffects() even starts (src/battle_main.c:3963-3966),
@@ -9275,22 +9298,6 @@ function applyEndOfTurnEffects(ctx, s, shedSkinCure = null) {
     if (s[timerKey] == null) continue;
     s[timerKey] -= 1;
     if (s[timerKey] <= 0) { s[timerKey] = null; s[moveKey] = null; }
-  }
-
-  // B2: Wish. ENDTURN_WISH (src/battle_util.c:1319-1338) decrements the counter
-  // and, when it reaches 0, heals the wisher maxHP/2 (min 1). Set to 2 on use,
-  // so it lands at the end of the FOLLOWING turn — a Wish cast on turn 3 of a
-  // 3-turn round never resolves, which falls out of the counter rather than
-  // being special-cased.
-  for (const [k, hpKey, mon] of [["youWishTurns", "yourHpPct", you], ["oppWishTurns", "oppHpPct", opp]]) {
-    if (s[k] == null) continue;
-    s[k] -= 1;
-    if (s[k] > 0) continue;
-    s[k] = null;
-    if (s[hpKey] > 0) {
-      const heal = Math.max(1, Math.floor(mon.stats.hp / 2));
-      s[hpKey] = hpAdd(s[hpKey], heal, mon.stats.hp);
-    }
   }
 
   // Reflect/Light Screen duration: a SEPARATE end-of-turn tracker from the
