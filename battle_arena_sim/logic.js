@@ -26,6 +26,7 @@ import { CRIT_EFFECTS } from "./crit-effects.js";
 import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { TYPE_EFFECTIVENESS } from "./type-table.js";
+import { EFFECT_ACCURACY_CHECK } from "./acc-check.js";
 import { GENDER_RATIO } from "./gender-data.js";
 // Phase D F13: the ROM's AI program and its interpreter.
 import { AI_CONST } from "./ai-program.js";
@@ -9783,7 +9784,13 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
         // UNDERGROUND / UNDERWATER test cannot fire against them. This gate
         // used to test `targetCharging` alone, so every such charger was
         // unhittable for its charge turn.
-        if (moveData.power > 0 && targetCharging?.invulnBit && !INVULN_BYPASS[targetCharging.invulnBit]?.[moveName]) {
+        // Phase D F23: and not only a move with power -- any move whose script
+        // runs accuracycheck (acc-check.js, generated) misses there: both the
+        // ACC_CURR_MOVE and the NO_ACC_CALC branches send an invulnerable target
+        // to the miss path (src/battle_script_commands.c:1054-1111). Sweet Scent
+        // into Fly used to land.
+        if ((moveData.power > 0 || EFFECT_ACCURACY_CHECK[moveData.effect] != null)
+            && targetCharging?.invulnBit && !INVULN_BYPASS[targetCharging.invulnBit]?.[moveName]) {
           return [{ p: 1, hit: false }];
         }
         // EFFECT_OHKO (Horn Drill/Fissure/Guillotine/Sheer Cold): Cmd_tryKO
