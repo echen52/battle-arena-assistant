@@ -8379,8 +8379,14 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       s[skillKey] += skillDelta("noEffect");
       return;
     }
-    if (moveData.effect === "EFFECT_DREAM_EATER" && s[foeStatusKey] !== "sleep") {
-      s[skillKey] += skillDelta("noEffect");
+    // Phase D F35: BattleScript_DreamEaterNoEffect -> BattleScript_WasntAffected
+    // (data/battle_scripts_1.s:307-311, 429-433) prints PKMNWASNTAFFECTED and
+    // sets NO result flag -- unlike ButItFailed (:2060) -- and the string is not
+    // one DeductSkillPoints matches. So AddSkillPoints' last arm: +1, not the
+    // -2 this scored (emulator: traces-given/00510). Substitute takes the same
+    // path.
+    if (moveData.effect === "EFFECT_DREAM_EATER" && (s[foeStatusKey] !== "sleep" || s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] != null)) {
+      s[skillKey] += skillDelta("landed");
       return;
     }
     const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
