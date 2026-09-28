@@ -6655,6 +6655,11 @@ const EFFECT_EXECUTORS = {
     s[selfHpKey] = 100;
     s[selfStatusKey] = "sleep";
     s[selfSleepTurnsKey] = 3;
+    // Phase D F18: status1 = STATUS1_SLEEP_TURN(3) (:6779) OVERWRITES it, so a
+    // badly poisoned rester's toxic bits and counter go too. The engine left
+    // the counter, which read as bad poison to anything keyed on it -- and
+    // made a later plain poison tick as Toxic.
+    s[actor === "you" ? "youToxicCounter" : "oppToxicCounter"] = null;
   },
   // Batch 3: direct sleep-inducing status moves (Hypnosis/Spore/Lovely Kiss/
   // Sing/Sleep Powder) — targets the FOE, unlike Rest which targets self.

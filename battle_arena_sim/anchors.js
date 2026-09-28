@@ -92,6 +92,7 @@ export const ANCHOR_HISTORY = [
   ["0.9151343785835914", "C1, B6-1a..1d", "unchanged — headless search, integer HP, the AI's integer HP percentage and the transposition table leave it bit for bit"],
   ["0.9057599196787075", "B6-2", "MOVED — critical hits, exact (Cmd_critcalc); the crits-off engine reproduces the pre-crit universe byte for byte"],
   ["0.9057599196787075", "Phase D F1-F5, F2a", "unchanged — Metagross is single-ability (Clear Body, known without a record) and Umbreon 4 reaches none of the AI checks, trapping, item or HP fixes"],
+  ["0.9057599196787075", "Phase D F6-F18", "unchanged -- F13's interpreter scores Umbreon 4 as the handlers did here, F14 has no Quick Claw, F18 moves no value"],
 ];
 
 // B7a moved three OTHER recorded values, each with a named mechanism. Kept here
