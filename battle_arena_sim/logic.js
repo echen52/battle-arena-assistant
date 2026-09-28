@@ -27,6 +27,13 @@ import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
 import { TYPE_EFFECTIVENESS } from "./type-table.js";
 import { EFFECT_ACCURACY_CHECK } from "./acc-check.js";
+import { EFFECT_DAMAGE_ADJUST } from "./damage-adjust.js";
+// Phase D F30: no damage roll for an effect whose script reaches only
+// adjustsetdamage (src/battle_script_commands.c:5861-5899 has no roll).
+const ROLL_EXEMPT = (effect) => {
+  const a = EFFECT_DAMAGE_ADJUST[effect];
+  return !!a && a.length === 1 && a[0] === "adjustsetdamage";
+};
 import { GENDER_RATIO } from "./gender-data.js";
 // Phase D F13: the ROM's AI program and its interpreter.
 import { AI_CONST } from "./ai-program.js";
@@ -3179,7 +3186,7 @@ function calcDamage(attacker, defender, moveName, {
   //
   // The returned number still flows through applyMove's substitute, Endure and
   // Focus Band handling, because in source those live in Cmd_adjustsetdamage
-  // (src/battle_script_commands.c:2168-2199) AFTER the number is fixed.
+  // (src/battle_script_commands.c:5861-5899) AFTER the number is fixed.
   if (!aiEstimate && SET_DAMAGE_EFFECTS.has(move.effect)) {
     if (typeEffectiveness(move.type, defender.types, defenderForesighted) === 0) return 0;
     const defHp = Math.round((defenderHpPct / 100) * defender.stats.hp);
@@ -3409,9 +3416,15 @@ function calcDamage(attacker, defender, moveName, {
   // sim-audit.md §3.3.) The float `rollFrac` path is UNCHANGED and remains what
   // the battle-damage path uses: 0.925, a LABELLED point estimate of the
   // 85-100 roll (amendment 15 -- enumerating it cost ~10x on top of crits).
-  dmg = rollPercent != null
-    ? Math.floor((dmg * rollPercent) / 100)
-    : Math.floor(dmg * rollFrac);
+  // Phase D F30: only a script that reaches adjustnormaldamage(2) rolls; one
+  // that reaches adjustsetdamage alone does not (damage-adjust.js, generated).
+  // Spit Up was the formula move rolled here without a roll in source. The
+  // AI's estimate always takes simulatedRNG (AI_CalcDmg's callers).
+  if (aiEstimate || !ROLL_EXEMPT(move.effect)) {
+    dmg = rollPercent != null
+      ? Math.floor((dmg * rollPercent) / 100)
+      : Math.floor(dmg * rollFrac);
+  }
   // F17: the AI's estimate is gBattleMoveDamage * simulatedRNG / 100 as TypeCalc
   // left it -- a x0 row followed by another leaves 1, so not 0 -- and every
   // consumer applies its own min-1 (Cmd_get_how_powerful_move_is :1212-1213,
@@ -8392,9 +8405,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     }
     if (moveData.effect === "EFFECT_SPIT_UP") {
       // NOTE the script ends in `adjustsetdamage`, not `adjustnormaldamage`
-      // (data/battle_scripts_1.s:2103-2112), so Spit Up takes NO damage roll --
-      // handled by SET_DAMAGE_ROLL_EXEMPT below, beside the other set-damage
-      // moves.
+      // (data/battle_scripts_1.s:2094-2103), so Spit Up takes NO damage roll.
+      // (The "SET_DAMAGE_ROLL_EXEMPT" this used to cite did not exist and Spit
+      // Up was rolled; Phase D F30's ROLL_EXEMPT, derived from the scripts.)
       const spKey = isYou ? "youStockpile" : "oppStockpile";
       if (s[spKey] === 0) {
         s[skillKey] += skillDelta("noEffect");
