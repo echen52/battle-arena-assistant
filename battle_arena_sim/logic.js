@@ -3050,6 +3050,9 @@ const SET_DAMAGE_EFFECTS = new Set([
   "EFFECT_BIDE",
   "EFFECT_SONICBOOM", "EFFECT_DRAGON_RAGE", "EFFECT_PSYWAVE",
   "EFFECT_SUPER_FANG", "EFFECT_ENDEAVOR",
+  // Phase D F27: Counter / Mirror Coat -- counterdamagecalculator fixes the
+  // number, adjustsetdamage follows; no roll, no STAB, no crit.
+  "EFFECT_COUNTER", "EFFECT_MIRROR_COAT",
 ]);
 
 // Magnitude's own distribution (Cmd_magnitudedamagecalculation,
@@ -3190,6 +3193,12 @@ function calcDamage(attacker, defender, moveName, {
         }
         return variablePower;
       case "EFFECT_DRAGON_RAGE": return 40;
+      case "EFFECT_COUNTER": case "EFFECT_MIRROR_COAT": // F27: twice what was received, from applyMove
+        // Outside the hit (the search's tie-break, Transform / Mimic probes)
+        // there is no reflected number: keep what those callers always got,
+        // the power-1 formula below.
+        if (variablePower === null) break;
+        return variablePower;
       // Cmd_damagetohalftargethp (:9505-9512): hp / 2, floored, minimum 1.
       case "EFFECT_SUPER_FANG": return Math.max(1, Math.floor(defHp / 2));
       // Cmd_setdamagetohealthdifference (:9366-9377): target hp - user hp, and
@@ -8016,23 +8025,26 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     return;
   }
 
+  // Phase D F27: Counter / Mirror Coat. counterdamagecalculator (src/battle_
+  // script_commands.c:7943-7990) takes twice the damage of the matching
+  // category received THIS turn, or fails the move (FailedFromAtkString, -2).
+  // What follows in BattleScript_EffectCounter (data/battle_scripts_1.s:
+  // 1217-1225) is an ordinary set-damage hit: accuracycheck, typecalc2 (a type
+  // immunity or Wonder Guard stops it; no SE / NVE flag is ever written),
+  // adjustsetdamage (Endure, Focus Band), then BattleScript_HitFromAtkAnimation
+  // and the move end -- Substitute, Destiny Bond, the contact abilities, Rage,
+  // Color Change, Shell Bell. The engine used to subtract the number and
+  // return, skipping all of that (emulator: traces-given/00649, Counter into a
+  // Static Electrode). Now the number goes to the generic hit path as set
+  // damage (calcDamage's SET_DAMAGE_EFFECTS), exactly as Bide's unleash does.
+  let counterReflect = null;
   if (moveData.effect === "EFFECT_COUNTER" || moveData.effect === "EFFECT_MIRROR_COAT") {
-    // Reflects 2x whatever damage the user received THIS TURN from a
-    // qualifying move (physical for Counter, special for Mirror Coat).
-    // Fails entirely (no damage) if the user acted first this turn (nothing
-    // recorded yet) or the received damage was the wrong category.
-    const neededCategory = moveData.effect === "EFFECT_COUNTER" ? "physical" : "special";
-    const received = s[selfDamageTakenKey];
-    if (hit && received && received.category === neededCategory) {
-      const reflected = received.amount * 2;
-      s[foeHpKey] = hpSub(s[foeHpKey], reflected, foeMon.stats.hp);
-      s[skillKey] += skillDelta("landed");
-      s[foeDamageTakenKey] = { amount: reflected, category: neededCategory };
-    } else {
-      // Nothing to reflect — move fails outright, same bucket as "no effect".
+    const received = counterReceived(s, actor, moveData);
+    if (received === null) {
       s[skillKey] += skillDelta("noEffect");
+      return;
     }
-    return;
+    counterReflect = received * 2;
   }
 
   if (moveData.effect === "EFFECT_ENDURE") {
@@ -8364,6 +8376,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       }
     }
     if (bideUnleash !== null) furyCutterPower = bideUnleash;
+    if (counterReflect !== null) furyCutterPower = counterReflect; // F27
     // B3 batch 6: Triple Kick's first hit is power 10; the loop raises it.
     if (moveData.effect === "EFFECT_TRIPLE_KICK") furyCutterPower = 10;
     // B3 batch 3: typecalc sets targetNotAffected on a no-effect hit, and it is
@@ -8778,7 +8791,10 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // scripts (EFFECTIVENESS_CLEARED_EFFECTS) -- Seismic Toss scored +2 into a
     // Normal type where the ROM gives +1. A x0 still scores -2: the bicbyte
     // leaves MOVE_RESULT_DOESNT_AFFECT_FOE.
-    const flagsCleared = bideUnleash !== null || EFFECTIVENESS_CLEARED_EFFECTS.has(moveData.effect);
+    // (F27: Counter / Mirror Coat run typecalc2, which never writes SE / NVE
+    // either -- src/battle_script_commands.c:4500-4591.)
+    const flagsCleared = bideUnleash !== null || EFFECTIVENESS_CLEARED_EFFECTS.has(moveData.effect)
+      || moveData.effect === "EFFECT_COUNTER" || moveData.effect === "EFFECT_MIRROR_COAT";
     s[skillKey] += skillDelta(classifyOutcome(hit, flagsCleared && eff > 0 ? 1 : eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
     // now — see the comment above the blockedByProtect check — since it must
@@ -10165,6 +10181,14 @@ function counterHitPower(state, actor, moveData) {
   return null;
 }
 
+// Phase D F27: what Counter / Mirror Coat reflect -- the damage of the
+// matching category the user took THIS turn (gProtectStructs physicalDmg /
+// specialDmg), or null when there is none (the move fails).
+function counterReceived(state, actor, moveData) {
+  const received = state[actor === "you" ? "youDamageTaken" : "oppDamageTaken"];
+  const needed = moveData.effect === "EFFECT_COUNTER" ? "physical" : "special";
+  return received && received.category === needed && received.amount > 0 ? received.amount : null;
+}
 function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   const isYou = actor === "you";
   const foeMon = isYou ? ctx.opp : ctx.you;
@@ -10198,7 +10222,9 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   const bideLock = state[isYou ? "youLock" : "oppLock"];
   const probePower = moveData.effect === "EFFECT_BIDE"
     ? (bideLock?.kind === "bide" ? bideLock.dmg * 2 : 0)
-    : counterHitPower(state, actor, moveData);
+    : (moveData.effect === "EFFECT_COUNTER" || moveData.effect === "EFFECT_MIRROR_COAT") // F27
+      ? (counterReceived(state, actor, moveData) ?? 0) * 2
+      : counterHitPower(state, actor, moveData);
   const lethal = (r) => (probePower === 0 ? false : calcDamage(selfMon, foeMon, moveName,
     battleDamageOptions(ctx, state, actor, moveData, r.variablePower ?? probePower)) >= foeHp);
   if (!results.some((r) => r.hit && r.variablePower !== "heal" && lethal(r))) {
