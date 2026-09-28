@@ -5308,6 +5308,14 @@ const SECONDARY_SPEC = {
   EFFECT_POISON_HIT: { status: "poison" },
   EFFECT_POISON_TAIL: { status: "poison" },
   EFFECT_POISON_FANG: { status: "toxic" },
+  // Phase D F29: TWINEEDLE sets sMULTIHIT_EFFECT = MOVE_EFFECT_POISON
+  // (data/battle_scripts_1.s:1078) and BattleScript_MultiHitLoop copies it into
+  // cEFFECT_CHOOSER on EVERY hit (:619), each followed by the move end up to
+  // MOVEEND_NEXT_TARGET (:637) -- which includes ITEM_EFFECTS_ALL, so a berry
+  // cures between the hits. Its poison was "deliberately not modelled"
+  // because no opponent set carried it; B1's 850-set pool does (emulator:
+  // traces-given/00800 and 01126, Beedrill poisoning the lead).
+  EFFECT_TWINEEDLE: { status: "poison", perHit: 2 },
   EFFECT_TRI_ATTACK: { tri: true },
   EFFECT_ATTACK_UP_HIT: { self: { atk: 1 } },
   // B4b: the stat changes (data/battle_scripts_1.s:1041-1061, :1765, :1773).
@@ -5482,6 +5490,15 @@ function secondaryOutcomesOwn(ctx, state, actor, moveName, moveData, isLastToAct
     }
     return out.length ? out : null;
   }
+  if (spec.perHit && secondaryStatusCanLand(ctx, state, foeSide, foe, spec.status)) {
+    // F29: one draw per hit; `trig` is the per-hit vector. Nothing observes
+    // the order unless the target can cure poison between the hits (a
+    // move-end berry) or Synchronize it back, so without those the three
+    // "at least one" vectors are one outcome.
+    const cures = BERRY_CURE[foe.item]?.includes("poison");
+    if (!cures && foe.ability !== "Synchronize") return [{ q: 1 - (1 - q) * (1 - q), trig: [true, false] }];
+    return [{ q: q * q, trig: [true, true] }, { q: q * (1 - q), trig: [true, false] }, { q: (1 - q) * q, trig: [false, true] }];
+  }
   if (secondaryStatusCanLand(ctx, state, foeSide, foe, spec.status)) return [{ q, trig: true }];
   // A CERTAIN roll into a printing ability is observable through Skill even
   // though nothing lands (Safeguard comes first and prints nothing).
@@ -5576,10 +5593,9 @@ function applySecondary(ctx, s, actor, moveName, moveData, trig, foeHadSubstitut
 // 1/8 distribution for 2/3/4/5 hits — verified via the arithmetic, not
 // assumed. EFFECT_DOUBLE_HIT/EFFECT_TWINEEDLE pass a literal instruction
 // operand (2) instead of rolling, so they're always exactly 2 hits.
-// EFFECT_TWINEEDLE's poison secondary (independent per hit, per source) is
-// deliberately NOT modeled — it would need up to 2^hitCount branching, and
-// zero of the 552 real opponent sets carry Twineedle. Treated as a plain
-// damage-only 2-hit move (identical to Double Hit) until that changes.
+// EFFECT_TWINEEDLE's poison secondary (independent per hit, per source) was
+// left out while no opponent set carried Twineedle; Phase D F29 models it
+// (SECONDARY_SPEC.EFFECT_TWINEEDLE.perHit).
 const MULTI_HIT_DISTRIBUTION = {
   EFFECT_MULTI_HIT: [{ hits: 2, p: 3 / 8 }, { hits: 3, p: 3 / 8 }, { hits: 4, p: 1 / 8 }, { hits: 5, p: 1 / 8 }],
   EFFECT_DOUBLE_HIT: [{ hits: 2, p: 1 }],
@@ -8497,8 +8513,18 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // damaging hit of the move, never the total -- a multi-hit move heals off
       // hit one alone. Preserved as the quirk it is, not "fixed" to a sum.
       let shellBellBasis = 0;
+      // F29: a per-hit secondary (Twineedle) is drawn per hit (secondaryTriggered
+      // is the vector) and applied right after that hit, then that hit's move
+      // end cures with a berry (MOVEEND_ITEM_EFFECTS_ALL, before NEXT_TARGET).
+      const perHitSecondary = (i, subAtHitStart) => {
+        if (!Array.isArray(secondaryTriggered) || eff === 0) return;
+        if (secondaryTriggered[i]) applySecondary(ctx, s, actor, moveName, moveData, true, subAtHitStart);
+        tryCureWithBerry(s, "you", ctx.you);
+        tryCureWithBerry(s, "opp", ctx.opp);
+      };
       for (let i = 0; i < hits; i++) {
         if (s[foeHpKey] <= 0) break; // already fainted from an earlier hit this sequence (src: jumpifhasnohp BS_TARGET)
+        const subAtHitStart = s[foeSubKey] != null;
         // B3 batch 6: Triple Kick re-runs damagecalc every hit with
         // gDynamicBasePower = sTRIPLE_KICK_POWER, which gains 10 per hit
         // (addbyte ... 10; copyhword gDynamicBasePower, :1399-1401) -- a power
@@ -8582,11 +8608,12 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // MOVE_RESULT_FOE_ENDURED (jumpifbyte ... BattleScript_MultiHitPrintStrings)
           // — no further hits after the one that gets clamped to 1 HP, unlike
           // a broken substitute (which lets the sequence continue).
-          if (endureTriggeredThisHit) break;
+          if (endureTriggeredThisHit) { perHitSecondary(i, subAtHitStart); break; }
         }
+        perHitSecondary(i, subAtHitStart);
       }
       // B4: seteffectwithchance -- after datahpupdate, before MOVEEND.
-      if (secondaryTriggered && eff !== 0) applySecondary(ctx, s, actor, moveName, moveData, secondaryTriggered, foeHadSubstitute);
+      if (secondaryTriggered && !Array.isArray(secondaryTriggered) && eff !== 0) applySecondary(ctx, s, actor, moveName, moveData, secondaryTriggered, foeHadSubstitute);
       // Any damaging Fire-type move thaws a frozen target, regardless of user
       // (and regardless of substitute — thaw wasn't confirmed to be blocked
       // by a sub, kept as a passive reaction to being hit either way).
@@ -10013,8 +10040,21 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
           // Cmd_setmultihitcounter runs a single time, before the loop even
           // starts). The per-hit damage/substitute/Endure mechanics live in
           // applyMove's loop; this branch only fixes how many iterations it runs.
+          // F29: a per-hit secondary (Twineedle, always 2 hits) is drawn here too.
+          const perHit = secondarySpecFor(moveName, moveData)?.perHit
+            ? secondaryOutcomes(ctx, state, actor, moveName, moveData, isLastToAct) : null;
           for (const { hits, p: hp } of hitDist) {
-            if (hp > 0) results.push({ p: p * ab.p * hp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
+            if (hp <= 0) continue;
+            if (perHit) {
+              let rest = 1;
+              for (const o of perHit) {
+                results.push({ p: p * ab.p * hp * o.q, hit: true, selfHit: false, secondaryTriggered: o.trig, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
+                rest -= o.q;
+              }
+              if (rest > 1e-12) results.push({ p: p * ab.p * hp * rest, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
+            } else {
+              results.push({ p: p * ab.p * hp, hit: true, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, hitCount: hits, dmgHit: true });
+            }
           }
           continue;
         }
