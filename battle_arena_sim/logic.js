@@ -8214,8 +8214,14 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // check is reachable. The engine already tracks per-turn damage taken
     // (youDamageTaken / oppDamageTaken), which is exactly gProtectStructs'
     // physicalDmg/specialDmg for this purpose.
+    // Phase D F20: and the lost-focus branch (ppreduce, "lost its focus",
+    // goto BattleScript_MoveEnd) sets NO result flag, so the script's `end`
+    // (Cmd_end -> BattleArena_AddSkillPoints, src/battle_script_commands.c:
+    // 3950-3953; src/battle_arena.c:588-621) takes the last arm: +1, not the
+    // no-effect -2 this scored. (The user cannot be protected: it is using
+    // Focus Punch.)
     if (moveData.effect === "EFFECT_FOCUS_PUNCH" && (isYou ? s.youDamageTaken : s.oppDamageTaken)) {
-      s[skillKey] += skillDelta("noEffect");
+      s[skillKey] += skillDelta("landed");
       return;
     }
     // BattleScript_EffectSnore (data/battle_scripts_1.s:2254-2262): jumpifstatus
