@@ -3468,6 +3468,7 @@ function confusionSelfHitDamage(ctx, s, actor) {
     weather: effectiveWeather(s, ctx.you, ctx.opp),
     mudSportActive: vf(s, "youMudSport") || vf(s, "oppMudSport"),
     waterSportActive: vf(s, "youWaterSport") || vf(s, "oppWaterSport"),
+    ...(typeof ctx.rollPercent === "number" ? { rollPercent: ctx.rollPercent } : {}), // F31
   });
 }
 
@@ -7500,6 +7501,7 @@ function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, base
     baseMultiplier,
     mudSportActive: vf(s, "youMudSport") || vf(s, "oppMudSport"),
     waterSportActive: vf(s, "youWaterSport") || vf(s, "oppWaterSport"),
+    ...(typeof ctx.rollPercent === "number" ? { rollPercent: ctx.rollPercent } : {}), // F31
   };
 }
 
@@ -7655,7 +7657,11 @@ function applyMove(ctx, s, actor, ...rest) {
   const selfPre = s[selfKey], foePre = s[foeKey];
   const itemOvKey = isYou ? "youItemOverride" : "oppItemOverride";
   _changedItemsActor = null;
-  applyMoveCore(ctx, s, actor, ...rest);
+  // F31 (opt-in exact roll): the drawn roll(s) ride on this action's ctx --
+  // a number for one hit, an array per hit -- read by battleDamageOptions and
+  // the confusion self-hit. Without ctx.exactRoll no outcome carries one.
+  const roll = rest[23]; // after crit (rest[22]); applyMoveCore takes 23 after actor
+  applyMoveCore(roll != null ? { ...ctx, rollPercent: roll } : ctx, s, actor, ...rest.slice(0, 23));
   snapHp(ctx, s); // B6 step 1: the action's HP changes, as integer HP
   // Phase D F26: MOVEEND_CHOICE_MOVE (src/battle_script_commands.c:4296-4308)
   // runs at the end of EVERY move that obeyed -- hit, miss, fail or blocked by
@@ -8506,6 +8512,15 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       // B6-2: this hit's crit bit, and its damage computed WITH the crit
       // (Cmd_damagecalc's x2 before typecalc; stages and screens per critcalc).
       const critBit = (i) => ((crit | 0) >> i) & 1;
+      // F31: a per-hit roll vector recomputes each hit with its own roll.
+      const perHitRoll = Array.isArray(ctx.rollPercent) ? (i, power, isCrit) => {
+        let d = calcDamage(selfMon, foeMon, moveName, battleDamageOptions({ ...ctx, rollPercent: ctx.rollPercent[i] }, s, actor, moveData, power, spitUpMultiplier, isCrit));
+        if (s[foeChargingKey]) {
+          const bm = INVULN_BYPASS[s[foeChargingKey].invulnBit]?.[moveName];
+          if (bm) d = Math.floor(d * bm);
+        }
+        return d;
+      } : null;
       const critDmg = (power) => {
         let d = calcDamage(selfMon, foeMon, moveName, battleDamageOptions(ctx, s, actor, moveData, power, spitUpMultiplier, true));
         if (s[foeChargingKey]) {
@@ -8558,7 +8573,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // the REMAINING hits in the SAME move fall through to real HP
           // (Cmd_datahpupdate's substitute branch requires substituteHP > 0,
           // which is false the instant it's been zeroed).
-          const hitBase = critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
+          const hitPower = moveData.effect === "EFFECT_TRIPLE_KICK" ? (i > 0 ? 10 * (i + 1) : 10) : furyCutterPower;
+          const hitBase = perHitRoll ? perHitRoll(i, hitPower, !!critBit(i))
+            : critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
           const absorbed = Math.min(s[foeSubKey], hitBase);
           s[foeSubKey] -= absorbed;
           if (s[foeSubKey] <= 0) s[foeSubKey] = null; // sub breaks, fully absorbed regardless of excess
@@ -8575,7 +8592,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
           // ticks (those don't flow through this code path at all). Only
           // relevant here since a substitute already fully absorbs otherwise.
           const foeAbsHpBefore = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
-          let hitDmg = critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
+          let hitDmg = perHitRoll ? perHitRoll(i, moveData.effect === "EFFECT_TRIPLE_KICK" ? (i > 0 ? 10 * (i + 1) : 10) : furyCutterPower, !!critBit(i))
+            : critBit(i) ? critDmg(moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : furyCutterPower) : dmg;
           let endureTriggeredThisHit = false;
           if (s[foeEndureKey]) {
             const foeRawHp = Math.round((s[foeHpKey] / 100) * foeMon.stats.hp);
@@ -9587,23 +9605,27 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
         // lethal self-hit, unless it is behind a Substitute
         // (src/battle_script_commands.c:1718-1727). The confusion tick has
         // already run, so it is applied to a probe copy before measuring.
-        const selfHitOutcome = { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry };
         const fbItem = itemData((actor === "you" ? ctx.you : ctx.opp).item);
-        let banded = false;
-        if (fbItem && fbItem.holdEffect === "HOLD_EFFECT_FOCUS_BAND"
-            && state[actor === "you" ? "youSubstituteHP" : "oppSubstituteHP"] == null) {
-          const probe = cloneState(state);
-          if (carry.confTick) applyConfusionTick(probe, actor, carry.confTick);
-          const selfMonP = actor === "you" ? ctx.you : ctx.opp;
-          const hpNow = Math.round(((actor === "you" ? probe.yourHpPct : probe.oppHpPct) / 100) * selfMonP.stats.hp);
-          banded = confusionSelfHitDamage(ctx, probe, actor) >= hpNow;
-        }
-        if (banded) {
-          const pb = fbItem.param / FOCUS_BAND_SPACE;
-          gates.push({ p: p * pb, outcome: { ...selfHitOutcome, focusBanded: true } });
-          gates.push({ p: p * (1 - pb), outcome: { ...selfHitOutcome, focusBanded: false } });
-        } else {
-          gates.push({ p, outcome: selfHitOutcome });
+        // F31: in exact-roll mode the self-hit's adjustnormaldamage2 roll is
+        // drawn here, and the Focus Band check uses each roll's damage.
+        for (const [pr, roll] of ctx.exactRoll ? ROLL_VALUES.map((v) => [1 / 16, v]) : [[1, null]]) {
+          const selfHitOutcome = { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry, ...(roll != null ? { roll } : {}) };
+          let banded = false;
+          if (fbItem && fbItem.holdEffect === "HOLD_EFFECT_FOCUS_BAND"
+              && state[actor === "you" ? "youSubstituteHP" : "oppSubstituteHP"] == null) {
+            const probe = cloneState(state);
+            if (carry.confTick) applyConfusionTick(probe, actor, carry.confTick);
+            const selfMonP = actor === "you" ? ctx.you : ctx.opp;
+            const hpNow = Math.round(((actor === "you" ? probe.yourHpPct : probe.oppHpPct) / 100) * selfMonP.stats.hp);
+            banded = confusionSelfHitDamage(roll != null ? { ...ctx, rollPercent: roll } : ctx, probe, actor) >= hpNow;
+          }
+          if (banded) {
+            const pb = fbItem.param / FOCUS_BAND_SPACE;
+            gates.push({ p: p * pr * pb, outcome: { ...selfHitOutcome, focusBanded: true } });
+            gates.push({ p: p * pr * (1 - pb), outcome: { ...selfHitOutcome, focusBanded: false } });
+          } else {
+            gates.push({ p: p * pr, outcome: selfHitOutcome });
+          }
         }
       } else if (acb.kind === "paraBlocked") {
         gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, ...carry } });
@@ -10088,7 +10110,7 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
   }
   return disableTimerBranches(ctx, state, actor, moveData,
     contactAbilityBranches(ctx, state, actor, moveName, moveData,
-      focusBandBranches(ctx, state, actor, moveName, moveData, critSplit(ctx, state, actor, moveData, results, moveName))));
+      focusBandBranches(ctx, state, actor, moveName, moveData, rollSplit(ctx, state, actor, moveName, moveData, critSplit(ctx, state, actor, moveData, results, moveName)))));
 }
 
 // ── B8: THE CONTACT ABILITIES (ABILITYEFFECT_ON_DAMAGE, src/battle_util.c:
@@ -10263,6 +10285,69 @@ function counterReceived(state, actor, moveData) {
   const needed = moveData.effect === "EFFECT_COUNTER" ? "physical" : "special";
   return received && received.category === needed && received.amount > 0 ? received.amount : null;
 }
+// Phase D F31: the damage roll, EXACT and OPT-IN (ctx.exactRoll; amendment 15
+// kept it available "if Phase D's replay needs it" -- it does: 39 emulator
+// traces diverge only on the roll). Each landed damaging hit whose script
+// rolls (adjustnormaldamage: ApplyRandomDmgMultiplier, 100 - Random() % 16)
+// branches over 85..100, 1/16 each. A two-hit move draws a roll per hit;
+// more hits are refused by name rather than approximated.
+const ROLL_VALUES = Array.from({ length: 16 }, (_, k) => 85 + k);
+function rollSplit(ctx, state, actor, moveName, moveData, results) {
+  if (!ctx.exactRoll) return results;
+  if (moveData.power === 0 || SET_DAMAGE_EFFECTS.has(moveData.effect) || ROLL_EXEMPT(moveData.effect)
+      || moveData.effect === "EFFECT_LEVEL_DAMAGE" || moveData.effect === "EFFECT_OHKO"
+      || moveData.effect === "EFFECT_FUTURE_SIGHT") return results;
+  const out = [];
+  for (const r of results) {
+    if (!r.hit || !r.dmgHit || r.variablePower === "heal" || r.variablePower === "failed") { out.push(r); continue; }
+    const hits = r.hitCount ?? 1;
+    if (hits === 1) {
+      for (const v of ROLL_VALUES) out.push({ ...r, p: r.p / 16, roll: v });
+    } else if (hits === 2) {
+      for (const a of ROLL_VALUES) for (const b of ROLL_VALUES) out.push({ ...r, p: r.p / 256, roll: [a, b] });
+    } else {
+      // 16^hits vectors grouped EXACTLY: with no Substitute, Endure or Focus
+      // Band on the target, the hit loop's outcome depends on the total, the
+      // first hit (Shell Bell's basis) and the last (what Counter reflects),
+      // so one representative vector per (first, total, last) carries that
+      // group's whole weight.
+      const isYou = actor === "you";
+      const foeSub = isYou ? state.oppSubstituteHP : state.youSubstituteHP;
+      const foeEndure = isYou ? state.oppEndureActive : state.youEndureActive;
+      const fb = itemData((isYou ? ctx.opp : ctx.you).item);
+      if (foeSub != null || foeEndure || (fb && fb.holdEffect === "HOLD_EFFECT_FOCUS_BAND")) {
+        throw new Error(`exact roll: "${moveName}" hits ${hits} times into a Substitute, Endure or Focus Band; ` +
+          `the per-hit roll vector is not grouped for those.`);
+      }
+      const selfMon = isYou ? ctx.you : ctx.opp, foeMon = isYou ? ctx.opp : ctx.you;
+      const charging = isYou ? state.oppCharging : state.youCharging;
+      const dmgAt = (i, v) => {
+        const power = moveData.effect === "EFFECT_TRIPLE_KICK" ? 10 * (i + 1) : null;
+        let d = calcDamage(selfMon, foeMon, moveName, battleDamageOptions({ ...ctx, rollPercent: v }, state, actor, moveData, power, 1, !!(((r.crit | 0) >> i) & 1)));
+        const bm = charging ? INVULN_BYPASS[charging.invulnBit]?.[moveName] : null;
+        if (bm) d = Math.floor(d * bm);
+        return d;
+      };
+      let groups = new Map([["", { n: 1, vec: [], first: null, total: 0, last: null }]]);
+      for (let i = 0; i < hits; i++) {
+        const next = new Map();
+        for (const g of groups.values()) {
+          for (const v of ROLL_VALUES) {
+            const d = dmgAt(i, v);
+            const first = i === 0 ? d : g.first, total = g.total + d;
+            const k = `${first}|${total}|${d}`;
+            const e = next.get(k);
+            if (e) e.n += g.n; else next.set(k, { n: g.n, vec: [...g.vec, v], first, total, last: d });
+          }
+        }
+        groups = next;
+      }
+      const all = 16 ** hits;
+      for (const g of groups.values()) out.push({ ...r, p: (r.p * g.n) / all, roll: g.vec });
+    }
+  }
+  return out;
+}
 function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
   const isYou = actor === "you";
   const foeMon = isYou ? ctx.opp : ctx.you;
@@ -10300,7 +10385,7 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
       ? (counterReceived(state, actor, moveData) ?? 0) * 2
       : counterHitPower(state, actor, moveData);
   const lethal = (r) => (probePower === 0 ? false : calcDamage(selfMon, foeMon, moveName,
-    battleDamageOptions(ctx, state, actor, moveData, r.variablePower ?? probePower)) >= foeHp);
+    battleDamageOptions(r.roll != null && !Array.isArray(r.roll) ? { ...ctx, rollPercent: r.roll } : ctx, state, actor, moveData, r.variablePower ?? probePower)) >= foeHp);
   if (!results.some((r) => r.hit && r.variablePower !== "heal" && lethal(r))) {
     return results; // no branch can KO, so the proc is unobservable in any of them
   }
@@ -10434,7 +10519,9 @@ function effectiveCtx(ctx, state) {
 // invisible to the slower foe's hit on it in the same turn. Resolving from the
 // raw mons keeps the interned identities the identity-keyed caches rely on.
 function reResolve(ctx, state) {
-  return effectiveCtx(ctx.raw ?? ctx, state);
+  const r = effectiveCtx(ctx.raw ?? ctx, state);
+  // F31: the action's drawn roll is not on the raw ctx; keep it
+  return ctx.rollPercent != null && r.rollPercent !== ctx.rollPercent ? { ...r, rollPercent: ctx.rollPercent } : r;
 }
 // Overrides can only change DURING an action, and re-resolving on every branch
 // measured +5-9% (effectiveCtx went from once per turn to twice per branch). So
@@ -10561,7 +10648,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
     let s = cloneState(state);
     if (fo.confTick) applyConfusionTick(s, order[0], fo.confTick);
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null, fo.crit ?? 0);
+    applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null, fo.crit ?? 0, fo.roll ?? null);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
     const firstLabel = ctx.noLabels ? "" : describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
 
@@ -10606,7 +10693,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         ? { mindYou: s2.mindYou, mindOpp: s2.mindOpp, skillYou: s2.skillYou, skillOpp: s2.skillOpp }
         : null;
       const bidePre2 = (s2.youLock?.kind === "bide" || s2.oppLock?.kind === "bide") ? bideSnapshot(s2) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
-      applyMove(ctx2, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null, so.crit ?? 0);
+      applyMove(ctx2, s2, applyAs, secondMove, so.hit, so.selfHit, so.secondaryTriggered, so.statusPrevented, so.thawed, so.endureTriggered, so.sleepRemaining ?? null, so.sleepDuration ?? null, so.protectTriggered ?? false, so.blockedByProtect ?? false, so.attractPrevented ?? false, so.attractGenderCompatible ?? null, so.hitCount ?? null, so.focusBanded ?? false, so.disableTimer ?? null, so.calledMove ?? null, so.variablePower ?? null, so.cancelReason ?? null, so.lockTurns ?? null, so.contactProc ?? null, so.contactSleep ?? null, so.crit ?? 0, so.roll ?? null);
       if (bidePre2) bideAccumulate(ctx2, s2, bidePre2);
       if (bounced) {
         // Move the judging back onto the mon that actually chose the move.
@@ -10743,8 +10830,11 @@ function futureSightReleaseSide(ctx, br, side) {
   }
   const res = [];
   if (pHit < 1) res.push({ p: br.p * (1 - pHit), state: s, label: `${br.label} (${fs.move} misses)` });
-  if (pHit > 0) {
-    const dmg = Math.max(1, Math.floor(fs.dmg * 0.925)); // the battle path's point-estimate roll
+  // F31: exact-roll mode draws adjustnormaldamage2's roll here too.
+  const rollArms = ctx.exactRoll
+    ? ROLL_VALUES.map((v) => [1 / 16, Math.max(1, Math.floor((fs.dmg * v) / 100))])
+    : [[1, Math.max(1, Math.floor(fs.dmg * 0.925))]]; // the battle path's point-estimate roll
+  if (pHit > 0) for (const [pr, dmg] of rollArms) {
     const subKey = side === "you" ? "youSubstituteHP" : "oppSubstituteHP";
     const hpNow = Math.round((s[hpKey] / 100) * target.stats.hp);
     const fb = itemData(target.item);
@@ -10767,7 +10857,7 @@ function futureSightReleaseSide(ctx, br, side) {
         // MOVEEND_ITEM_EFFECTS_ALL: the HP-threshold items get their check now.
         if (t[hpKey] > 0) tryEndOfTurnItem(t, side, target);
       }
-      res.push({ p: br.p * pHit * pa, state: t, label: `${br.label} (${fs.move} hits${banded ? ", Focus Band" : ""})` });
+      res.push({ p: br.p * pHit * pr * pa, state: t, label: `${br.label} (${fs.move} hits${banded ? ", Focus Band" : ""})` });
     }
   }
   return res;
