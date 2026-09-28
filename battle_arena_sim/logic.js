@@ -6869,6 +6869,7 @@ const EFFECT_EXECUTORS = {
     if (foe.ability === "Sticky Hold") { recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); return "failed"; } // F2a :9233
     s[isYou ? "youItemOverride" : "oppItemOverride"] = foe.item ?? null;
     s[isYou ? "oppItemOverride" : "youItemOverride"] = self.item ?? null;
+    _changedItemsActor = actor; // F26: the attacker's new item waits in changedItems (:9240)
     // ...and a swap clears BOTH battlers' choicedMove (:9254-9258).
     s.youChoiceLock = null;
     s.oppChoiceLock = null;
@@ -7599,13 +7600,44 @@ const FOCUS_BAND_SPACE = 100;
 // that appeared during this action -- every psn/par/brn an action can land goes
 // through SetMoveEffect, and sleep/freeze are not synchronized.
 const SYNC_STATUSES = new Set(["poison", "paralysis", "burn"]);
+// F26: set by a successful Trick / Thief during the current action (whose
+// attacker then holds nothing until MOVEEND_CHANGED_ITEMS); read and reset by
+// applyMove. Module-level because it must not enter the state.
+let _changedItemsActor = null;
 function applyMove(ctx, s, actor, ...rest) {
   const isYou = actor === "you";
   const selfKey = isYou ? "youStatus" : "oppStatus";
   const foeKey = isYou ? "oppStatus" : "youStatus";
   const selfPre = s[selfKey], foePre = s[foeKey];
+  const itemOvKey = isYou ? "youItemOverride" : "oppItemOverride";
+  _changedItemsActor = null;
   applyMoveCore(ctx, s, actor, ...rest);
   snapHp(ctx, s); // B6 step 1: the action's HP changes, as integer HP
+  // Phase D F26: MOVEEND_CHOICE_MOVE (src/battle_script_commands.c:4296-4308)
+  // runs at the end of EVERY move that obeyed -- hit, miss, fail or blocked by
+  // Protect -- and reads the attacker's hold effect as it is THEN (after a
+  // Trick). It locks onto gChosenMove if nothing is locked yet. Not obeyed:
+  // the AtkCanceler_UnableToUseMove cancels (full paralysis, sleep, freeze,
+  // confusion self-hit, love, flinch, disabled / taunted / imprisoned, recharge,
+  // Truant, Bide's storing turns) and the Soundproof block, which all return
+  // before Cmd_attackcanceler sets HITMARKER_OBEYS (:932 vs :960).
+  {
+    const [chosen, , selfHit, , statusPrevented, , , , , , , attractPrevented] = rest;
+    const executed = rest[16] ?? chosen; // calledMove (Sleep Talk's pick), else the chosen move
+    const selfMon0 = isYou ? ctx.you : ctx.opp, foeMon0 = isYou ? ctx.opp : ctx.you;
+    const soundproofed = foeMon0.ability === "Soundproof" && SOUND_MOVES.has(executed);
+    if (!selfHit && !statusPrevented && !attractPrevented && !soundproofed) {
+      let held = s[itemOvKey] !== undefined ? s[itemOvKey] : selfMon0.item;
+      // An item the ATTACKER gains from Trick or Thief goes through
+      // gBattleStruct->changedItems and reaches it only at MOVEEND_CHANGED_ITEMS
+      // (:4318), AFTER this step; until then it holds nothing (tryswapitems
+      // :9240-9244; the steal :2785-2787). Emulator: traces/00035, a Choice
+      // Band Trick user that the ROM did not lock.
+      if (_changedItemsActor === actor) held = null;
+      const lockKey = isYou ? "youChoiceLock" : "oppChoiceLock";
+      if (itemData(held)?.holdEffect === "HOLD_EFFECT_CHOICE_BAND" && s[lockKey] == null) s[lockKey] = chosen;
+    }
+  }
   const self = isYou ? ctx.you : ctx.opp;
   const foe = isYou ? ctx.opp : ctx.you;
   if (self.ability !== "Synchronize" && foe.ability !== "Synchronize") return;
@@ -8140,6 +8172,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       : s.oppItemOverride !== undefined ? s.oppItemOverride : ctx.opp.item;
     if (foeMon.item && foeMon.ability === "Sticky Hold" && !foeHadSubstitute) recordAbility(s, isYou ? "opp" : "you", "Sticky Hold"); // F2a
     if (!thiefItem && foeMon.item && foeMon.ability !== "Sticky Hold") {
+      _changedItemsActor = actor; // F26: the gain waits in changedItems until MOVEEND_CHANGED_ITEMS
       s[isYou ? "youItemOverride" : "oppItemOverride"] = foeMon.item;
       s[isYou ? "oppItemOverride" : "youItemOverride"] = null;
     }
@@ -8709,11 +8742,14 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     //   src/battle_util.c:1119      CheckMoveLimitations, the lock    -> selectableMoves
     //   src/battle_util.c:1051      TrySetCantSelectMoveBattleScript  -> same rule, the
     //                               per-move selection guard; equivalent, nothing extra
-    //   src/battle_script_commands.c:4296  MOVEEND_CHOICE_MOVE, which SETS the lock -> here
+    //   src/battle_script_commands.c:4296  MOVEEND_CHOICE_MOVE, which SETS the lock -> applyMove (F26)
     //   include/constants/hold_effects.h:33  the constant itself
     //
     // MOVEEND_CHOICE_MOVE's own clauses, each ported or ledgered:
-    //   HITMARKER_OBEYS            always true in a normal battle -- inert
+    //   HITMARKER_OBEYS            NOT always true (Phase D F26): unset for a move
+    //                              cancelled in AtkCanceler_UnableToUseMove or
+    //                              blocked by Soundproof, both before
+    //                              Cmd_attackcanceler sets it (:932 / :960)
     //   gChosenMove != MOVE_STRUGGLE  Struggle is not modelled -- inert
     //   choicedMove not already set   ported, the `== null` guard below
     //   Baton Pass that did NOT fail skips the assignment: EFFECT_BATON_PASS
@@ -8724,13 +8760,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     //     today; it will DIVERGE once Sleep Talk / Metronome / Mirror Move land
     //     in batch 3, which call a different move than the one chosen. Flagged
     //     here so that batch does not have to rediscover it.
-    {
-      const selfItemLock = itemData(selfMon.item);
-      if (selfItemLock && selfItemLock.holdEffect === "HOLD_EFFECT_CHOICE_BAND") {
-        const lockKey = isYou ? "youChoiceLock" : "oppChoiceLock";
-        if (s[lockKey] == null) s[lockKey] = chosenMoveName;
-      }
-    }
+    // (Phase D F26: the lock itself is set in applyMove, after the move, for
+    // EVERY move that obeyed -- it used to be set only here, at the end of the
+    // damaging path, so a Choice Band holder's status move never locked.)
     // B2b batch 3: MOVEEND_MIRROR_MOVE records what the TARGET just took, so
     // Mirror Move has something to copy. Gated exactly as source gates it
     // (src/battle_script_commands.c:4438-4445): the move must be
