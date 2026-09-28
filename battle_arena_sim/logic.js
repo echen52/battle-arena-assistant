@@ -3028,6 +3028,15 @@ function getFriendshipPower(effect, friendship) {
 // Both were in SILENT_FALLTHROUGH_EFFECTS, which threw rather than quietly
 // computing a number off a placeholder power. This is what they were waiting
 // for; the guard entries come out in the same commit.
+// Phase D F21: the effects whose script runs `bicbyte gMoveResultFlags,
+// MOVE_RESULT_SUPER_EFFECTIVE | MOVE_RESULT_NOT_VERY_EFFECTIVE` after typecalc
+// (data/battle_scripts_1.s:815, 825, 1201, 1212, 1726, 2488; Bide's unleash at
+// 3300), so the Arena's Skill never sees an effectiveness flag for them.
+// test-d-f21 derives the set from the scripts and fails if either side drifts.
+const EFFECTIVENESS_CLEARED_EFFECTS = new Set([
+  "EFFECT_SUPER_FANG", "EFFECT_DRAGON_RAGE", "EFFECT_LEVEL_DAMAGE", "EFFECT_PSYWAVE",
+  "EFFECT_SONICBOOM", "EFFECT_ENDEAVOR", "EFFECT_BIDE",
+]);
 const SET_DAMAGE_EFFECTS = new Set([
   // B3 batch 4c: Bide's unleash -- `copyword gBattleMoveDamage, sBIDE_DMG` then
   // adjustsetdamage (data/battle_scripts_1.s:3292-3303), after a typecalc whose
@@ -8701,8 +8710,12 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     }
     // B3 batch 4c: Bide's unleash clears MOVE_RESULT_SUPER_EFFECTIVE and
     // NOT_VERY_EFFECTIVE after typecalc (data/battle_scripts_1.s:3300), so a
-    // landed unleash always scores as a plain hit.
-    s[skillKey] += skillDelta(classifyOutcome(hit, bideUnleash !== null && eff > 0 ? 1 : eff));
+    // landed unleash always scores as a plain hit. Phase D F21: so do six more
+    // scripts (EFFECTIVENESS_CLEARED_EFFECTS) -- Seismic Toss scored +2 into a
+    // Normal type where the ROM gives +1. A x0 still scores -2: the bicbyte
+    // leaves MOVE_RESULT_DOESNT_AFFECT_FOE.
+    const flagsCleared = bideUnleash !== null || EFFECTIVENESS_CLEARED_EFFECTS.has(moveData.effect);
+    s[skillKey] += skillDelta(classifyOutcome(hit, flagsCleared && eff > 0 ? 1 : eff));
     // (EFFECT_EXPLOSION's self-faint is applied unconditionally much earlier
     // now — see the comment above the blockedByProtect check — since it must
     // fire even when Protect blocks the move entirely, which returns before
@@ -10976,6 +10989,7 @@ export {
   chooseOpponentMovesInterp, chooseOpponentMovesHandlers, buildAiView, selectableMoves,
   typeCalcRows, // F17
   aiTurnPlans, // F14
+  EFFECTIVENESS_CLEARED_EFFECTS, // F21
   // Phase D F2b: pinned to the script's list by its test.
   THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
