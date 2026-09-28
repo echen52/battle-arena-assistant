@@ -68,14 +68,21 @@ console.log("-- PART 2: the duration is uniform over {2,3,4,5} --");
 }
 
 console.log();
-console.log("-- PART 3: paralysis is not rolled on a confused turn --");
+console.log("-- PART 3: paralysis IS rolled after a confusion check that lets the mon act --");
 {
-  // Check 5 always snaps out; a paralysed mon doing so still acts -- the 25%
-  // full-paralysis roll is skipped because CANCELER_CONFUSED set effect = 1.
+  // Phase D F33 corrected this part. B4d-pre read CANCELER_CONFUSED's effect = 1
+  // as the end of the chain; but its snap-out and "acts anyway" outcomes call
+  // BattleScriptPushCursor() (src/battle_util.c:2166-2168, :2181), the script
+  // returns into the move's attackcanceler, and AtkCanceler_UnableToUseMove
+  // resumes at CANCELER_PARALYZED (the tracker is reset only per action, :93).
+  // Emulator: traces/00395 and traces-given/01104, fully paralysed while
+  // confused. Was: snap out while paralysed acts with certainty; no paralysis
+  // roll on any confused turn.
   const brs = run(5, { youStatus: "paralysis" });
-  ok(near(prob(brs, (b) => b.state.youStages.atk === 2), 1), "snap out while paralysed: acts with certainty");
+  ok(near(prob(brs, (b) => b.state.youStages.atk === 2), 0.75), "snap out while paralysed: acts 3/4 of the time");
   const fresh = run(true, { youStatus: "paralysis" });
-  ok(near(prob(fresh, (b) => /fully paralyzed/.test(b.label)), 0), "(and no paralysis roll on any confused turn)");
+  const pSelf = prob(fresh, (b) => /hits itself/.test(b.label));
+  ok(near(prob(fresh, (b) => /fully paralyzed/.test(b.label)), (1 - pSelf) * 0.25), "(and 1/4 of every non-self-hit confused turn is full paralysis)");
 }
 
 console.log();

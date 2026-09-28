@@ -9570,6 +9570,26 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
     const paralyzed = status === "paralysis";
     const attracted = actor === "you" ? state.youAttracted : state.oppAttracted; // A5: both sides
 
+    // Phase D F33: the paragraph above is wrong about confusion. Its two
+    // non-self-hit outcomes -- "acts anyway" (Random() & 1) and snapping out --
+    // call BattleScriptPushCursor() (src/battle_util.c:2166-2168, :2181), so the
+    // confusion script RETURNS into the move's attackcanceler, which re-enters
+    // AtkCanceler_UnableToUseMove with atkCancelerTracker already past
+    // CANCELER_CONFUSED (it steps past at :2186 and is reset only per action, :92): paralysis and love ARE
+    // rolled next. Only the self-hit ends the chain. Emulator: traces/00395, a
+    // confused, paralysed Suicune fully paralysed in the ROM.
+    const paraLoveSplit = (branches) => {
+      let out = branches;
+      if (paralyzed) {
+        out = out.flatMap((b) => (b.kind !== "normal" ? [b]
+          : [{ ...b, p: b.p * 0.25, kind: "paraBlocked" }, { ...b, p: b.p * 0.75 }]));
+      }
+      if (attracted) {
+        out = out.flatMap((b) => (b.kind !== "normal" ? [b]
+          : [{ ...b, p: b.p * 0.5, kind: "loveBlocked" }, { ...b, p: b.p * 0.5 }]));
+      }
+      return out;
+    };
     let actionBranches;
     if (confusable) {
       // B4d-pre: CANCELER_CONFUSED (src/battle_util.c:2156-2187) DECREMENTS the
@@ -9585,6 +9605,7 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
         actionBranches.push({ p: (1 - pSnap) / 2, kind: "confuseSelfHit", confTick: "tick" });
         actionBranches.push({ p: (1 - pSnap) / 2, kind: "normal", confTick: "tick" });
       }
+      actionBranches = paraLoveSplit(actionBranches); // F33
     } else {
       actionBranches = [{ p: 1, kind: "normal" }];
       if (paralyzed) {
