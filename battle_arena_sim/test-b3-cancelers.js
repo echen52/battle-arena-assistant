@@ -148,12 +148,15 @@ console.log("-- PART 6: CancelMultiTurnMoves -- who ends a Fury Cutter chain --"
   ok(/You flinches/.test(flinched.label), "(probe check) the Fury Cutter user must flinch");
   ok(flinched.state.youFuryCutter === 0, "a FLINCH must end the Fury Cutter chain (src/battle_util.c:2115)");
 
-  // Full paralysis must NOT: its CancelMultiTurnMoves is commented out in
-  // Emerald (:2192-2193).
+  // Full paralysis ends it too. B3 read the C canceler, whose CancelMultiTurnMoves
+  // is commented out in Emerald (:2192-2193) -- but BattleScript_MoveUsedIsParalyzed
+  // runs `cancelmultiturnmoves BS_ATTACKER` itself (data/battle_scripts_1.s:3777),
+  // and CancelMultiTurnMoves zeroes furyCutterCounter (src/battle_util.c:887).
+  // Phase D F24 (emulator: traces/00376, a Fly paralysed on its strike turn).
   const para = turn(sci, slow, start(sci, slow, { youFuryCutter: 3, youStatus: "paralysis" }), "Fury Cutter", "Splash");
   const paraBlocked = para.filter((b) => /You is fully paralyzed/.test(b.label));
   ok(paraBlocked.length >= 1, "(probe check) a full-paralysis branch must exist");
-  ok(paraBlocked.every((b) => b.state.youFuryCutter === 3), "full paralysis must NOT end the chain");
+  ok(paraBlocked.every((b) => b.state.youFuryCutter === 0), "full paralysis ENDS the chain (F24; was: must not)");
 
   // Protect ends it (Cmd_attackcanceler, src/battle_script_commands.c:996).
   const prot = mk("Snorlax", ["Protect", "Body Slam", "Rest", "Splash"], { ability: "Thick Fat" });

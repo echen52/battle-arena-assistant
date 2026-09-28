@@ -134,11 +134,14 @@ console.log("-- PART 6: what ends a Rollout chain --");
   ok(missed.length >= 1, "(probe check) a miss branch must exist");
   ok(missed.every((b) => b.state.youLock === null), "a MISS must end the chain");
 
-  // Full paralysis must not: no canceler call, and Rollout has no end-of-turn step.
+  // Full paralysis ends it too (Phase D F24): BattleScript_MoveUsedIsParalyzed's
+  // own `cancelmultiturnmoves BS_ATTACKER` (data/battle_scripts_1.s:3777) clears
+  // STATUS2_MULTIPLETURNS and the rollout timer -- B3 had read only the
+  // commented-out C call (src/battle_util.c:2192-2193).
   const pz = turn(golem, wall, start(golem, wall, { youLock: { move: "Rollout", kind: "rollout", n: 3 }, youStatus: "paralysis" }), "Rollout", "Splash");
   const blocked = pz.filter((b) => /You is fully paralyzed/.test(b.label));
-  ok(blocked.length >= 1 && blocked.every((b) => b.state.youLock?.kind === "rollout" && b.state.youLock.n === 3),
-    "full paralysis must leave the chain intact");
+  ok(blocked.length >= 1 && blocked.every((b) => b.state.youLock == null),
+    "full paralysis ENDS the chain (F24; was: must leave it intact)");
   console.log("   a miss resets it; full paralysis leaves timer 3 and the lock in place");
 }
 

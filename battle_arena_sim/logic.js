@@ -7721,9 +7721,13 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     if (cancelReason === "flinch") s.turnFlags &= ~(isYou ? TF_YOU_FLINCHED : TF_OPP_FLINCHED);
     // RECHARGE, FLINCH, DISABLED, TAUNTED and IMPRISONED all call
     // CancelMultiTurnMoves (src/battle_util.c:2103/:2115/:2127/:2138/:2149).
-    // Sleep and freeze do NOT, and neither does full paralysis -- its call is
-    // commented out in Emerald (:2192-2193, "removed in FRLG and Emerald").
+    // Sleep and freeze do NOT. Full paralysis's C call is commented out in
+    // Emerald (:2192-2193) -- but Phase D F24: its SCRIPT,
+    // BattleScript_MoveUsedIsParalyzed, runs `cancelmultiturnmoves BS_ATTACKER`
+    // (data/battle_scripts_1.s:3777). A Fly paralysed on its strike turn lands
+    // (emulator: traces/00376, where the sim kept it in the air).
     if (cancelReason) cancelMultiTurnMoves(s, actor);
+    if (!cancelReason && s[selfStatusKey] === "paralysis") cancelMultiTurnMoves(s, actor);
     // B3 batch 3: full paralysis does not cancel at its canceler, but it is in
     // WasUnableToUseMove (prlzImmobility), which ENDTURN_THRASH reads.
     if (!cancelReason && s[selfStatusKey] === "paralysis") s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE;
@@ -7746,6 +7750,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
 
   if (selfHit) {
     s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE; // confusionSelfDmg (B3 batch 3)
+    // Phase D F24: BattleScript_DoSelfConfusionDmg opens with
+    // `cancelmultiturnmoves BS_ATTACKER` (data/battle_scripts_1.s:3802).
+    cancelMultiTurnMoves(s, actor);
     let dmg = confusionSelfHitDamage(ctx, s, actor); // F19
     // adjustnormaldamage2's hang-on: the mon's own Focus Band (the branch was
     // drawn in enumerateActionOutcomes) leaves it at 1
