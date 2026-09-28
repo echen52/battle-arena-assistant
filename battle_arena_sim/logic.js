@@ -3398,11 +3398,40 @@ function calcDamage(attacker, defender, moveName, {
   return Math.max(1, dmg);
 }
 
+// The bare-stats formula the engine used for the confusion self-hit until
+// Phase D F19; kept (exported) as the record of that behaviour. The self-hit is
+// confusionSelfHitDamage below.
 function calcConfusionDamage(mon, rollFrac = 0.925) {
   const base = Math.floor(
     Math.floor(Math.floor((2 * mon.level / 5 + 2) * 40 * mon.stats.atk / mon.stats.def) / 50) + 2
   );
   return Math.max(1, Math.floor(base * rollFrac));
+}
+
+// Phase D F19: the confusion self-hit is CalculateBaseDamage(attacker,
+// attacker, MOVE_POUND, sideStatus 0, power 40, type 0) (src/battle_util.c:2173)
+// -- the WHOLE base chain on the mon's own numbers: its Attack stage against
+// its own Defense stage, burn, Choice Band, Huge Power / Hustle / Guts, Marvel
+// Scale on its own status, Silk Scarf (Pound is Normal). sideStatus 0: no
+// Reflect. No typecalc runs, so no STAB and no type chart (untyped), and no
+// critcalc. Then adjustnormaldamage2 (src/battle_script_commands.c:1701-1741):
+// the 85-100 roll -- this engine's labelled 92.5% point estimate, as for every
+// battle hit (amendment 15) -- and the mon's own Focus Band (below).
+function confusionSelfHitDamage(ctx, s, actor) {
+  const isYou = actor === "you";
+  const mon = isYou ? ctx.you : ctx.opp;
+  const stages = isYou ? s.youStages : s.oppStages;
+  const status = s[isYou ? "youStatus" : "oppStatus"];
+  return calcDamage(mon, mon, "Pound", {
+    untyped: true, crit: false, screenActive: false,
+    atkStage: stages.atk, defStage: stages.def,
+    attackerStatus: status, defenderStatus: status, attackerBurned: status === "burn",
+    attackerFlashFireActive: isYou ? s.youFlashFireActive : s.oppFlashFireActive,
+    attackerHpPct: isYou ? s.yourHpPct : s.oppHpPct, defenderHpPct: isYou ? s.yourHpPct : s.oppHpPct,
+    weather: effectiveWeather(s, ctx.you, ctx.opp),
+    mudSportActive: vf(s, "youMudSport") || vf(s, "oppMudSport"),
+    waterSportActive: vf(s, "youWaterSport") || vf(s, "oppWaterSport"),
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -7698,7 +7727,11 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
 
   if (selfHit) {
     s.turnFlags |= isYou ? TF_YOU_UNABLE : TF_OPP_UNABLE; // confusionSelfDmg (B3 batch 3)
-    const dmg = calcConfusionDamage(selfMon);
+    let dmg = confusionSelfHitDamage(ctx, s, actor); // F19
+    // adjustnormaldamage2's hang-on: the mon's own Focus Band (the branch was
+    // drawn in enumerateActionOutcomes) leaves it at 1
+    const curHp = Math.round((s[selfHpKey] / 100) * selfMon.stats.hp);
+    if (focusBanded && dmg >= curHp) dmg = curHp - 1;
     s[selfHpKey] = hpSub(s[selfHpKey], dmg, selfMon.stats.hp);
     s[mindKey] += mindDelta(mindMove);
     return;
@@ -9390,7 +9423,28 @@ function cancelerGates(ctx, state, actor, moveName, moveData) {
       const p = stb.p * acb.p;
       const carry = acb.confTick ? { ...carryBase, confTick: acb.confTick } : carryBase;
       if (acb.kind === "confuseSelfHit") {
-        gates.push({ p, outcome: { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry } });
+        // F19: adjustnormaldamage2 rolls the mon's OWN Focus Band against a
+        // lethal self-hit, unless it is behind a Substitute
+        // (src/battle_script_commands.c:1718-1727). The confusion tick has
+        // already run, so it is applied to a probe copy before measuring.
+        const selfHitOutcome = { hit: null, selfHit: true, secondaryTriggered: false, statusPrevented: false, ...carry };
+        const fbItem = itemData((actor === "you" ? ctx.you : ctx.opp).item);
+        let banded = false;
+        if (fbItem && fbItem.holdEffect === "HOLD_EFFECT_FOCUS_BAND"
+            && state[actor === "you" ? "youSubstituteHP" : "oppSubstituteHP"] == null) {
+          const probe = cloneState(state);
+          if (carry.confTick) applyConfusionTick(probe, actor, carry.confTick);
+          const selfMonP = actor === "you" ? ctx.you : ctx.opp;
+          const hpNow = Math.round(((actor === "you" ? probe.yourHpPct : probe.oppHpPct) / 100) * selfMonP.stats.hp);
+          banded = confusionSelfHitDamage(ctx, probe, actor) >= hpNow;
+        }
+        if (banded) {
+          const pb = fbItem.param / FOCUS_BAND_SPACE;
+          gates.push({ p: p * pb, outcome: { ...selfHitOutcome, focusBanded: true } });
+          gates.push({ p: p * (1 - pb), outcome: { ...selfHitOutcome, focusBanded: false } });
+        } else {
+          gates.push({ p, outcome: selfHitOutcome });
+        }
       } else if (acb.kind === "paraBlocked") {
         gates.push({ p, outcome: { hit: null, selfHit: false, secondaryTriggered: false, statusPrevented: true, ...carry } });
       } else if (acb.kind === "loveBlocked") {
