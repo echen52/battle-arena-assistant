@@ -101,7 +101,9 @@ console.log("-- PART 2: Stockpile MISSES at three, and Spit Up spends the counte
   const b4full = full.skillOpp;
   applyMove(ctx, full, "opp", "Swallow", true, false);
   ok(full.oppStockpile === 0, "Swallow at full HP must STILL spend the counter");
-  ok(full.skillOpp - b4full === skillDelta("noEffect"), "...while failing");
+  // Phase D F37: the failure is BattleScript_SwallowFail, which sets no result
+  // flag -- +1, not the -2 this asserted before.
+  ok(full.skillOpp - b4full === skillDelta("landed"), "...while failing, +1");
   console.log("   Swallow heals 1/4, 1/2, all -- and spends the counter even at full HP");
 }
 

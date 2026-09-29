@@ -5687,7 +5687,11 @@ function healHalfMaxHp(s, actor, ctx, moveData) {
   const isYou = actor === "you";
   const selfMon = isYou ? ctx.you : ctx.opp;
   const selfHpKey = isYou ? "yourHpPct" : "oppHpPct";
-  if (s[selfHpKey] >= 100) return "failed";
+  // Phase D F37: at full HP both commands jump to BattleScript_AlreadyAtFullHp
+  // (data/battle_scripts_1.s:2042-2046), which sets no MOVE_RESULT flag and
+  // prints STRINGID_PKMNHPFULL, not a DeductSkillPoints string: +1, as Rest
+  // (B3 batch 4d). This returned "failed" (-2).
+  if (s[selfHpKey] >= 100) return;
   const isWeatherVariant = ["EFFECT_SYNTHESIS", "EFFECT_MOONLIGHT", "EFFECT_MORNING_SUN"].includes(moveData?.effect);
   let heal;
   if (isWeatherVariant) {
@@ -7028,25 +7032,29 @@ const EFFECT_EXECUTORS = {
     s[key] = 5;
   },
   EFFECT_STOCKPILE: (s, actor) => {
-    // Cmd_stockpile (:8985-9000): at three it sets MOVE_RESULT_MISSED -- a
+    // Cmd_stockpile (:6850-6866): at three it sets MOVE_RESULT_MISSED -- a
     // MISS, not a FAILURE, which is a different Skill outcome. Preserved.
     const key = actor === "you" ? "youStockpile" : "oppStockpile";
     if (s[key] === 3) return "missed";
     s[key] += 1;
   },
   EFFECT_SWALLOW: (s, actor, ctx) => {
-    // Cmd_stockpiletohpheal (:9024-9053): maxHP / (1 << (3 - counter)) --
+    // Cmd_stockpiletohpheal (:6894-6923): maxHP / (1 << (3 - counter)) --
     // a quarter, a half, then everything -- and the counter is spent either
     // way. Fails with nothing stored, and fails at full HP WITHOUT healing
     // while still clearing the counter.
+    // Phase D F37: both failures jump to BattleScript_SwallowFail
+    // (data/battle_scripts_1.s:2126-2130), which sets no MOVE_RESULT flag and
+    // prints from gSwallowFailStringIds -- neither a DeductSkillPoints string:
+    // +1, not the "failed" (-2) these returned.
     const isYou = actor === "you";
     const key = isYou ? "youStockpile" : "oppStockpile";
     const hpKey = isYou ? "yourHpPct" : "oppHpPct";
     const mon = isYou ? ctx.you : ctx.opp;
-    if (s[key] === 0) return "failed";
+    if (s[key] === 0) return;
     const count = s[key];
     s[key] = 0;
-    if (s[hpKey] >= 100) return "failed";
+    if (s[hpKey] >= 100) return;
     const heal = Math.max(1, Math.floor(mon.stats.hp / (1 << (3 - count))));
     s[hpKey] = hpAdd(s[hpKey], heal, mon.stats.hp);
   },
@@ -8346,7 +8354,10 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         `MOVE_RESULT_MISSED instead, and the interaction is not established. Port it before solving.`);
     }
     if (s[foeHpKey] >= 100) {
-      s[skillKey] += skillDelta("noEffect"); // BattleScript_AlreadyAtFullHp
+      // BattleScript_AlreadyAtFullHp (src/battle_script_commands.c:8641-8644 ->
+      // data/battle_scripts_1.s:2042-2046): no flag, no deducting string, +1.
+      // Phase D F37: this scored noEffect (-2).
+      s[skillKey] += skillDelta("landed");
       return;
     }
     const heal = Math.max(1, Math.floor(foeMon.stats.hp / 4));
@@ -9011,7 +9022,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
       if (result === "failed") outcome = "noEffect";
       // B2b batch 9: "missed" is a THIRD outcome an executor can report, and
       // the distinction is real in the Arena's Skill scoring. Cmd_stockpile at
-      // three sets MOVE_RESULT_MISSED (src/battle_script_commands.c:8990),
+      // three sets MOVE_RESULT_MISSED (src/battle_script_commands.c:6854),
       // not MOVE_RESULT_FAILED -- a miss, which BattleArena_AddSkillPoints
       // scores differently from a failure.
       else if (result === "missed") outcome = "miss";

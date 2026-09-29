@@ -63,15 +63,17 @@ function makeCases() {
       { move: "Fake Out", outcome: OUTCOME.HIT });
 
   // ── HP-dependent heal: the "Did it heal?" report bit (drive-and-read). The
-  // banked Skill is READ off the branch — healed == skillDelta("landed"),
-  // failed == skillDelta("noEffect") — NOT hardcoded, so these expectations are
-  // computed from the engine's own scoring, not literal numbers.
+  // banked Skill is READ off the branch — healed == skillDelta("landed"), and
+  // since Phase D F37 failed-at-full-HP == skillDelta("landed") too
+  // (BattleScript_AlreadyAtFullHp sets no result flag; it was "noEffect", -2) —
+  // NOT hardcoded, so these expectations are computed from the engine's own
+  // scoring, not literal numbers.
   //
-  // FILLER GUARD (the load-bearing reason these cases exist): the heal path must
-  // drive with the NON-damaging Harden filler. A damaging filler drops the
-  // actor below full before the heal resolves at HP 100, so the heal SUCCEEDS on
-  // the foe's hit branch (+1) and FAILS on its miss branch (-2) — a [+1,-2]
-  // disagreement that makes scoreReportedTurn throw. That only happens when the
+  // FILLER GUARD: the heal path must drive with the NON-damaging Harden filler.
+  // A damaging filler drops the actor below full before the heal resolves at
+  // HP 100, so the drive would read the healed branch instead of the reported
+  // one. Before F37 that showed as a [+1,-2] disagreement that made
+  // scoreReportedTurn throw; the two now agree in value. That only happens when the
   // foe moves FIRST, so the healer is built deliberately SLOWER than the foe
   // (Metagross with no Spe EV, Spe 90, vs Jolteon). Result: the FAILED case
   // below throws — and this test fails — the instant HEAL_FILLER_MOVE is swapped
@@ -82,9 +84,9 @@ function makeCases() {
   add("heal HEALED  (Recover sub-full -> +1 == skillDelta 'landed')", slowHealer(), fastFoe(),
       { move: "Recover", outcome: OUTCOME.HIT, healed: true },
       { expect: skillDelta("landed"), requireFoeFaster: true });
-  add("heal FAILED  (Recover full HP -> -2 == skillDelta 'noEffect')  [FILLER GUARD]", slowHealer(), fastFoe(),
+  add("heal FAILED  (Recover full HP -> +1 == skillDelta 'landed', Phase D F37)  [FILLER GUARD]", slowHealer(), fastFoe(),
       { move: "Recover", outcome: OUTCOME.HIT, healed: false },
-      { expect: skillDelta("noEffect"), requireFoeFaster: true });
+      { expect: skillDelta("landed"), requireFoeFaster: true });
   add("heal UNMODELED (Wish still fails loud, distinguishing message)", you(["Wish"]), opp("Umbreon", "Synchronize"),
       { move: "Wish", outcome: OUTCOME.HIT, healed: true },
       { expectThrow: /no engine executor|stockpile-gated|NOT the HP-dependent-heal/ });

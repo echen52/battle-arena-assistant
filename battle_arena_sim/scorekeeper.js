@@ -31,9 +31,12 @@ import { MOVES } from "./move-data.js";
 //
 //   DRIVABLE_HEAL_EFFECTS — the six backed by a real executor (healHalfMaxHp /
 //   Rest). These CAN be driven to BOTH branches and the Skill read off them:
-//   at full HP the executor returns "failed" -> Skill -2; at any sub-full HP it
-//   heals -> Skill +1 (a CONSTANT — the award does not vary with heal magnitude,
-//   verified stable across 1..99% HP). So instead of failing loud, a reported
+//   at full HP BattleScript_AlreadyAtFullHp sets no result flag -> Skill +1
+//   (Phase D F37; it was scored -2 before, which is what this control was built
+//   to separate); at any sub-full HP it heals -> Skill +1 (a CONSTANT — the
+//   award does not vary with heal magnitude, verified stable across 1..99% HP).
+//   Both branches now bank the same Skill, but the drive still reads it off
+//   the selected branch rather than assuming so. So instead of failing loud, a reported
 //   heal drives the SELECTED branch: the "Did it heal?" answer picks the HP
 //   setpoint (full -> failed, sub-full -> healed). This is branch SELECTION, not
 //   HP inference — the widget never reads an HP box, and because +1 is
@@ -41,11 +44,12 @@ import { MOVES } from "./move-data.js";
 //   Mind is always 0 (status moves), so nothing is lost. EFFECT_INGRAIN is
 //   excluded: it lands regardless of current HP (a setup move), not HP-gated.
 //
-//   HEAL_UNMODELED_EFFECTS — Swallow and Wish have NO executor at all (driving
-//   throws "no execution logic yet"), AND their success is not HP-gated-at-cast
-//   anyway (Swallow is stockpile-gated, Wish heals on a LATER turn). They stay
-//   hand-scored, with a message that says exactly that — so it is never mistaken
-//   for the silent -2/+1 bug the drivable path fixes.
+//   HEAL_UNMODELED_EFFECTS — Swallow and Wish, whose success is not
+//   HP-gated-at-cast (Swallow is stockpile-gated, Wish heals on a LATER turn),
+//   so the "Did it heal?" answer cannot select their branch. (Both have engine
+//   executors now -- B2b batch 9 -- but the report does not carry the stockpile
+//   count or the pending Wish.) They stay hand-scored, with a message that says
+//   exactly that.
 const DRIVABLE_HEAL_EFFECTS = new Set([
   "EFFECT_RESTORE_HP", "EFFECT_SOFTBOILED", "EFFECT_REST",
   "EFFECT_MORNING_SUN", "EFFECT_SYNTHESIS", "EFFECT_MOONLIGHT",
@@ -67,15 +71,16 @@ const FILLER_MOVE = "Tackle";
 
 // Non-damaging self-target filler used ONLY on the heal-drive path. A DAMAGING
 // filler (Tackle) contaminates the full-HP "failed" drive: if the faster foe's
-// hit lands it drops the actor below full, so the heal then SUCCEEDS (+1) —
-// while a miss leaves it at full and the heal FAILS (-2), a genuine [+1,-2]
-// branch DISAGREEMENT the value-agreement guard would (correctly) throw on.
+// hit lands it drops the actor below full, so the heal then SUCCEEDS —
+// while a miss leaves it at full and the heal FAILS. Before Phase D F37 that
+// was a [+1,-2] branch DISAGREEMENT the value-agreement guard threw on; both
+// now bank +1, but the HP the heal resolves at still belongs to the setpoint.
 // Harden (power 0, accuracy null -> no hit/miss split, targets the foe's OWN
 // Defense and never the actor's HP) leaves the actor's HP set solely by the
 // setpoint below, collapsing both branches to a single clean match (matched=1).
 const HEAL_FILLER_MOVE = "Harden";
-// HP setpoints that SELECT the reported heal branch. Full HP -> the executor
-// returns "failed"; any sub-full HP -> the heal succeeds. 50 is an arbitrary
+// HP setpoints that SELECT the reported heal branch. Full HP -> the heal finds
+// nothing to heal; any sub-full HP -> the heal succeeds. 50 is an arbitrary
 // sub-full value — safe precisely because +1 is HP-independent (see above), so
 // which sub-full number we pick never affects the banked Skill.
 const HEAL_HP_FAILED = 100;
@@ -234,17 +239,16 @@ function validateReport(report) {
     if (r.outcome !== OUTCOME.HIT) continue;
     const effect = MOVES[r.move]?.effect;
     if (HEAL_UNMODELED_EFFECTS.has(effect)) {
-      // Deliberately NOT the drivable-heal path: no engine executor exists, and
-      // success is not HP-gated at cast (Swallow is stockpile-gated, Wish heals
-      // a later turn). Kept hand-scored — message spells out WHY it differs so
-      // it's not mistaken for the silent -2/+1 bug the heal control resolves.
-      throw new Error(`scorekeeper: "${r.move}" (${effect}) is NOT the HP-dependent-heal case — it has no engine executor and its success is stockpile-gated (Swallow) / delayed to a later turn (Wish), not HP-gated at cast. Score this side by hand: Mind +0, Skill +1 if it worked, -2 if it failed.`);
+      // Deliberately NOT the drivable-heal path: success is not HP-gated at
+      // cast (Swallow is stockpile-gated, Wish heals a later turn), so the
+      // report cannot select the branch. Kept hand-scored, message says why.
+      throw new Error(`scorekeeper: "${r.move}" (${effect}) is NOT the HP-dependent-heal case — its success is stockpile-gated (Swallow) / delayed to a later turn (Wish), not HP-gated at cast, and the report does not carry that state. Score this side by hand: Mind +0; Skill +1 for Swallow whether it heals or fails (BattleScript_SwallowFail sets no result flag); for Wish +1 if it worked, -2 if it failed.`);
     }
     if (DRIVABLE_HEAL_EFFECTS.has(effect) && typeof r.healed !== "boolean") {
       // A drivable heal reported as a HIT but with no "Did it heal?" answer.
       // The You-side control supplies it; an opponent's heal has no control
       // (the widget is You-side only), so it lands here and is hand-scored.
-      throw new Error(`scorekeeper: "${r.move}" is an HP-dependent heal — its Skill needs the "Did it heal?" answer to pick the branch. The heal control is You-side only; score an opponent's heal by hand (Mind +0, Skill +1 if it healed, -2 if it failed).`);
+      throw new Error(`scorekeeper: "${r.move}" is an HP-dependent heal — its Skill needs the "Did it heal?" answer to pick the branch. The heal control is You-side only; score an opponent's heal by hand (Mind +0, Skill +1 whether it healed or found the user at full HP; a Rest that fails because the user is already asleep or has Insomnia / Vital Spirit is -2).`);
     }
   }
   if (UNSUPPORTED_OPP.has(report.opp.outcome)) {
