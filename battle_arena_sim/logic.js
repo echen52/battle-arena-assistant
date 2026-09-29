@@ -4291,7 +4291,44 @@ function aiQuickClawHolders(opp, you) {
   const q = (m) => { const d = itemData(m.item); return d && d.holdEffect === "HOLD_EFFECT_QUICK_CLAW" ? d : null; };
   return { opp: q(opp), you: q(you) };
 }
-function buildAiView(opp, you, state, { history = "moveset", qc = false, debug = null } = {}) {
+// ── Phase D F2c: what the AI knows of the player's moves ───────────────────
+// BATTLE_HISTORY->usedMoves[target] is fed ONLY by RecordLastUsedMoveByTarget
+// (src/battle_ai_script_commands.c:618-633), at the top of every AI decision
+// (:403): the target's gLastMoves goes into the first free slot unless it is
+// already there (MOVE_NONE matches a free slot and so records nothing). It is
+// cleared when a mon enters (ClearBattlerMoveHistory, src/battle_main.c:3260,
+// :3353). So on turn 1 the AI knows NONE of the player's moves; the engine
+// handed it all four.
+//
+// MOVE_UNAVAILABLE (0xFFFF, a prevented move -- :4412) is recorded too. This
+// engine stores it as null, like MOVE_NONE, which is exact for every read:
+// gBattleMoves[0xFFFF], past the table at 0x083DC88C in the ROM, reads effect
+// 0, power 0, type 0 -- the same as row 0 -- and every if_has_move* /
+// get_last_used_bank_move consumer in data/battle_ai_scripts.s reads only
+// those or compares the id against lists holding neither. What it does not
+// capture is that 0xFFFF OCCUPIES a slot, which can matter only once three
+// entries exist; a three-turn search records at most two, and a third throws.
+function recordTargetMoveHistory(state) {
+  const h = state.youMoveHistory ?? [];
+  const last = state.youLastMove ?? null;
+  if (last === null || h.includes(last)) return h;
+  if (h.length >= 2) {
+    throw new Error(`recordTargetMoveHistory: a third recorded move (${[...h, last].join(", ")}) -- ` +
+      `MOVE_UNAVAILABLE's slot occupancy is not modelled past two entries (Phase D F2c)`);
+  }
+  return [...h, last];
+}
+// The state the AI decides in: the history recorded -- but only when the ROM
+// runs the AI at all. A charging / recharging / rampaging mon is forced before
+// action selection, and so is an Encored one (src/battle_main.c:4192-4198 sets
+// the move and never calls the controller), so neither records.
+function aiDecisionState(state) {
+  const forced = state.oppCharging || state.oppRecharge || state.oppLock || state.oppEncoredMove;
+  if (forced) return state;
+  const h = recordTargetMoveHistory(state);
+  return h === state.youMoveHistory ? state : { ...state, youMoveHistory: h };
+}
+function buildAiView(opp, you, state, { history = "battle", qc = false, debug = null } = {}) {
   const weather = effectiveWeather(state, you, opp);
   const holders = aiQuickClawHolders(opp, you);
   const INF = Number.MAX_SAFE_INTEGER;
@@ -4310,7 +4347,11 @@ function buildAiView(opp, you, state, { history = "moveset", qc = false, debug =
     limited: [0, 1, 2, 3].map((i) => opp.moves[i] != null && !legal.has(opp.moves[i])),
     history: {
       ability: aiAbilityId(state.youAbilityRecord),
-      usedMoves: history === "moveset" ? [0, 1, 2, 3].map((i) => aiMoveId(you.moves[i] ?? null)) : null,
+      // F2c: "battle" is BATTLE_HISTORY (recorded as at this decision -- the
+      // record is idempotent, so a state already recorded gives the same);
+      // "moveset" is the old all-four assumption, kept for the parity tool.
+      usedMoves: history === "moveset" ? [0, 1, 2, 3].map((i) => aiMoveId(you.moves[i] ?? null))
+        : history === "battle" ? [0, 1, 2, 3].map((i) => aiMoveId(recordTargetMoveHistory(state)[i] ?? null)) : null,
       targetHoldEffect: 0, // F2b: GetItemHoldEffect(itemEffects[target]) is NONE in every reachable state
       itemEffects: 0,
     },
@@ -5058,6 +5099,7 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
     youToxicCounter: null, oppToxicCounter: null,
     youSleepTurns: null, oppSleepTurns: null, // turns-remaining counter, rolled ONCE at infliction (see enumerateActionOutcomes)
     youSeeded: false, oppSeeded: false, // Leech Seed — true means THIS side is seeded and drains into the other every end-of-turn
+    youMoveHistory: [], // Phase D F2c: BATTLE_HISTORY->usedMoves[player], as the AI has recorded it
     youLastMove: null, oppLastMove: null, // gLastMoves[battler] equivalent — set unconditionally whenever that actor acts (src/battle_script_commands.c:4407, gLastMoves[gBattlerAttacker] = gChosenMove), regardless of hit/prevented. Needed by e.g. AI_CV_DefenseUp/AI_CV_SpDefUp's "was I just hit by a physical/special move" check.
     // Substitute: null = no sub. A number = the sub's REMAINING HP pool
     // (starts at floor(maxHP/4), min 1 — src/battle_script_commands.c:7808-7833).
@@ -7802,8 +7844,9 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
   //    records MOVE_UNAVAILABLE. It used to record the move.
   // UNAVAILABLE is stored as null: every consumer treats the two alike --
   // Disable, Encore and Mimic fail on either, Torment restricts nothing. The
-  // one approximation is the AI, which in source reads gBattleMoves[0xFFFF]
-  // (past the table) and here sees "no last move".
+  // AI reads gBattleMoves[0xFFFF] (past the table), whose effect / power /
+  // type bytes equal row 0's in the ROM -- so "no last move" is exact there
+  // too (Phase D F2c, recordTargetMoveHistory).
   s[selfLastMoveKey] = (statusPrevented || attractPrevented || selfHit) ? null : chosenMoveName;
 
   if (thawed && s[selfStatusKey] === "freeze") s[selfStatusKey] = null;
@@ -11135,6 +11178,8 @@ function search(ctx, state, turnsRemaining, retain = true, tt = null, prune = fa
   const youForced = state.youCharging ? state.youCharging.move : (state.youRecharge?.move || state.youLock?.move);
   // F14: the opponent's choice per Quick Claw outcome (aiTurnPlans). A forced
   // move asks no AI, so its turn marginalises the draw in resolveTurn.
+  // F2c: the AI's decision records the player's last move into its history.
+  state = aiDecisionState(state);
   const plans = oppForced
     ? [{ p: 1, qc: undefined, cands: [{ move: oppForced, prob: 1 }] }]
     : aiTurnPlans(effectiveCtx(ctx, state), state);
@@ -11299,6 +11344,7 @@ export {
   scoreOpponentMove, scoreOpponentMoveDist, chooseOpponentMoves,
   // Phase D F13: the interpreter path, and the view it reads.
   chooseOpponentMovesInterp, chooseOpponentMovesHandlers, buildAiView, selectableMoves,
+  aiDecisionState, recordTargetMoveHistory, // Phase D F2c
   typeCalcRows, // F17
   aiTurnPlans, // F14
   EFFECTIVENESS_CLEARED_EFFECTS, // F21
