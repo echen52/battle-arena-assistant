@@ -4890,7 +4890,20 @@ function buildStartState({ yourHpPct = 100, oppHpPct = 100, yourHpPctAtStart = y
   // Sand Stream etc.); a number means turns remaining (starts at 5 for any
   // of the 4 weather-setting MOVES, src/battle_script_commands.c:6681-6694
   // and siblings — confirmed identical for all 4).
-  const initialWeather = you && opp ? (permanentWeatherFromAbility(you) || permanentWeatherFromAbility(opp)) : null;
+  // Phase D F41: two DIFFERENT setters are not "the player's wins".
+  // TryDoEventsBeforeFirstTurn (src/battle_main.c:3850-3879) runs switch-in
+  // abilities fastest first -- GetWhoStrikesFirst, Quick Claw draw and a random
+  // tie included -- and each overwrites the weather, so the slower setter's
+  // stays. Unreachable in the Frontier (Drizzle / Drought are Kyogre's and
+  // Groudon's, banned; the pool's one is Tyranitar's Sand Stream), so it
+  // throws by name rather than being modelled.
+  const wYou = you ? permanentWeatherFromAbility(you) : null, wOpp = opp ? permanentWeatherFromAbility(opp) : null;
+  if (wYou && wOpp && wYou !== wOpp) {
+    throw new Error(`buildStartState: ${you.species}'s ${you.ability} and ${opp.species}'s ${opp.ability} set different ` +
+      `weathers at switch-in; the ROM keeps the SLOWER setter's (TryDoEventsBeforeFirstTurn, speed order with the Quick ` +
+      `Claw draw and a random tie) and that order is not modelled -- unreachable in the Frontier (Phase D F41).`);
+  }
+  const initialWeather = you && opp ? (wYou || wOpp) : null;
   const base = {
     turn: 1,
     yourHpPct, oppHpPct,
