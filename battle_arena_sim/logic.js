@@ -21,7 +21,7 @@ import {
   CHANGE_SELF_ABILITY_ENCOURAGED, RECYCLE_ENCOURAGED_ITEMS, TRICK_EFFECTS_TO_ENCOURAGE,
   TRICK_EFFECTS_TO_ENCOURAGE_2, THIEF_ITEMS_TO_STEAL, ATTACK_DOWN_PHYSICAL_TYPES, SP_ATK_DOWN_SPECIAL_TYPES,
 } from "./ai-tables.js";
-import { moveFlags, secondaryChance } from "./move-flags.js";
+import { moveFlags, secondaryChance, moveTarget } from "./move-flags.js";
 import { CRIT_EFFECTS } from "./crit-effects.js";
 import { lowKickPower } from "./species-weights.js";
 import { TYPE_CHART, PHYSICAL_TYPES, SPECIAL_TYPES } from "./type-data.js";
@@ -9995,8 +9995,26 @@ function enumerateMoveBody(ctx, state, actor, moveName, moveData, targetCharging
       // Ghost branch already throws as unmodeled) or the semi-invulnerable
       // charge-turn exception (moot — that branch below already exits before
       // reaching this check, so this only ever runs on a real attack attempt).
+      //
+      // Phase D F38: and only when the protected battler IS the move's target,
+      // on a turn the move actually strikes. DEFENDER_IS_PROTECTED reads
+      // gBattlerTarget (src/battle_script_commands.c:57), which for a
+      // MOVE_TARGET_USER move is the user itself (GetMoveTarget,
+      // src/battle_util.c:3902-3905): Haze, Milk Drink, Hail, Wish, Imprison,
+      // Grudge go through. And the attackcanceler exempts a two-turn move's
+      // charging turn (:992-994, IsTwoTurnsMove :8196-8207); its strike --
+      // or SolarBeam in sun, which never charges -- is stopped at accuracycheck.
+      // Bide is MOVE_TARGET_USER too, but its UNLEASH retargets: CANCELER_BIDE
+      // sets gBattlerTarget = gBideTarget (src/battle_util.c:2236) before the
+      // check, with STATUS2_MULTIPLETURNS set (Cmd_setbide, :7123) -- so the
+      // unleash is blocked. (Its storing turns stop at CANCELER_BIDE and never
+      // get here; its set turn targets the user.)
       const foeProtectedKey = actor === "you" ? "oppProtected" : "youProtected";
-      if (state[foeProtectedKey] && moveData.flags.includes("FLAG_PROTECT_AFFECTED")) {
+      const chargingTurn = !state[actor === "you" ? "youCharging" : "oppCharging"]
+        && (moveData.effect === "EFFECT_SEMI_INVULNERABLE" || chargeTurnRequired(moveData, effectiveWeather(state, ctx.you, ctx.opp)));
+      const bideUnleashing = moveData.effect === "EFFECT_BIDE" && state[actor === "you" ? "youLock" : "oppLock"]?.kind === "bide";
+      const targetsSelf = moveTarget(moveName) === "MOVE_TARGET_USER" && !bideUnleashing;
+      if (state[foeProtectedKey] && moveData.flags.includes("FLAG_PROTECT_AFFECTED") && !targetsSelf && !chargingTurn) {
         results.push({ p: p, hit: false, selfHit: false, secondaryTriggered: false, statusPrevented: false, thawed: stb.thawed, blockedByProtect: true });
         continue;
       }
