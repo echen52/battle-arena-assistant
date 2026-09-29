@@ -3161,6 +3161,9 @@ function calcDamage(attacker, defender, moveName, {
   // type cleared (src/battle_ai_script_commands.c:1470-1474).
   const move = aiEstimate ? MOVES[moveName] : battleMoveData(attacker, moveName);
   if (move.power === 0) return 0;
+  // Phase D F42: Cmd_typecalc returns at once for MOVE_STRUGGLE
+  // (src/battle_script_commands.c:1360-1364) -- no STAB, no type chart.
+  if (moveName === "Struggle") untyped = true;
   // EFFECT_LEVEL_DAMAGE (Night Shade/Seismic Toss): damage is EXACTLY the
   // user's level — bypasses Atk/Def/STAB/power/the formula entirely, and
   // (unlike every other damaging move) has NO 0.85-1.0 roll either, since
@@ -6360,7 +6363,9 @@ function resolveAbilityInteraction(moveName, moveData, attacker, defender, defen
   if (defender.ability === "Flash Fire" && moveData.type === "Fire") {
     return { type: "flashFireTrigger", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Flash Fire"] };
   }
-  if (defender.ability === "Wonder Guard") {
+  // Phase D F42: CheckWonderGuardAndLevitate returns at once for Struggle
+  // (src/battle_script_commands.c:1432).
+  if (defender.ability === "Wonder Guard" && moveName !== "Struggle") {
     const { hadSuper, hadNVE } = typeEffectivenessBreakdown(moveData.type, defender.types, defenderForesighted);
     if (!(hadSuper && !hadNVE)) return { type: "blocked", skillDelta: ABILITY_BLOCK_SKILL_DELTA["Wonder Guard"] }; // only a CLEAN super-effective hit gets through
   }
@@ -7777,7 +7782,9 @@ function applyMove(ctx, s, actor, ...rest) {
       // Band Trick user that the ROM did not lock.
       if (_changedItemsActor === actor) held = null;
       const lockKey = isYou ? "youChoiceLock" : "oppChoiceLock";
-      if (itemData(held)?.holdEffect === "HOLD_EFFECT_CHOICE_BAND" && s[lockKey] == null) s[lockKey] = chosen;
+      // `gChosenMove != MOVE_STRUGGLE` (:4299) -- Phase D F42; this comment's
+      // older twin below called that clause inert while Struggle was unmodelled.
+      if (itemData(held)?.holdEffect === "HOLD_EFFECT_CHOICE_BAND" && s[lockKey] == null && chosen !== "Struggle") s[lockKey] = chosen;
     }
   }
   const self = isYou ? ctx.you : ctx.opp;
@@ -8510,7 +8517,8 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     }
     const atkStatKey = moveData.category === "physical" ? "atk" : "spa";
     const defStatKey = moveData.category === "physical" ? "def" : "spd";
-    const eff = typeEffectiveness(moveData.type, foeMon.types, foeForesighted);
+    // Phase D F42: Struggle skips typecalc -- no immunity, no effectiveness flags.
+    const eff = moveName === "Struggle" ? 1 : typeEffectiveness(moveData.type, foeMon.types, foeForesighted);
     const foeEndureKey = isYou ? "oppEndureActive" : "youEndureActive";
     // B2b batch 7: Cmd_furycuttercalc (src/battle_script_commands.c:8580-8602).
     // The counter resets on NO_EFFECT and otherwise climbs to a cap of 5, and
@@ -8960,7 +8968,7 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     //                              cancelled in AtkCanceler_UnableToUseMove or
     //                              blocked by Soundproof, both before
     //                              Cmd_attackcanceler sets it (:932 / :960)
-    //   gChosenMove != MOVE_STRUGGLE  Struggle is not modelled -- inert
+    //   gChosenMove != MOVE_STRUGGLE  ported (Phase D F42) in the applyMove wrapper
     //   choicedMove not already set   ported, the `== null` guard below
     //   Baton Pass that did NOT fail skips the assignment: EFFECT_BATON_PASS
     //     always fails here (the Arena has no reserve party), so source would
