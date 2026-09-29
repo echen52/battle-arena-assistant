@@ -6753,12 +6753,11 @@ const EFFECT_EXECUTORS = {
   // except the user, looping over targets. In singles that is exactly the foe,
   // gated on Own Tempo, Substitute and already-confused -- the same three
   // checks EFFECT_CONFUSE uses (A4), so it shares confusionTarget.
-  EFFECT_TEETER_DANCE: (s, actor, ctx) => {
-    const t = confusionTarget(s, actor, ctx);
-    if (t.mon.ability === "Own Tempo") return "failed";
-    if (s[t.subKey] != null) return "failed";
-    if (s[t.confKey]) return "failed";
-    s[t.confKey] = true;
+  // Phase D F40: resolved whole in applyMoveCore (its Skill depends on the
+  // loop's last pass, which an executor cannot see); reaching here is a
+  // routing bug.
+  EFFECT_TEETER_DANCE: () => {
+    throw new Error("EFFECT_TEETER_DANCE reached its executor -- applyMoveCore resolves it (Phase D F40)");
   },
 
   // Wish: Cmd_trywish case 0 sets wishCounter = 2 and fails if one is already
@@ -7984,6 +7983,33 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     return;
   }
   if (moveData.effect === "EFFECT_EXPLOSION") s[selfHpKey] = 0;
+
+  // Phase D F40: TEETER DANCE decides its own Skill, in its loop's order
+  // (data/battle_scripts_1.s:2571-2621). Each pass opens with
+  // movevaluescleanup (src/battle_script_commands.c:3621-3630: result flags
+  // and MISS_TYPE zeroed) and skips the user AFTER it; AddSkillPoints runs at
+  // `end` on the last pass. The player is battler 0 and the opponent battler 1,
+  // so the player's dance ends on the foe's pass (its flags stand) and the
+  // opponent's ends on its own (a miss or a Protect-block is wiped: +1). The
+  // attackcanceler's Protect flag (:992-1001) is wiped by the first cleanup, so
+  // on the foe's pass Own Tempo, a Substitute and already-confused come first;
+  // Protect and accuracy only at its accuracycheck; Safeguard after that.
+  if (moveData.effect === "EFFECT_TEETER_DANCE") {
+    const t = confusionTarget(s, actor, ctx);
+    const lastPassIsOwn = !isYou;
+    // the attackcanceler still cancels the user's multi-turn moves into Protect
+    if (blockedByProtect) cancelMultiTurnMoves(s, actor);
+    let outcome;
+    if (t.mon.ability === "Own Tempo") outcome = arenaSkillDelta("landed", ["STRINGID_PKMNPREVENTSCONFUSIONWITH"]);
+    else if (s[t.subKey] != null) outcome = arenaSkillDelta("landed", ["STRINGID_BUTITFAILED"]);
+    else if (s[t.confKey]) outcome = arenaSkillDelta("alreadyStatused");
+    else if (blockedByProtect) outcome = lastPassIsOwn ? arenaSkillDelta("landed") : arenaSkillDelta("protectedBlock");
+    else if (!hit) outcome = lastPassIsOwn ? arenaSkillDelta("landed") : skillDelta("miss");
+    else if (s[t.safeguardKey] != null) outcome = arenaSkillDelta("landed", ["STRINGID_PKMNUSEDSAFEGUARD"]);
+    else { s[t.confKey] = true; outcome = arenaSkillDelta("landed"); }
+    s[skillKey] += outcome;
+    return;
+  }
 
   if (blockedByProtect) {
     // Attacker's move blocked by opponent's active Protect/Detect. Verified
