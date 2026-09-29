@@ -72,23 +72,30 @@ console.log("-- PART 2: Focus Band branches only on a LETHAL hit --");
   ok(fb.param === 10, `Focus Band's holdEffectParam must be 10 (got ${fb.param})`);
   const hitter = metagross("Cheri Berry");
 
-  const run = (item, hpPct) => {
+  const run = (item, hpPct, move = "Meteor Mash") => {
     const opp = blissey(item);
     const s = buildStartState({ you: hitter, opp, overrides: { oppHpPct: hpPct } });
     // NOT "Rest": an earlier draft had the target Rest, which heals it to full
     // and hid the very 1-HP clamp this part is checking.
-    const br = resolveTurn({ you: hitter, opp }, s, "Meteor Mash", "Thunderbolt");
+    const br = resolveTurn({ you: hitter, opp }, s, move, "Thunderbolt");
     return { br, survives: br.filter((b) => b.state.oppHpPct > 0).reduce((a, b) => a + b.p, 0) };
   };
 
   const lethalFB = run("Focus Band", 5);
   const lethalNo = run("Leftovers", 5);
-  const safeFB = run("Focus Band", 100);
+  // Phase D F39: this used to be Meteor Mash at full HP -- but a CRITICAL Meteor
+  // Mash KOs this Blissey from full (362 HP), so it was never a non-lethal hit;
+  // the probe that ignored crits made it look like one. Shadow Ball into
+  // Blissey's Special Defense cannot KO even as a crit, and the precondition
+  // below says so rather than assuming it.
+  const safeFB = run("Focus Band", 100, "Shadow Ball");
+  const safeNo = run("Leftovers", 100, "Shadow Ball");
 
   ok(Math.abs(sum(lethalFB.br) - 1) < 1e-12, "branch probabilities must sum to 1");
   ok(lethalFB.br.length > lethalNo.br.length,
     `a lethal hit into a Focus Band holder must add branches (${lethalFB.br.length} vs ${lethalNo.br.length})`);
-  ok(safeFB.br.length === run("Leftovers", 100).br.length,
+  ok(safeNo.br.every((b) => b.state.oppHpPct > 0), "(precondition) no Shadow Ball branch, crit included, KOs from full");
+  ok(safeFB.br.length === safeNo.br.length,
     "a NON-lethal hit must add none -- that is the collapse rule");
 
   // Meteor Mash is 85% accurate, so without the band the target survives only

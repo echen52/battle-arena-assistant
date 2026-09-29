@@ -7524,6 +7524,22 @@ function warnUnmodeledMechanicOnce(effect, moveName) {
 // alternative -- a second, probe-only damage estimate -- is exactly the drift
 // anti-pattern this project exists downstream of, and it would be wrong the
 // moment either copy gained a modifier the other lacked.
+// The script's damage multiplier (gBattleScripting.dmgMultiplier), from the
+// state BEFORE the move: Smelling Salt x2 into an unsubstituted paralysed
+// target (BattleScript_EffectSmellingsalt -> SmellingsaltDoubleDmg), Stomp's
+// family x2 into STATUS3_MINIMIZED (data/battle_scripts_1.s:1898-1901), Spit
+// Up x the stockpile (0 = nothing stored, and the move fails). Phase D F39: one
+// function, read by applyMove's damage AND by Focus Band's lethality probe, so
+// the probe cannot ask about a different hit than the one that lands.
+function scriptDamageMultiplier(state, actor, moveData) {
+  const isYou = actor === "you";
+  if (moveData.effect === "EFFECT_SMELLINGSALT" && state[isYou ? "oppStatus" : "youStatus"] === "paralysis"
+      && state[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) return 2;
+  if (moveData.effect === "EFFECT_FLINCH_MINIMIZE_HIT" && vf(state, isYou ? "oppMinimized" : "youMinimized")) return 2;
+  if (moveData.effect === "EFFECT_SPIT_UP") return state[isYou ? "youStockpile" : "oppStockpile"];
+  return 1;
+}
+
 function battleDamageOptions(ctx, s, actor, moveData, variablePower = null, baseMultiplier = 1, crit = false) {
   const { you, opp } = ctx;
   const isYou = actor === "you";
@@ -8467,22 +8483,12 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
     // whether or not the move connects meaningfully -- source zeroes it inside
     // Cmd_stockpiletobasedamage, after the damage is computed. With nothing
     // stored the move fails outright.
-    let spitUpMultiplier = 1;
-    // B3 batch 1: Smelling Salt doubles against a PARALYSED target
-    // (BattleScript_EffectSmellingsalt -> SmellingsaltDoubleDmg, which sets
-    // gBattleScripting.dmgMultiplier = 2). Reuses the multiplier batch 9 added
-    // for Spit Up rather than a second mechanism -- source applies both at the
-    // same point, to CalculateBaseDamage's output.
-    if (moveData.effect === "EFFECT_SMELLINGSALT" && s[foeStatusKey] === "paralysis"
-        && s[isYou ? "oppSubstituteHP" : "youSubstituteHP"] == null) {
-      spitUpMultiplier = 2;
-    }
-    // B4c: BattleScript_EffectStomp (data/battle_scripts_1.s:1898-1901) --
-    // EFFECT_FLINCH_MINIMIZE_HIT sets sDMG_MULTIPLIER = 2 into a target with
-    // STATUS3_MINIMIZED, through the same multiplier as Smelling Salt.
-    if (moveData.effect === "EFFECT_FLINCH_MINIMIZE_HIT" && vf(s, isYou ? "oppMinimized" : "youMinimized")) {
-      spitUpMultiplier = 2;
-    }
+    // B3 batch 1 (Smelling Salt x2 into paralysis) and B4c (Stomp's family x2
+    // into Minimize) reuse the multiplier batch 9 added for Spit Up -- source
+    // applies all three at the same point, to CalculateBaseDamage's output.
+    // Phase D F39: derived by scriptDamageMultiplier, which Focus Band's probe
+    // reads too. Read BEFORE the Spit Up block below spends the stockpile.
+    let spitUpMultiplier = scriptDamageMultiplier(s, actor, moveData);
     if (moveData.effect === "EFFECT_SPIT_UP") {
       // NOTE the script ends in `adjustsetdamage`, not `adjustnormaldamage`
       // (data/battle_scripts_1.s:2094-2103), so Spit Up takes NO damage roll.
@@ -8493,7 +8499,6 @@ function applyMoveCore(ctx, s, actor, moveName, hit, selfHit, secondaryTriggered
         s[skillKey] += skillDelta("noEffect");
         return;
       }
-      spitUpMultiplier = s[spKey];
       s[spKey] = 0;
     }
     if (moveData.effect === "EFFECT_FURY_CUTTER") {
@@ -10508,8 +10513,12 @@ function focusBandBranches(ctx, state, actor, moveName, moveData, results) {
     : (moveData.effect === "EFFECT_COUNTER" || moveData.effect === "EFFECT_MIRROR_COAT") // F27
       ? (counterReceived(state, actor, moveData) ?? 0) * 2
       : counterHitPower(state, actor, moveData);
+  // Phase D F39: the probe asks about the hit that lands -- its crit (single-hit
+  // mask bit 0; multi-hit throws below) and the script's dmgMultiplier.
+  const mult = scriptDamageMultiplier(state, actor, moveData);
   const lethal = (r) => (probePower === 0 ? false : calcDamage(selfMon, foeMon, moveName,
-    battleDamageOptions(r.roll != null && !Array.isArray(r.roll) ? { ...ctx, rollPercent: r.roll } : ctx, state, actor, moveData, r.variablePower ?? probePower)) >= foeHp);
+    battleDamageOptions(r.roll != null && !Array.isArray(r.roll) ? { ...ctx, rollPercent: r.roll } : ctx, state, actor, moveData,
+      r.variablePower ?? probePower, mult, !!((r.crit | 0) & 1))) >= foeHp);
   if (!results.some((r) => r.hit && r.variablePower !== "heal" && lethal(r))) {
     return results; // no branch can KO, so the proc is unobservable in any of them
   }
