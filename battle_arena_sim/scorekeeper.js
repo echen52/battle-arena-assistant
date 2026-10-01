@@ -93,6 +93,9 @@ const HEAL_HP_HEALED = 50;
 // itself from the foe's Detect action (priority, resolves before the actor's
 // move, blocking it). Turn 1 has no prior Protect, so Detect always succeeds.
 const FOE_PROTECT_MOVE = "Detect";
+// The foe move for a FLINCH report: Fake Out, a certain flinch on its user's
+// first turn (BattleScript_EffectFakeOut, data/battle_scripts_1.s:2048-2052).
+const FOE_FLINCH_MOVE = "Fake Out";
 
 // Per-side reportable outcomes — exactly what a person observes. Effectiveness
 // is NEVER among them: the engine derives it from move type + defender types.
@@ -101,8 +104,9 @@ export const OUTCOME = {
   MISSED: "MISSED",                 // accuracy miss
   PROTECT: "PROTECT",               // this side's move blocked by the FOE's Protect/Detect
   IMMOBILIZED: "IMMOBILIZED",       // couldn't act: para/freeze/sleep (Mind banks, Skill 0)
-  CONFUSION_SELF: "CONFUSION_SELF", // hurt itself in confusion (You side only)
-  ATTRACT: "ATTRACT",               // immobilized by love (You side only)
+  CONFUSION_SELF: "CONFUSION_SELF", // hurt itself in confusion (either side, A5)
+  ATTRACT: "ATTRACT",               // immobilized by love (either side, A5)
+  FLINCH: "FLINCH",                 // flinched (either side, B4)
 };
 
 // Two-turn phases, reported in GAME TERMS by the UI ("submerged"/"surfaced").
@@ -110,11 +114,10 @@ export const PHASE = { CHARGE: "CHARGE", ATTACK: "ATTACK" };
 
 // Reports the drive model CANNOT score for a given side (no engine branch to
 // force). The UI greys these and offers "score by hand"; it must never silently
-// substitute a same-shape neighbor.
-//   - CONFUSION_SELF / ATTRACT on the OPPONENT: engine models these You-side only.
-//   - FLINCH (either side): no flinch model in the engine at all — not an
-//     OUTCOME value here; the UI offers it only as a greyed hand-score affordance.
-export const UNSUPPORTED_OPP = new Set([OUTCOME.CONFUSION_SELF, OUTCOME.ATTRACT]);
+// substitute a same-shape neighbor. Empty now: confusion and attraction have
+// been two-sided since A5 (they used to be You-side only here), and flinch has
+// been modelled since B4 (it used to be a hand-score affordance).
+export const UNSUPPORTED_OPP = new Set();
 
 const actorTag = (side) => (side === "you" ? "You" : "Opp");
 
@@ -150,6 +153,8 @@ function segmentMatchesOutcome(seg, who, move, outcome) {
       return seg.startsWith(`${who} hits itself in confusion`);
     case OUTCOME.ATTRACT:
       return seg.startsWith(`${who} is immobilized by love`);
+    case OUTCOME.FLINCH:
+      return seg.startsWith(`${who} flinches`);
     default:
       throw new Error(`scorekeeper: unknown outcome "${outcome}"`);
   }
@@ -161,8 +166,9 @@ function segmentMatchesOutcome(seg, who, move, outcome) {
 function applySideConditions(s, actorSide, r) {
   const isYou = actorSide === "you";
   if (r.outcome === OUTCOME.IMMOBILIZED) s[isYou ? "youStatus" : "oppStatus"] = "paralysis";
-  if (r.outcome === OUTCOME.CONFUSION_SELF && isYou) s.youConfused = true;
-  if (r.outcome === OUTCOME.ATTRACT && isYou) s.youAttracted = true;
+  if (r.outcome === OUTCOME.CONFUSION_SELF) s[isYou ? "youConfused" : "oppConfused"] = true;
+  if (r.outcome === OUTCOME.ATTRACT) s[isYou ? "youAttracted" : "oppAttracted"] = true;
+  // FLINCH is not set here either: the foe drives a real Fake Out (see scoreSide).
   // PROTECT is NOT set here — the flag would be wiped at turn start; the foe
   // drives a real Detect instead (see scoreSide's foe-move selection).
   if (r.phase === PHASE.ATTACK) {
@@ -203,9 +209,14 @@ function scoreSide(actorSide, actorMon, foeMon, sideReport) {
   // Tackle — unless the actor reported a Protect-block, in which case the foe
   // must actually Detect to make the engine block the actor's move (the pre-set
   // flag is wiped at turn start).
+  // A FLINCH report: the foe uses Fake Out -- +3 priority and a certain flinch
+  // (MOVE_EFFECT_FLINCH | MOVE_EFFECT_CERTAIN) on its user's first turn, which
+  // a fresh drive state is -- so the actor is the flinched second mover. An
+  // actor that cannot flinch (Inner Focus) matches no branch and throws.
   const foeMove = isHealDrive
     ? HEAL_FILLER_MOVE
-    : sideReport.outcome === OUTCOME.PROTECT ? FOE_PROTECT_MOVE : FILLER_MOVE;
+    : sideReport.outcome === OUTCOME.PROTECT ? FOE_PROTECT_MOVE
+    : sideReport.outcome === OUTCOME.FLINCH ? FOE_FLINCH_MOVE : FILLER_MOVE;
   const yourMove = isYou ? sideReport.move : foeMove;
   const oppMove = isYou ? foeMove : sideReport.move;
 
@@ -252,7 +263,7 @@ function validateReport(report) {
     }
   }
   if (UNSUPPORTED_OPP.has(report.opp.outcome)) {
-    throw new Error(`scorekeeper: "${report.opp.outcome}" is not modeled for the opponent (the engine has no opponent-side branch) — score this turn by hand.`);
+    throw new Error(`scorekeeper: "${report.opp.outcome}" cannot be driven for the opponent — score this turn by hand.`);
   }
 }
 

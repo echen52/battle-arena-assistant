@@ -14,8 +14,9 @@ import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
 // mid-match state it's in):
 //   turn, yourHpPct, oppHpPct, yourUsablePartyMons, oppUsablePartyMons,
 //   youStages, oppStages (7-key each), youStatus, oppStatus,
-//   youConfused, youAttracted (volatile STATUS2 conditions — You side
-//   only, the engine has no opponent-side branch for either, see HANDOFF.md),
+//   youConfused / oppConfused (false, true = confused with no checks yet, or
+//   the next check 2..5), youAttracted / oppAttracted (volatile STATUS2
+//   conditions, two-sided since A5),
 //   weatherType, weatherTurns (only when a weather is chosen -- absent means
 //     "as the leads' abilities set it at switch-in"),
 //   youReflectTurns, oppReflectTurns, youLightScreenTurns, oppLightScreenTurns
@@ -25,10 +26,10 @@ export function freshMatchState() {
     turn: 1,
     yourHpPct: 100, oppHpPct: 100,
     yourUsablePartyMons: 2, oppUsablePartyMons: 2,
-    youStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 },
-    oppStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 },
+    // No youStages / oppStages: absent keys keep the switch-in stages
+    // buildStartState derives (Intimidate, White Herb); zeros here overrode them.
     youStatus: null, oppStatus: null,
-    youConfused: false, youAttracted: false,
+    youConfused: false, oppConfused: false, youAttracted: false, oppAttracted: false,
     // No weatherType / weatherTurns: absent keys leave the switch-in weather
     // buildStartState derives from the leads' abilities; a null here overrode it.
     youReflectTurns: null, oppReflectTurns: null,

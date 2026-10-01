@@ -45,7 +45,7 @@
          NOW, not who the mon is, so these stay outside the collapsed
          build section and stay visible regardless of how the set was added. -->
     <div class="field-row">
-      <label>Stage</label>
+      <label title="Leave at 0 on turn 1: switch-in effects (Intimidate, White Herb) are applied for you. From turn 2 on, enter the stages as they are now, including any Intimidate drop.">Stage</label>
       <div class="stage-grid">
         <span>Atk</span><select class="calc-trigger stage-select" data-stat="atk"></select>
         <span>Def</span><select class="calc-trigger stage-select" data-stat="def"></select>
@@ -88,15 +88,22 @@
 
     <!-- Confusion/Attraction are volatile STATUS2 conditions, independent of
          and stackable with the primary status above (a mon can be
-         paralyzed AND confused AND attracted at once) — two separate
-         toggles, not select options. Both are real, enumerated engine
-         branches for the You side only (logic.js: metagrossConfused,
-         youAttracted) — see HANDOFF.md. Attracted is additionally gated by
-         live gender-compatibility (app.js), since the engine's own override
+         paralyzed AND confused AND attracted at once). Both sides are real
+         engine branches (A5). Confusion lasts 2-5 turns (B4), so the engine
+         needs HOW LONG it has lasted: the select passes the engine's
+         next-check index (true = no turns yet, then 2..5). Attracted is gated
+         by live gender-compatibility (app.js), since the engine's own override
          path does not itself validate gender for a directly-set toggle. -->
     <div class="field-row">
       <label>Volatile</label>
-      <input type="checkbox" id="youConfused" class="calc-trigger" /><label for="youConfused" class="btn btn-field">Confused</label>
+      <select id="youConfusion" class="calc-trigger" title="Confusion lasts 2-5 turns; the longer it has lasted, the likelier it ends at the next check.">
+        <option value="">Not confused</option>
+        <option value="1">Confused (no turns yet)</option>
+        <option value="2">Confused 1 turn</option>
+        <option value="3">Confused 2 turns</option>
+        <option value="4">Confused 3 turns</option>
+        <option value="5">Confused 4 turns (ends next check)</option>
+      </select>
       <input type="checkbox" id="youAttracted" class="calc-trigger" /><label for="youAttracted" class="btn btn-field" id="youAttractedLabel">Attracted</label>
     </div>
 
@@ -217,8 +224,8 @@
         <br/>
         <input type="checkbox" id="youLightScreen" class="calc-trigger" /><label for="youLightScreen" class="btn btn-field">Light Screen</label>
         <br/>
-        <input type="checkbox" id="youSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
-        <label for="youSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
+        <input type="checkbox" id="youSpikes" disabled title="Spikes only hurt a Pokémon switching in. Nothing switches in during this matchup, so they cannot change this result; they do hurt your next Pokémon when it comes out — enter that as its starting HP." />
+        <label for="youSpikes" class="btn btn-field btn-disabled" title="No effect in the Arena: nothing switches in mid-matchup">Spikes (no effect here)</label>
       </div>
       <div>
         <span class="field-group-label">Opponent side</span>
@@ -226,8 +233,8 @@
         <br/>
         <input type="checkbox" id="oppLightScreen" class="calc-trigger" /><label for="oppLightScreen" class="btn btn-field">Light Screen</label>
         <br/>
-        <input type="checkbox" id="oppSpikes" disabled title="EFFECT_SPIKES is not implemented in the engine yet (documented long-tail gap, HANDOFF.md §5) — this toggle is inert." />
-        <label for="oppSpikes" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Spikes (unsupported)</label>
+        <input type="checkbox" id="oppSpikes" disabled title="Spikes only hurt a Pokémon switching in. Nothing switches in during this matchup, so they cannot change this result; they do hurt your next Pokémon when it comes out — enter that as its starting HP." />
+        <label for="oppSpikes" class="btn btn-field btn-disabled" title="No effect in the Arena: nothing switches in mid-matchup">Spikes (no effect here)</label>
       </div>
     </div>
 
@@ -374,7 +381,7 @@
     </div>
 
     <div class="field-row">
-      <label>Stage</label>
+      <label title="Leave at 0 on turn 1: switch-in effects (Intimidate, White Herb) are applied for you. From turn 2 on, enter the stages as they are now, including any Intimidate drop.">Stage</label>
       <div class="stage-grid">
         <span>Atk</span><select class="calc-trigger opp-stage-select" data-stat="atk"></select>
         <span>Def</span><select class="calc-trigger opp-stage-select" data-stat="def"></select>
@@ -426,18 +433,20 @@
       <label for="oppFirstTurn" class="btn btn-field" title="The opponent was just sent out / switched in this turn.">First turn on field</label>
     </div>
 
-    <!-- Opponent-side confusion/attraction are NOT modeled — the engine's
-         own turn-resolution hardcodes both to "actor === 'you' ? ... :
-         false" (logic.js), i.e. it structurally cannot apply these to the
-         opponent regardless of any state override. Disabled, mirroring the
-         Spikes convention, rather than wiring to a no-op field. See
-         HANDOFF.md. -->
+    <!-- The opponent's confusion and attraction: the same engine fields as the
+         You side (oppConfused / oppAttracted, two-sided since A5). They used
+         to be disabled here as "not modeled", which stopped being true. -->
     <div class="field-row">
       <label>Volatile</label>
-      <input type="checkbox" id="oppConfused" disabled title="Opponent-side confusion is not modeled in the engine yet — turn-resolution hardcodes only the You side as confusable (logic.js: metagrossConfused). This toggle is inert." />
-      <label for="oppConfused" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Confused (unsupported)</label>
-      <input type="checkbox" id="oppAttracted" disabled title="Opponent-side attraction is not modeled in the engine yet — same one-directional limitation as confusion (logic.js: youAttracted). This toggle is inert." />
-      <label for="oppAttracted" class="btn btn-field btn-disabled" title="Not supported by the engine yet">Attracted (unsupported)</label>
+      <select id="oppConfusion" class="calc-trigger" title="Confusion lasts 2-5 turns; the longer it has lasted, the likelier it ends at the next check.">
+        <option value="">Not confused</option>
+        <option value="1">Confused (no turns yet)</option>
+        <option value="2">Confused 1 turn</option>
+        <option value="3">Confused 2 turns</option>
+        <option value="4">Confused 3 turns</option>
+        <option value="5">Confused 4 turns (ends next check)</option>
+      </select>
+      <input type="checkbox" id="oppAttracted" class="calc-trigger" /><label for="oppAttracted" class="btn btn-field" id="oppAttractedLabel">Attracted</label>
     </div>
 
     <div class="opp-move-dist" id="oppMoveDistBlock">

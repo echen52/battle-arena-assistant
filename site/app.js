@@ -335,19 +335,32 @@ function buildMatchState() {
   s.oppHpPct = Number($("oppCurrentHp").value) || 0;
   s.youStages = readStages(".stage-select");
   s.oppStages = readStages(".opp-stage-select");
+  // On turn 1 a side whose stages are all 0 is left ABSENT, so buildStartState
+  // keeps the switch-in stages it derives itself: Intimidate's -1 Atk on the
+  // foe, restored by a White Herb (F16). Forwarding the zeros used to wipe
+  // them -- every Intimidate matchup was solved at full Attack. Any entered
+  // stage, or any turn from 2 on, is the observed state and is forwarded.
+  const allZero = (st) => Object.values(st).every((v) => v === 0);
+  if (s.turn === 1) {
+    if (allZero(s.youStages)) delete s.youStages;
+    if (allZero(s.oppStages)) delete s.oppStages;
+  }
   s.youStatus = $("youStatus").value || null;
   s.oppStatus = $("oppStatus").value || null;
   // Batch 4: the opponent's per-mon first-turn-out state — flows through the
   // denylist into buildStartState like every other base key; the engine's
   // search decays it for lookahead turns 2+ on its own (logic.js resolveTurn).
   s.oppMonFirstTurn = $("oppFirstTurn").checked;
-  // Confusion/Attraction: independent volatile toggles, stackable with the
-  // primary status above and with each other — real, You-side-only engine
-  // fields (see HANDOFF.md). Opponent-side toggles are disabled in the
-  // markup (the engine has no branch for them at all), so there's nothing
-  // to read for the opponent here.
-  s.youConfused = $("youConfused").checked;
+  // Confusion/Attraction: independent volatiles, stackable with the primary
+  // status above and with each other, on BOTH sides (the engine's
+  // you/oppConfused and you/oppAttracted, two-sided since A5). Confusion is
+  // the engine's next-check index, since it lasts 2-5 turns (B4): "" -> not
+  // confused, "1" -> true (no checks yet), "2".."5" -> that check next.
+  const confusion = (id) => { const v = $(id).value; return v === "" ? false : v === "1" ? true : Number(v); };
+  s.youConfused = confusion("youConfusion");
+  s.oppConfused = confusion("oppConfusion");
   s.youAttracted = $("youAttracted").checked;
+  s.oppAttracted = $("oppAttracted").checked;
   // Weather/Reflect/Light Screen are plain on/off toggles in this UI — no
   // turn-count input. ON passes the engine's own "active indefinitely"
   // value: weatherTurns: null (engine convention — see logic.js's ability-
@@ -386,20 +399,23 @@ function buildMatchState() {
 
 // ── The recalculation loop: any calc-trigger change re-solves from
 // scratch, using the CURRENT observed state — this is the live re-solve. ──
-// Disables the You-side Attracted toggle (and force-unchecks it) whenever
+// Disables BOTH sides' Attracted toggles (and force-unchecks them) whenever
 // the current You/Opponent species pairing can NEVER be gender-compatible
 // (either side genderless, or both fixed to the same single gender) — the
 // engine's own override path doesn't validate this itself (see
 // buildMatchState's comment), so an impossible state must never reach it.
-// Runs BEFORE buildMatchState() reads the checkbox, so a forced uncheck
-// takes effect in the same solve, not one interaction late.
+// The pairing rule is symmetric, so one answer gates both. Runs BEFORE
+// buildMatchState() reads the checkboxes, so a forced uncheck takes effect in
+// the same solve, not one interaction late.
 function updateAttractedGate(youSpecies, oppSpecies) {
-  const checkbox = $("youAttracted"), label = $("youAttractedLabel");
   const possible = youSpecies && oppSpecies ? canAttractPair(youSpecies, oppSpecies) : true;
-  checkbox.disabled = !possible;
-  label.classList.toggle("btn-disabled", !possible);
-  label.title = possible ? "" : "Not possible: this species pairing can never be gender-compatible (one side is genderless, or both resolve to the same fixed gender) — Attract could never land here.";
-  if (!possible && checkbox.checked) checkbox.checked = false;
+  for (const side of ["you", "opp"]) {
+    const checkbox = $(side + "Attracted"), label = $(side + "AttractedLabel");
+    checkbox.disabled = !possible;
+    label.classList.toggle("btn-disabled", !possible);
+    label.title = possible ? "" : "Not possible: this species pairing can never be gender-compatible (one side is genderless, or both resolve to the same fixed gender) — Attract could never land here.";
+    if (!possible && checkbox.checked) checkbox.checked = false;
+  }
 }
 
 function recalculate() {
@@ -634,20 +650,21 @@ const SK_OUTCOMES = [
   { value: OUTCOME.MISSED, label: "Missed" },
   { value: OUTCOME.PROTECT, label: "Blocked" }, // terse like the rest; Protect/Detect are the only block sources (display only; route unchanged)
   // Labels short so the Outcome box stays compact; each still routes to its own
-  // drive state (IMMOBILIZED->youStatus, CONFUSION_SELF->youConfused,
-  // ATTRACT->youAttracted) — distinct paths, not merged. (para/freeze/sleep all
-  // collapse under IMMOBILIZED, banking Mind=selected/Skill=0 via paralysis.)
+  // drive state (IMMOBILIZED->status, CONFUSION_SELF->Confused,
+  // ATTRACT->Attracted, FLINCH->the foe's Fake Out) — distinct paths, not
+  // merged, on either side. (para/freeze/sleep all collapse under IMMOBILIZED,
+  // banking Mind=selected/Skill=0 via paralysis.)
   { value: OUTCOME.IMMOBILIZED, label: "Immobilized" },
   { value: OUTCOME.CONFUSION_SELF, label: "Confused" }, // self-hit is the only confusion outcome — parenthetical dropped (display only; route unchanged)
   { value: OUTCOME.ATTRACT, label: "Attracted" },
-  { value: "FLINCH", label: "Flinched", unsupported: true }, // no engine flinch model — hand-score only
+  { value: OUTCOME.FLINCH, label: "Flinched" }, // modelled since B4 (it used to be hand-score only)
 ];
 let skOutcomesInited = false;
 const skUndoStack = [];
 
 // Populate an outcome dropdown, greying the reports the drive model can't score
-// for this side (never silently substituting a same-shape neighbor): FLINCH on
-// either side, and confusion/attract on the opponent (engine has no branch).
+// for this side (never silently substituting a same-shape neighbor) -- any
+// in UNSUPPORTED_OPP (none since confusion/attract went two-sided and flinch was modelled).
 function populateOutcomeSelect(sel, side) {
   sel.innerHTML = "";
   for (const o of SK_OUTCOMES) {
@@ -794,8 +811,9 @@ $("resetBtn").addEventListener("click", () => {
   // First turn on field -> back to its default TRUE (a reset board is a fresh
   // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.
   $("oppFirstTurn").checked = true;
-  // Volatiles (You side only; the Opp toggles are disabled/inert) -> off.
-  $("youConfused").checked = false; $("youAttracted").checked = false;
+  // Volatiles, both sides -> off.
+  $("youConfusion").value = ""; $("oppConfusion").value = "";
+  $("youAttracted").checked = false; $("oppAttracted").checked = false;
   // Field: Weather None, all screens off both sides (Spikes stay inert).
   $("weatherNone").checked = true;
   $("youReflect").checked = false; $("oppReflect").checked = false;

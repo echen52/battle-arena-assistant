@@ -86,6 +86,9 @@ const cases = [
   { why: "the default tier of a multi-tier set (highest)", you: PANEL_SNORLAX, set: "Parasect 2" },
   { why: "a Frontier Brain set", you: METAGROSS, set: "Anabel Gold Raikou" },
   { why: "a player Sand Stream at match start", you: TYRANITAR, set: "Umbreon 4" },
+  // Tauros 1 has Intimidate: Body Slam 0.683 with the switch-in -1 Atk; the
+  // page's turn-1 zero stages used to overwrite it and printed 0.839.
+  { why: "an Intimidate opponent at match start", you: PANEL_SNORLAX, set: "Tauros 1" },
 ];
 
 const browser = await chromium.launch();
@@ -130,6 +133,95 @@ for (const c of cases) {
   const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
   ok(!err && pageErrors.length === 0, `no error on the page (${err || pageErrors.join(" | ") || "none"})`);
   ok(shown === want, `page "${shown}" == engine "${want}"`);
+}
+
+// ── Volatile statuses: both sides, and confusion's duration ─────────────────
+// Each case changes the printed result (measured when picked, Snorlax panel
+// lead at the set's highest tier): vs Kangaskhan 1 the base is Body Slam 0.671,
+// the opponent confused gives Earthquake 0.913; your confusion fresh gives
+// Body Slam 0.268 and at "4 turns" 0.892; vs Tauros 1 the base is 0.683 and the
+// opponent attracted gives 0.926. Expected values: the engine with the same
+// state overrides, searched directly (not the site's solve()).
+const { buildMon, buildFrontierOpponent, buildStartState, search } = await import("./logic.js");
+const engineWith = (youText, set, overrides) => {
+  const e = FRONTIER_POOL[set];
+  const you = buildMon(parseShowdownText(youText));
+  const opp = buildFrontierOpponent(getOpponentConfig(set, {
+    ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers),
+  }));
+  const r = search({ you, opp }, buildStartState({ you, opp, overrides }), 3, false, new Map());
+  return `${r.move}  —  P(win) = ${r.winProb.toFixed(3)}`;
+};
+const setControls = (v) => page.evaluate((v) => {
+  for (const [id, val] of Object.entries(v)) {
+    const el = document.getElementById(id);
+    if (el.type === "checkbox") el.checked = val; else el.value = val;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}, v);
+const pick = async (youText, set) => {
+  await page.fill("#youImportExportText", youText);
+  await page.click("#youImport");
+  await setControls({ oppSetName: set });
+};
+const volatileCases = [
+  { why: "the opponent confused (no turns yet)", set: "Kangaskhan 1", controls: { oppConfusion: "1" }, overrides: { oppConfused: true } },
+  { why: "you confused, no turns yet", set: "Kangaskhan 1", controls: { youConfusion: "1" }, overrides: { youConfused: true } },
+  { why: "you confused 4 turns (ends next check)", set: "Kangaskhan 1", controls: { youConfusion: "5" }, overrides: { youConfused: 5 } },
+  { why: "the opponent attracted", set: "Tauros 1", controls: { oppAttracted: true }, overrides: { oppAttracted: true } },
+];
+const OFF = { youConfusion: "", oppConfusion: "", youAttracted: false, oppAttracted: false };
+for (const c of volatileCases) {
+  console.log(`-- ${c.set} vs your Snorlax: ${c.why} --`);
+  pageErrors.length = 0;
+  await pick(PANEL_SNORLAX, c.set);
+  await setControls({ ...OFF, ...c.controls });
+  const shown = (await page.textContent("#bestMoveDisplay")).trim();
+  const err = (await page.textContent("#errorDisplay")).trim();
+  const want = engineWith(PANEL_SNORLAX, c.set, c.overrides);
+  const base = engineWith(PANEL_SNORLAX, c.set, {});
+  ok(!err && pageErrors.length === 0, `no error on the page (${err || pageErrors.join(" | ") || "none"})`);
+  ok(shown === want && want !== base, `page "${shown}" == engine "${want}" (without it: "${base}")`);
+  await setControls(OFF);
+}
+
+console.log("-- the Attract gate covers both sides --");
+{
+  const STARMIE = "Starmie @ Leftovers\nAbility: Natural Cure\nEVs: 252 SpA / 252 Spe\nTimid Nature\n- Surf\n- Ice Beam\n- Thunderbolt\n- Recover";
+  await pick(STARMIE, "Tauros 1");
+  const gate = await page.evaluate(() => [document.getElementById("youAttracted").disabled, document.getElementById("oppAttracted").disabled]);
+  ok(gate[0] && gate[1], `genderless Starmie: both Attracted toggles disabled (${gate})`);
+  await pick(PANEL_SNORLAX, "Tauros 1");
+  const open = await page.evaluate(() => [document.getElementById("youAttracted").disabled, document.getElementById("oppAttracted").disabled]);
+  ok(!open[0] && !open[1], `Snorlax vs Tauros: both enabled (${open.map((d) => !d)})`);
+}
+
+console.log("-- Record a turn: your flinch and the opponent's confusion self-hit --");
+{
+  const { scoreReportedTurn, OUTCOME } = await import("./scorekeeper.js");
+  await pick(PANEL_SNORLAX, "Kangaskhan 1");
+  await setControls({ mindYou: "0", skillYou: "0", mindOpp: "0", skillOpp: "0" });
+  const oppMove = FRONTIER_POOL["Kangaskhan 1"].moves[0];
+  await setControls({ skYouMove: "Body Slam", skYouOutcome: OUTCOME.FLINCH, skOppMove: oppMove, skOppOutcome: OUTCOME.CONFUSION_SELF });
+  const enabled = await page.evaluate(() => ["skYouOutcome", "skOppOutcome"].map((id) =>
+    [...document.getElementById(id).options].filter((o) => !o.disabled).map((o) => o.value)));
+  ok(enabled[0].includes("FLINCH") && enabled[1].includes("CONFUSION_SELF") && enabled[1].includes("ATTRACT") && enabled[1].includes("FLINCH"),
+    `the outcomes are selectable (you: ${enabled[0]}; opp: ${enabled[1]})`);
+  await page.click("#skRecord");
+  const boxes = await page.evaluate(() => ["mindYou", "skillYou", "mindOpp", "skillOpp"].map((id) => Number(document.getElementById(id).value)));
+  const skErr = (await page.textContent("#skError")).trim();
+  const e = FRONTIER_POOL["Kangaskhan 1"];
+  const r = scoreReportedTurn(buildMon(parseShowdownText(PANEL_SNORLAX)),
+    buildFrontierOpponent(getOpponentConfig("Kangaskhan 1", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) })),
+    { you: { move: "Body Slam", outcome: OUTCOME.FLINCH }, opp: { move: oppMove, outcome: OUTCOME.CONFUSION_SELF } });
+  const want = [r.dMindYou, r.dSkillYou, r.dMindOpp, r.dSkillOpp];
+  ok(!skErr && JSON.stringify(boxes) === JSON.stringify(want), `boxes ${JSON.stringify(boxes)} == scorer ${JSON.stringify(want)} (${skErr || "no error"})`);
+}
+
+console.log("-- Spikes says why it is inert --");
+{
+  const label = (await page.textContent('label[for="youSpikes"]')).trim();
+  ok(label === "Spikes (no effect here)", `label "${label}"`);
 }
 
 await browser.close();
