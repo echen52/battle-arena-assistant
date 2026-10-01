@@ -24,6 +24,18 @@
   </div>
 </header>
 
+<!-- Moves so far (turns 2 and 3): what each side used on the earlier turns.
+     The engine needs them: the opponent's AI only knows the moves it has seen
+     you use (Phase D F2c), and Disable / Encore / Mimic and several AI checks
+     read each side's LAST move. "(none / couldn't move)" is what the game
+     records for a turn the mon was prevented from acting. -->
+<div class="moves-so-far" id="movesSoFar" hidden>
+  <span class="field-group-label" title="What each side used on the earlier turns of this matchup. The opponent's AI only knows the moves it has seen you use. (Mirror Move's 'last move that hit you' is not entered here and is taken as none.)">Moves so far</span>
+  <label>Your turn 1 <select id="youMoveT1" class="calc-trigger"></select></label>
+  <label id="youMoveT2Wrap">Your turn 2 <select id="youMoveT2" class="calc-trigger"></select></label>
+  <label>Opponent's last turn <select id="oppMoveLast" class="calc-trigger"></select></label>
+</div>
+
 <main class="layout">
 
   <!-- ───────────────────────── YOUR MON PANEL ───────────────────────── -->
@@ -245,6 +257,12 @@
         <thead><tr><th>Move</th><th>P(win)</th></tr></thead>
         <tbody></tbody>
       </table>
+
+      <!-- The plan: the recommended line for the rest of the matchup, read
+           from the same solve (ui-logic.js buildPlan). Each outcome of this
+           turn, with the best next move -- by HP range when it depends on it. -->
+      <h3 title="What can happen after the recommended move, and the best move next in each case (from the same solve). Percentages are the chance of that outcome; P is the chance of winning from there.">Plan</h3>
+      <div id="planDisplay" class="plan"></div>
 
       <h3>Mind / Skill / Body</h3>
       <table class="msb-table">

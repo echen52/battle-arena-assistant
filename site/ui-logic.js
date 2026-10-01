@@ -105,6 +105,57 @@ export function solve(youConfig, oppConfig, matchState) {
   return { you, opp, state, result, turnsRemaining, oppMoveDist };
 }
 
+// ── The plan: the whole recommended line, from the search tree solve() returns.
+// At each level: the recommended move's branches, grouped by what the game
+// shows (the engine's own branch label), and in each group the best NEXT move
+// -- per branch, from that branch's subtree, so when it depends on HP each
+// next move is listed with the HP ranges (percent) it covers. Probabilities
+// are conditional on the parent group; `winProb` is the mean P(win) from that
+// point. Pure: it reads the retained tree and computes nothing new.
+// `nodes` is [{ node, w }]: one node at the root, several (same move) below.
+function planOf(nodes, depth) {
+  const live = nodes.filter(({ node }) => node && !node.isTerminal && node.allOptions);
+  if (live.length === 0) return null;
+  const move = live[0].node.move;
+  const wTotal = live.reduce((a, x) => a + x.w, 0);
+  const groups = new Map();
+  for (const { node, w } of live) {
+    const opt = node.allOptions.find((o) => o.move === node.move);
+    const branchTotal = opt.branches.reduce((a, b) => a + b.prob, 0);
+    for (const b of opt.branches) {
+      const p = (w / wTotal) * (b.prob / branchTotal);
+      const g = groups.get(b.label) ?? { label: b.label, p: 0, branches: [] };
+      g.p += p;
+      g.branches.push({ b, p });
+      groups.set(b.label, g);
+    }
+  }
+  const outcomes = [...groups.values()].sort((x, y) => y.p - x.p).map((g) => {
+    const byMove = new Map();
+    for (const { b, p } of g.branches) {
+      const sub = b.subtree;
+      const key = !sub || sub.isTerminal ? "" : sub.move;
+      const e = byMove.get(key) ?? { move: key || null, p: 0, winSum: 0, youHp: [Infinity, -Infinity], oppHp: [Infinity, -Infinity], nodes: [] };
+      e.p += p;
+      e.winSum += p * (sub ? sub.winProb : 0);
+      e.youHp = [Math.min(e.youHp[0], b.state.yourHpPct), Math.max(e.youHp[1], b.state.yourHpPct)];
+      e.oppHp = [Math.min(e.oppHp[0], b.state.oppHpPct), Math.max(e.oppHp[1], b.state.oppHpPct)];
+      e.nodes.push({ node: sub, w: p });
+      byMove.set(key, e);
+    }
+    const next = [...byMove.values()].sort((x, y) => y.p - x.p).map((e) => ({
+      move: e.move, p: e.p / g.p, winProb: e.winSum / e.p, youHp: e.youHp, oppHp: e.oppHp,
+      plan: depth > 1 && e.move ? planOf(e.nodes, depth - 1) : null,
+    }));
+    return { label: g.label, p: g.p, next };
+  });
+  return { move, winProb: live.reduce((a, x) => a + x.w * x.node.winProb, 0) / wTotal, outcomes };
+}
+// The plan from the current turn: one level per remaining turn after this one.
+export function buildPlan(result, turnsRemaining) {
+  return planOf([{ node: result, w: 1 }], Math.max(1, turnsRemaining - 1));
+}
+
 // Scorekeeper wrapper — the thin config->mon adapter over the shared drive-and-
 // read scorer (scorekeeper.js). Builds the two mons EXACTLY as solve() does
 // (the opponent by buildFrontierOpponent, F11) so the scored turn uses

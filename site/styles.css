@@ -207,6 +207,11 @@ input[type="checkbox"]:checked + label.btn {
 .btn-toggle-field { background: var(--surface-2); border: 1px solid var(--accent); color: var(--accent); }
 
 .turn-indicator { display: flex; align-items: center; gap: 4px; }
+/* Moves so far (turns 2-3): one compact row under the header. */
+.moves-so-far { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 16px; }
+.moves-so-far[hidden] { display: none; }
+.moves-so-far label { display: inline-flex; align-items: center; gap: 6px; }
+.moves-so-far label[hidden] { display: none; }
 /* Keep the top-bar action buttons (Toggle Field + Reset) adjacent at the right,
    instead of space-between spreading them apart across the header. */
 .header-actions { display: flex; align-items: center; gap: 8px; }
@@ -518,3 +523,15 @@ input[type="checkbox"]:checked + label.btn {
 .sk-outcome option:disabled { color: var(--text-muted); font-style: italic; }
 .sk-actions { display: flex; align-items: center; gap: 10px; }
 .sk-log { font-size: 11px; color: var(--text-muted); }
+
+/* The plan: nested outcome -> next-move lists. */
+.plan { font-size: 0.92em; }
+.plan-head { margin: 4px 0; }
+.plan-outcomes { list-style: none; padding-left: 0; margin: 4px 0; }
+.plan-outcomes .plan-outcomes { padding-left: 14px; }
+.plan-outcomes > li { margin: 4px 0; }
+.plan-p { display: inline-block; min-width: 3.2em; font-variant-numeric: tabular-nums; opacity: 0.85; }
+.plan-next { list-style: none; padding-left: 3.4em; margin: 2px 0; }
+.plan-when { opacity: 0.75; }
+.plan details > summary { cursor: pointer; opacity: 0.8; }
+.plan-none { opacity: 0.8; }

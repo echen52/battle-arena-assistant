@@ -155,7 +155,7 @@ const engineWith = (youText, set, overrides) => {
 const setControls = (v) => page.evaluate((v) => {
   for (const [id, val] of Object.entries(v)) {
     const el = document.getElementById(id);
-    if (el.type === "checkbox") el.checked = val; else el.value = val;
+    if (el.type === "checkbox" || el.type === "radio") el.checked = val; else el.value = val;
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 }, v);
@@ -216,6 +216,107 @@ console.log("-- Record a turn: your flinch and the opponent's confusion self-hit
     { you: { move: "Body Slam", outcome: OUTCOME.FLINCH }, opp: { move: oppMove, outcome: OUTCOME.CONFUSION_SELF } });
   const want = [r.dMindYou, r.dSkillYou, r.dMindOpp, r.dSkillOpp];
   ok(!skErr && JSON.stringify(boxes) === JSON.stringify(want), `boxes ${JSON.stringify(boxes)} == scorer ${JSON.stringify(want)} (${skErr || "no error"})`);
+}
+
+// ── Moves so far: a turn-2 / turn-3 re-solve equals the engine's own subtree ──
+// The turn-1 search already holds every later situation as a subtree, with
+// the AI's move history (F2c) recorded by the search itself. Entering that
+// situation into the page -- HP, stages, Mind/Skill, "first turn" off, and the
+// moves so far -- must give exactly the subtree. Starmie (Recover) vs Tyrogue 1
+// (AI_CV_Protect reads the target's RESTORE_HP): after turn 1 "You Recover; Opp
+// Double Team" the subtree is Ice Beam 0.930 (the page without the moves so far
+// said Surf 0.929); after turn 2 "You Ice Beam (MISSES); Opp Double Team" it is
+// Surf 0.735 (0.683 without the AI's history of the turn-1 Recover).
+console.log("-- Moves so far: turn-2 and turn-3 re-solves match the engine's subtree --");
+{
+  const STARMIE = `Starmie @ Leftovers
+Ability: Natural Cure
+EVs: 252 SpA / 252 Spe
+Timid Nature
+- Surf
+- Ice Beam
+- Thunderbolt
+- Recover`;
+  const e = FRONTIER_POOL["Tyrogue 1"];
+  const cfg = getOpponentConfig("Tyrogue 1", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
+  const { result } = analyzeMatchup(parseShowdownText(STARMIE), cfg, { tree: true });
+  const b1 = result.allOptions.find((o) => o.move === "Recover").branches.find((b) => b.label === "You uses Recover; Opp uses Double Team");
+  const b2 = b1.subtree.allOptions.find((o) => o.move === "Ice Beam").branches.find((b) => b.label === "You uses Ice Beam (MISSES); Opp uses Double Team");
+  const fmt = (n) => `${n.move}  —  P(win) = ${n.winProb.toFixed(3)}`;
+  const stageControls = (prefix, st) => page.evaluate(({ prefix, st }) => {
+    document.querySelectorAll(prefix).forEach((el) => { el.value = String(st[el.dataset.stat] ?? 0); });
+  }, { prefix, st });
+  const enter = async (b, turn, moves) => {
+    await pick(STARMIE, "Tyrogue 1");
+    await stageControls(".stage-select", b.state.youStages);
+    await stageControls(".opp-stage-select", b.state.oppStages);
+    await setControls({
+      [`turn${turn}`]: true, oppFirstTurn: false,
+      youCurrentHp: String(b.state.yourHpPct), oppCurrentHp: String(b.state.oppHpPct),
+      mindYou: String(b.state.mindYou), mindOpp: String(b.state.mindOpp), skillYou: String(b.state.skillYou), skillOpp: String(b.state.skillOpp),
+      ...moves,
+    });
+    return (await page.textContent("#bestMoveDisplay")).trim();
+  };
+  pageErrors.length = 0;
+  const shown2 = await enter(b1, 2, { youMoveT1: "Recover", oppMoveLast: "Double Team" });
+  ok(shown2 === fmt(b1.subtree), `turn 2: page "${shown2}" == subtree "${fmt(b1.subtree)}"`);
+  const old2 = await enter(b1, 2, { youMoveT1: "", oppMoveLast: "" });
+  ok(old2 !== fmt(b1.subtree), `...and without the moves so far it would differ ("${old2}")`);
+  const shown3 = await enter(b2, 3, { youMoveT1: "Recover", youMoveT2: "Ice Beam", oppMoveLast: "Double Team" });
+  ok(shown3 === fmt(b2.subtree), `turn 3: page "${shown3}" == subtree "${fmt(b2.subtree)}"`);
+  const vis = await page.evaluate(() => [document.getElementById("movesSoFar").hidden, document.getElementById("youMoveT2Wrap").hidden]);
+  ok(!vis[0] && !vis[1], `on turn 3 both your earlier moves are asked for (hidden: ${vis})`);
+  ok(pageErrors.length === 0, `no error on the page (${pageErrors.join(" | ") || "none"})`);
+  // back to a fresh turn 1 for anything after this
+  await setControls({ turn1: true, oppFirstTurn: true, youCurrentHp: "100", oppCurrentHp: "100", mindYou: "0", mindOpp: "0", skillYou: "0", skillOpp: "0", youMoveT1: "", youMoveT2: "", oppMoveLast: "" });
+  await stageControls(".stage-select", {}); await stageControls(".opp-stage-select", {});
+}
+
+// ── The plan (ui-logic.js buildPlan) against the search tree it reads ──────
+// Hoothoot 1: seven turn-1 outcomes, one splitting on HP into two next moves.
+// Invariants, on the engine's own tree (analyzeMatchup, tree retained):
+// probabilities sum to 1 at every level; the P(win)-weighted mean over a
+// level's outcomes equals the node's P(win); every branch's own best next move
+// appears in its outcome group with an HP range covering that branch. Then the
+// page's rendered plan must list the same outcomes and next moves.
+console.log("-- The plan: invariants on the tree, and the page renders it --");
+{
+  const { buildPlan } = await import("../site/ui-logic.js");
+  const e = FRONTIER_POOL["Hoothoot 1"];
+  const cfg = getOpponentConfig("Hoothoot 1", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
+  const { result } = analyzeMatchup(parseShowdownText(PANEL_SNORLAX), cfg, { tree: true });
+  const plan = buildPlan(result, 3);
+  const bad = [];
+  const check = (pl, node, where) => {
+    const sum = pl.outcomes.reduce((a, o) => a + o.p, 0);
+    if (Math.abs(sum - 1) > 1e-9) bad.push(`${where}: outcome p sums to ${sum}`);
+    const ev = pl.outcomes.reduce((a, o) => a + o.p * o.next.reduce((b, n) => b + n.p * n.winProb, 0), 0);
+    if (node && Math.abs(ev - node.winProb) > 1e-9) bad.push(`${where}: E[P(win)] ${ev} != node ${node.winProb}`);
+    for (const o of pl.outcomes) {
+      const ns = o.next.reduce((a, n) => a + n.p, 0);
+      if (Math.abs(ns - 1) > 1e-9) bad.push(`${where} / ${o.label}: next p sums to ${ns}`);
+      for (const n of o.next) if (n.plan) check(n.plan, null, `${where} / ${o.label} / ${n.move}`);
+    }
+  };
+  check(plan, result, "turn 1");
+  const opt = result.allOptions.find((o) => o.move === result.move);
+  for (const b of opt.branches) {
+    const g = plan.outcomes.find((o) => o.label === b.label);
+    const want = b.subtree.isTerminal ? null : b.subtree.move;
+    const n = g?.next.find((x) => x.move === want);
+    const inside = (v, [lo, hi]) => v >= lo - 1e-9 && v <= hi + 1e-9;
+    if (!n || !inside(b.state.oppHpPct, n.oppHp) || !inside(b.state.yourHpPct, n.youHp)) bad.push(`branch "${b.label}" -> ${want} not covered`);
+  }
+  ok(bad.length === 0, `plan invariants hold on ${opt.branches.length} turn-1 branches (${bad.slice(0, 3).join("; ") || "none broken"})`);
+
+  await pick(PANEL_SNORLAX, "Hoothoot 1");
+  const rendered = await page.evaluate(() => [...document.querySelectorAll("#planDisplay > ul.plan-outcomes > li")].map((li) => ({
+    label: li.querySelector(":scope > .plan-label").textContent,
+    next: [...li.querySelectorAll(":scope > ul.plan-next > li > b")].map((x) => x.textContent),
+  })));
+  const want = plan.outcomes.map((o) => ({ label: o.label, next: o.next.filter((n) => n.move).map((n) => n.move) }));
+  ok(JSON.stringify(rendered) === JSON.stringify(want), `the page renders the plan: ${rendered.length} outcomes, first "${rendered[0]?.label}" -> ${rendered[0]?.next}`);
 }
 
 console.log("-- Spikes says why it is inert --");

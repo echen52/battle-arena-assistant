@@ -3,7 +3,7 @@ import {
   getSpeciesAbilities, OPPONENT_SETS, canAttractPair,
 } from "./pokemon-data.js";
 import {
-  freshMatchState, solve, resolveOpponentBySetName,
+  freshMatchState, solve, resolveOpponentBySetName, buildPlan,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
   scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove, isDrivableHealMove,
@@ -331,6 +331,19 @@ function buildMatchState() {
   // an arbitrary default — see HANDOFF.md §14.
   const s = freshMatchState();
   s.turn = Number(document.querySelector("input[name='turn']:checked").value);
+  // Moves so far (turns 2-3). gLastMoves: each side's move on the previous
+  // turn (null if it could not move). The AI's history (F2c,
+  // RecordLastUsedMoveByTarget) is recorded at each of ITS decisions from the
+  // player's last move: by turn 3 it holds the turn-1 move, and the search
+  // records the turn-2 move itself at this decision (aiDecisionState), so it is
+  // not passed twice. Assumes the opponent chose its move on turn 2; a charging
+  // or Encored opponent runs no AI and records nothing.
+  if (s.turn >= 2) {
+    const t1 = $("youMoveT1").value || null, t2 = $("youMoveT2").value || null;
+    s.youLastMove = s.turn === 2 ? t1 : t2;
+    s.youMoveHistory = s.turn === 3 && t1 ? [t1] : [];
+    s.oppLastMove = $("oppMoveLast").value || null;
+  }
   s.yourHpPct = Number($("youCurrentHp").value) || 0;
   s.oppHpPct = Number($("oppCurrentHp").value) || 0;
   s.youStages = readStages(".stage-select");
@@ -430,6 +443,7 @@ function recalculate() {
     oppConfig = buildOppConfig();
     updateAttractedGate(youConfig.species, oppConfig.species);
     updateScorekeeperMoves(youConfig, oppConfig);
+    updateMovesSoFar(youConfig, oppConfig, Number(document.querySelector("input[name='turn']:checked").value));
     matchState = buildMatchState();
     if (!youConfig.species || !oppConfig.species) return;
     if (youConfig.moves.length === 0) { errorEl.textContent = "Pick at least one move for your Pokemon."; return; }
@@ -445,6 +459,7 @@ function recalculate() {
 
     const { result, oppMoveDist, turnsRemaining } = solve(youConfig, oppConfig, matchState);
     renderResult(result, matchState);
+    renderPlan(result, turnsRemaining, matchState.turn);
     renderOppMoveDist(oppMoveDist, oppConfig.moves, turnsRemaining);
   } catch (err) {
     errorEl.textContent = "Error: " + err.message;
@@ -482,6 +497,40 @@ function renderOppMoveDist(oppMoveDist, moveList, turnsRemaining) {
       <span class="opp-move-dist-pct">${pct}%</span>
     </div>`;
   }).join("");
+}
+
+// ── The plan (ui-logic.js buildPlan), as nested lists: each outcome of a turn
+// and the best next move in it. A next move that depends on HP shows the
+// range it covers; a later turn's detail is collapsible.
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const pct = (p) => (p * 100 >= 99.95 ? "100" : p * 100 < 0.05 ? "<0.1" : (p * 100).toFixed(p * 100 < 1 ? 1 : 0)) + "%";
+const hpRange = ([a, b]) => (Math.round(a) === Math.round(b) ? `${Math.round(a)}%` : `${Math.round(a)}–${Math.round(b)}%`);
+function planHtml(plan, turn) {
+  if (!plan) return "";
+  let h = `<ul class="plan-outcomes">`;
+  for (const o of plan.outcomes) {
+    h += `<li><span class="plan-p">${pct(o.p)}</span> <span class="plan-label">${esc(o.label)}</span>`;
+    const nexts = o.next.filter((n) => n.p > 0);
+    h += `<ul class="plan-next">`;
+    for (const n of nexts) {
+      const when = nexts.length > 1 ? ` <span class="plan-when">(${pct(n.p)}: your HP ${hpRange(n.youHp)}, opp HP ${hpRange(n.oppHp)})</span>` : "";
+      if (!n.move) { h += `<li>matchup over — P(win) ${n.winProb.toFixed(3)}${when}</li>`; continue; }
+      h += `<li>turn ${turn + 1}: <b>${esc(n.move)}</b> — P(win) ${n.winProb.toFixed(3)}${when}`;
+      if (n.plan) h += `<details><summary>after it</summary>${planHtml(n.plan, turn + 1)}</details>`;
+      h += `</li>`;
+    }
+    h += `</ul></li>`;
+  }
+  return h + `</ul>`;
+}
+function renderPlan(result, turnsRemaining, turn) {
+  const el = $("planDisplay");
+  if (result.isTerminal || turnsRemaining <= 1) {
+    el.innerHTML = `<p class="plan-none">${result.isTerminal ? "Matchup over." : "Last turn — nothing after it."}</p>`;
+    return;
+  }
+  const plan = buildPlan(result, turnsRemaining);
+  el.innerHTML = `<p class="plan-head">Turn ${turn}: <b>${esc(plan.move)}</b>, then:</p>` + planHtml(plan, turn);
 }
 
 function renderResult(result, matchState) {
@@ -713,6 +762,25 @@ function updateHealVisibility(prefix) {
   if (head) head.hidden = sel.hidden;
 }
 
+// Moves so far (turns 2-3). Rebuilt with every recalculation, so the chosen
+// value is KEPT when it is still one of the side's moves. "" is
+// "(none / couldn't move)": no last move, as the game records a prevented turn.
+function fillMoveSoFar(select, moves) {
+  const keep = select.value;
+  select.innerHTML = "";
+  select.appendChild(new Option("(none / couldn't move)", ""));
+  for (const m of moves) select.appendChild(new Option(m, m));
+  select.value = moves.includes(keep) ? keep : "";
+}
+function updateMovesSoFar(youConfig, oppConfig, turn) {
+  const youMoves = (youConfig.moves || []).filter(Boolean), oppMoves = (oppConfig.moves || []).filter(Boolean);
+  fillMoveSoFar($("youMoveT1"), youMoves);
+  fillMoveSoFar($("youMoveT2"), youMoves);
+  fillMoveSoFar($("oppMoveLast"), oppMoves);
+  $("movesSoFar").hidden = turn < 2;
+  $("youMoveT2Wrap").hidden = turn < 3;
+}
+
 function updateScorekeeperMoves(youConfig, oppConfig) {
   fillSelect($("skYouMove"), (youConfig.moves || []).filter(Boolean));
   fillSelect($("skOppMove"), (oppConfig.moves || []).filter(Boolean));
@@ -811,6 +879,8 @@ $("resetBtn").addEventListener("click", () => {
   // First turn on field -> back to its default TRUE (a reset board is a fresh
   // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.
   $("oppFirstTurn").checked = true;
+  // Moves so far -> none.
+  $("youMoveT1").value = ""; $("youMoveT2").value = ""; $("oppMoveLast").value = "";
   // Volatiles, both sides -> off.
   $("youConfusion").value = ""; $("oppConfusion").value = "";
   $("youAttracted").checked = false; $("oppAttracted").checked = false;
