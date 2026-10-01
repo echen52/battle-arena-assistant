@@ -203,7 +203,7 @@
 
     <div class="field-group">
       <span class="field-group-label">Weather</span>
-      <input type="radio" name="weather" value="" id="weatherNone" class="calc-trigger" checked /><label for="weatherNone" class="btn btn-field">None</label>
+      <input type="radio" name="weather" value="" id="weatherNone" class="calc-trigger" checked /><label for="weatherNone" class="btn btn-field" title="No weather move in play. A Sand Stream, Drought or Drizzle lead still sets its weather at switch-in.">None</label>
       <input type="radio" name="weather" value="sun" id="weatherSun" class="calc-trigger" /><label for="weatherSun" class="btn btn-field">Sun</label>
       <input type="radio" name="weather" value="rain" id="weatherRain" class="calc-trigger" /><label for="weatherRain" class="btn btn-field">Rain</label>
       <input type="radio" name="weather" value="sandstorm" id="weatherSand" class="calc-trigger" /><label for="weatherSand" class="btn btn-field">Sand</label>
@@ -322,6 +322,7 @@
         <select id="oppSetName" class="calc-trigger hidden-select"></select>
       </div>
       <select id="oppAbilityChoice" class="calc-trigger" style="display:none"></select>
+      <select id="oppIvTier" class="calc-trigger" style="display:none" title="The trainer's IV band: each Frontier trainer gives all its Pokémon one fixed IV value"></select>
     </div>
     <div id="oppSetMoves" class="opp-set-moves"></div>
 

@@ -4,7 +4,7 @@
 // engine calls and engine RESULTS into render-friendly objects. No damage,
 // stat, or type math is duplicated here.
 
-import { buildMon, buildStartState, search, chooseOpponentMoves } from "../battle_arena_sim/logic.js";
+import { buildMon, buildStartState, search, chooseOpponentMoves, buildFrontierOpponent } from "../battle_arena_sim/logic.js";
 import { getOpponentConfig } from "../battle_arena_sim/opponent-adapter.js";
 import { MOVES } from "../battle_arena_sim/move-data.js";
 import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
@@ -16,7 +16,8 @@ import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
 //   youStages, oppStages (7-key each), youStatus, oppStatus,
 //   youConfused, youAttracted (volatile STATUS2 conditions — You side
 //   only, the engine has no opponent-side branch for either, see HANDOFF.md),
-//   weatherType, weatherTurns,
+//   weatherType, weatherTurns (only when a weather is chosen -- absent means
+//     "as the leads' abilities set it at switch-in"),
 //   youReflectTurns, oppReflectTurns, youLightScreenTurns, oppLightScreenTurns
 
 export function freshMatchState() {
@@ -28,7 +29,8 @@ export function freshMatchState() {
     oppStages: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, evasion: 0, accuracy: 0 },
     youStatus: null, oppStatus: null,
     youConfused: false, youAttracted: false,
-    weatherType: null, weatherTurns: null,
+    // No weatherType / weatherTurns: absent keys leave the switch-in weather
+    // buildStartState derives from the leads' abilities; a null here overrode it.
     youReflectTurns: null, oppReflectTurns: null,
     youLightScreenTurns: null, oppLightScreenTurns: null,
   };
@@ -72,12 +74,13 @@ export function buildOverrides(matchState) {
 // turn 2 -> 2, turn 3 -> 1), matching the engine's fixed 3-turn match.
 export function solve(youConfig, oppConfig, matchState) {
   const you = buildMon(youConfig);
-  // Frontier trainer mons are always max friendship (see Session 3's
-  // Return/Frustration fix) — mirrored here exactly as analyzeMatchup does it,
-  // since this UI calls buildMon/buildStartState/search directly rather than
-  // going through analyzeMatchup's convenience wrapper (needed for the
-  // turnsRemaining flexibility analyzeMatchup doesn't expose).
-  const opp = buildMon({ ...oppConfig, friendship: 255 });
+  // The opponent is built exactly as analyzeMatchup builds it, by the engine's
+  // own buildFrontierOpponent: a Frontier mon carrying Frustration has
+  // friendship 0, every other one 255 (Phase D F11). This UI calls
+  // buildMon/buildStartState/search directly rather than analyzeMatchup for
+  // the turnsRemaining flexibility analyzeMatchup doesn't expose, so the
+  // builder is shared rather than restated. (It used to hardcode 255.)
+  const opp = buildFrontierOpponent(oppConfig);
   const ctx = { you, opp };
   const overrides = buildOverrides(matchState);
   const state = buildStartState({
@@ -103,13 +106,13 @@ export function solve(youConfig, oppConfig, matchState) {
 
 // Scorekeeper wrapper — the thin config->mon adapter over the shared drive-and-
 // read scorer (scorekeeper.js). Builds the two mons EXACTLY as solve() does
-// (opp at max friendship, per the Frontier convention) so the scored turn uses
+// (the opponent by buildFrontierOpponent, F11) so the scored turn uses
 // the same combatants the solver would, then delegates to the one shared
 // scoring path. Returns the four signed deltas (+ diagnostic matched counts) to
 // ADD to the running "so far" boxes.
 export function scoreTurn(youConfig, oppConfig, report) {
   const you = buildMon(youConfig);
-  const opp = buildMon({ ...oppConfig, friendship: 255 });
+  const opp = buildFrontierOpponent(oppConfig);
   return scoreReportedTurn(you, opp, report);
 }
 
@@ -122,8 +125,13 @@ export function isTwoTurnMove(move) {
   return MOVES[move]?.effect === "EFFECT_SEMI_INVULNERABLE";
 }
 
-export function resolveOpponentBySetName(setName, abilityOverride) {
-  return getOpponentConfig(setName, abilityOverride ? { ability: abilityOverride } : {});
+// ivTier: the trainer IV band (amendment 7). A Brain set has its own fixed IVs
+// and takes none; the adapter refuses a tier the set cannot appear in.
+export function resolveOpponentBySetName(setName, abilityOverride, ivTier = null) {
+  return getOpponentConfig(setName, {
+    ...(abilityOverride ? { ability: abilityOverride } : {}),
+    ...(ivTier != null ? { ivTier } : {}),
+  });
 }
 
 // ── Showdown plain-text set format (convention adopted from turskain's

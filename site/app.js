@@ -209,12 +209,25 @@ $("oppSetName").addEventListener("change", () => {
   } else {
     abilitySelect.style.display = "none";
   }
+  // The trainer IV band (amendment 7): only the bands this set can actually
+  // appear in, highest first. A Brain set, or a set seen in one band only, has
+  // nothing to choose.
+  const tierSelect = $("oppIvTier");
+  const tiers = entry && !entry.brain ? [...entry.ivTiers].sort((a, b) => b - a) : [];
+  tierSelect.innerHTML = "";
+  for (const t of tiers) {
+    const o = document.createElement("option");
+    o.value = String(t);
+    o.textContent = `IVs ${t}`;
+    tierSelect.appendChild(o);
+  }
+  tierSelect.style.display = tiers.length > 1 ? "" : "none";
   renderOppSetMoves(entry);
 });
 $("oppSetName").dispatchEvent(new Event("change"));
 
-// Read-only display of the selected set's real 4 moves (pure surfacing of
-// opponent-full-data.js — no engine work, just showing data that already
+// Read-only display of the selected set's real 4 moves (pure surfacing of the
+// engine's frontier-pool.js — no engine work, just showing data that already
 // exists) — right under the set picker.
 function renderOppSetMoves(entry) {
   const el = $("oppSetMoves");
@@ -292,7 +305,10 @@ function buildOppConfig() {
     const name = $("oppSetName").value;
     const abilityChoice = $("oppAbilityChoice");
     const abilityOverride = abilityChoice.style.display !== "none" ? abilityChoice.value : null;
-    return resolveOpponentBySetName(name, abilityOverride);
+    const entry = OPPONENT_SETS[name];
+    // a single-band set is solved at that band; a Brain set at its own fixed IVs
+    const tier = !entry || entry.brain ? null : entry.ivTiers.length > 1 ? Number($("oppIvTier").value) : entry.ivTiers[0];
+    return resolveOpponentBySetName(name, abilityOverride, tier);
   }
   const { evs } = readEvIvBlock(".opp-ev-input");
   return {
@@ -339,8 +355,18 @@ function buildMatchState() {
   // Reflect/Light Screen have no null-permanent sentinel in the engine (they
   // always count down), so ON uses SCREEN_ACTIVE_TURNS, comfortably above
   // the fixed 3-turn match length so it never decrements to off mid-match.
-  s.weatherType = document.querySelector("input[name='weather']:checked").value || null;
-  s.weatherTurns = null;
+  // "None" leaves BOTH keys absent, so buildStartState keeps the weather the
+  // leads' abilities set at switch-in (Sand Stream / Drought / Drizzle). A null
+  // forwarded here used to override it: a pasted Sand Stream Tyranitar was
+  // solved with no sandstorm. A chosen weather still overrides, as before.
+  const weather = document.querySelector("input[name='weather']:checked").value;
+  if (weather) {
+    s.weatherType = weather;
+    s.weatherTurns = null;
+  } else {
+    delete s.weatherType;
+    delete s.weatherTurns;
+  }
   s.youReflectTurns = $("youReflect").checked ? SCREEN_ACTIVE_TURNS : null;
   s.oppReflectTurns = $("oppReflect").checked ? SCREEN_ACTIVE_TURNS : null;
   s.youLightScreenTurns = $("youLightScreen").checked ? SCREEN_ACTIVE_TURNS : null;

@@ -11445,6 +11445,8 @@ export {
   analyzeMatchup, MOVES, AI_HANDLERS, evaluateTerminal,
   // Phase D F11: the opponent as the ROM builds it (friendship by Frustration).
   buildFrontierOpponent,
+  // the site's Attract-pair gate reads the engine's own gender rule
+  resolveGenderDist,
   // Change #11 guard tables — exported so the coverage test pins them to the
   // live pool rather than duplicating them.
   HANDLED_EFFECTS, ACCEPTED_UNMODELED_EFFECTS,
