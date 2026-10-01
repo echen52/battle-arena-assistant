@@ -8,6 +8,7 @@
 // was rolled -- its comment cited a "SET_DAMAGE_ROLL_EXEMPT" that did not exist.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+const lf = (t) => t.split(String.fromCharCode(13, 10)).join(String.fromCharCode(10)); // CRLF -> LF
 import { buildMon, calcDamage } from "./logic.js";
 
 let failures = 0;
@@ -16,7 +17,7 @@ const mk = (species, moves) => buildMon({ species, level: 50, nature: "Hardy", e
 
 const before = fs.readFileSync("./damage-adjust.js", "utf8");
 execFileSync("node", ["C:/Users/azncu/Desktop/pokemon_code/arena-solver/tools/gen-damage-adjust.mjs"], { encoding: "utf8" });
-ok(fs.readFileSync("./damage-adjust.js", "utf8") === before, "damage-adjust.js regenerates byte for byte");
+ok(lf(fs.readFileSync("./damage-adjust.js", "utf8")) === lf(before), "damage-adjust.js regenerates identically (line endings aside: git autocrlf may check it out as CRLF)");
 
 const a = mk("Snorlax", ["Spit Up", "Body Slam"]), d = mk("Snorlax", ["Harden"]);
 const spit = calcDamage(a, d, "Spit Up", { baseMultiplier: 2 });

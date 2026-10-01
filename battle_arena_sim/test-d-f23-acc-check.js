@@ -9,6 +9,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { buildMon, buildStartState, resolveTurn } from "./logic.js";
+const lf = (t) => t.split(String.fromCharCode(13, 10)).join(String.fromCharCode(10)); // CRLF -> LF
 
 let failures = 0;
 const ok = (c, m) => { if (!c) { failures++; console.log("  FAIL " + m); } else console.log("  ok   " + m); };
@@ -22,7 +23,7 @@ console.log("-- F23: the table is the generator's --");
 {
   const before = fs.readFileSync("./acc-check.js", "utf8");
   execFileSync("node", ["C:/Users/azncu/Desktop/pokemon_code/arena-solver/tools/gen-acc-check.mjs"], { encoding: "utf8" });
-  ok(fs.readFileSync("./acc-check.js", "utf8") === before, "acc-check.js regenerates byte for byte");
+  ok(lf(fs.readFileSync("./acc-check.js", "utf8")) === lf(before), "acc-check.js regenerates identically (line endings aside: git autocrlf may check it out as CRLF)");
 }
 
 console.log("-- F23: status moves into Fly --");
