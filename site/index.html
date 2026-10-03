@@ -99,6 +99,19 @@
         <option value="sleep">Sleep</option>
       </select>
     </div>
+    <div class="field-row sleep-row" id="youSleepRow" hidden>
+      <label title="The game hides how long a sleep lasts. Rest always sleeps 2 turns; a sleep move rolls 1-4 turns. Turns slept = turns it could not move because of this sleep so far. The recommendation averages over the lengths still possible.">Asleep</label>
+      <select id="youSleepFrom" class="calc-trigger">
+        <option value="move">from a move</option>
+        <option value="rest">from Rest</option>
+      </select>
+      <select id="youSleptTurns" class="calc-trigger">
+        <option value="0">0 turns slept so far</option>
+        <option value="1">1 turn slept so far</option>
+        <option value="2">2 turns slept so far</option>
+        <option value="3">3 turns slept so far</option>
+      </select>
+    </div>
 
     <!-- Confusion/Attraction are volatile STATUS2 conditions, independent of
          and stackable with the primary status above (a mon can be
@@ -374,6 +387,19 @@
         <option value="burn">Burn</option>
         <option value="poison">Poison</option>
         <option value="sleep">Sleep</option>
+      </select>
+    </div>
+    <div class="field-row sleep-row" id="oppSleepRow" hidden>
+      <label title="The game hides how long a sleep lasts. Rest always sleeps 2 turns; a sleep move rolls 1-4 turns. Turns slept = turns it could not move because of this sleep so far. The recommendation averages over the lengths still possible.">Asleep</label>
+      <select id="oppSleepFrom" class="calc-trigger">
+        <option value="move">from a move</option>
+        <option value="rest">from Rest</option>
+      </select>
+      <select id="oppSleptTurns" class="calc-trigger">
+        <option value="0">0 turns slept so far</option>
+        <option value="1">1 turn slept so far</option>
+        <option value="2">2 turns slept so far</option>
+        <option value="3">3 turns slept so far</option>
       </select>
     </div>
 

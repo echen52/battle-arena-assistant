@@ -5331,7 +5331,7 @@ function cloneState(s) {
   return { ...s, youStages: { ...s.youStages }, oppStages: { ...s.oppStages } };
 }
 
-function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null, cancelReason = null) {
+function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractPrevented = false, hitCount = null, calledMove = null, cancelReason = null, status = null) {
   const who = actor === "you" ? "You" : "Opp";
   // B2b batch 3: a move-calling move shows BOTH names. Reading "Opp uses Sleep
   // Talk" when the damage came from Earthquake makes every trace ambiguous.
@@ -5348,7 +5348,11 @@ function describeAction(actor, moveName, hit, selfHit, statusPrevented, attractP
   if (cancelReason === "disabled") return `${who} can't use the disabled ${moveName}`;
   if (cancelReason === "taunted") return `${who} can't use ${moveName} after the taunt`;
   if (cancelReason === "imprisoned") return `${who} can't use the sealed ${moveName}`;
-  if (statusPrevented) return `${who} is fully paralyzed/frozen and can't move`;
+  // `status`: the actor's primary status as its action began, so a sleeping
+  // or frozen mon does not read as paralysed (all three set statusPrevented).
+  if (statusPrevented && status === "sleep") return `${who} is fast asleep`;
+  if (statusPrevented && status === "freeze") return `${who} is frozen solid`;
+  if (statusPrevented) return `${who} is fully paralyzed and can't move`;
   if (attractPrevented) return `${who} is immobilized by love and can't move`;
   if (selfHit) return `${who} hits itself in confusion`;
   const moveData = MOVES[moveName];
@@ -10830,7 +10834,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
     const bidePre1 = (s.youLock?.kind === "bide" || s.oppLock?.kind === "bide") ? bideSnapshot(s) : null; // only while someone is biding: accumulation needs the lock BEFORE the action
     applyMove(ctx, s, order[0], firstMove, fo.hit, fo.selfHit, fo.secondaryTriggered, fo.statusPrevented, fo.thawed, fo.endureTriggered, fo.sleepRemaining ?? null, fo.sleepDuration ?? null, fo.protectTriggered ?? false, fo.blockedByProtect ?? false, fo.attractPrevented ?? false, fo.attractGenderCompatible ?? null, fo.hitCount ?? null, fo.focusBanded ?? false, fo.disableTimer ?? null, fo.calledMove ?? null, fo.variablePower ?? null, fo.cancelReason ?? null, fo.lockTurns ?? null, fo.contactProc ?? null, fo.contactSleep ?? null, fo.crit ?? 0, fo.roll ?? null);
     if (bidePre1) bideAccumulate(ctx, s, bidePre1);
-    const firstLabel = ctx.noLabels ? "" : describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null);
+    const firstLabel = ctx.noLabels ? "" : describeAction(order[0], firstMove, fo.hit, fo.selfHit, fo.statusPrevented, fo.attractPrevented, fo.hitCount ?? null, fo.calledMove ?? null, fo.cancelReason ?? null, state[order[0] + "Status"]);
 
     const firstActorHp = order[0] === "you" ? s.yourHpPct : s.oppHpPct;
     const secondActorHp = order[0] === "you" ? s.oppHpPct : s.yourHpPct;
@@ -10882,7 +10886,7 @@ function resolveTurnWithOrder(ctx, state, yourMove, oppMove, order) {
         if (order[0] === "you") { s2.mindYou -= dMind; s2.skillYou -= dSkill; s2.mindOpp += dMind; s2.skillOpp += dSkill; }
         else { s2.mindOpp -= dMind; s2.skillOpp -= dSkill; s2.mindYou += dMind; s2.skillYou += dSkill; }
       }
-      const secondLabel = ctx.noLabels ? "" : (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null);
+      const secondLabel = ctx.noLabels ? "" : (bounced ? "bounced: " : "") + describeAction(order[1], secondMove, so.hit, so.selfHit, so.statusPrevented, so.attractPrevented, so.hitCount ?? null, so.calledMove ?? null, so.cancelReason ?? null, s[order[1] + "Status"]);
       // B8c: Shed Skin's 1/3 is drawn HERE, before the end-of-turn effects,
       // because it acts at their ABILITIES checkpoint -- ahead of the residuals.
       const bothUp = s2.yourHpPct > 0 && s2.oppHpPct > 0;

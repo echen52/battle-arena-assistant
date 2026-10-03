@@ -84,6 +84,8 @@ h3 { font-size: 13px; color: var(--accent); margin-top: 16px; }
   padding: 14px;
 }
 
+.sleep-row[hidden] { display: none; }
+.sleep-row select { margin-right: 6px; }
 .field-row {
   display: flex;
   align-items: center;

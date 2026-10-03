@@ -3,7 +3,7 @@ import {
   getSpeciesAbilities, OPPONENT_SETS, canAttractPair,
 } from "./pokemon-data.js";
 import {
-  freshMatchState, solve, resolveOpponentBySetName, buildPlan,
+  freshMatchState, solve, resolveOpponentBySetName, buildPlan, displayLabel,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
   scoreTurn, OUTCOME, PHASE, isTwoTurnMove, isDrivableHealMove, isHandScoredMove,
@@ -362,6 +362,13 @@ function buildMatchState() {
   }
   s.youStatus = $("youStatus").value || null;
   s.oppStatus = $("oppStatus").value || null;
+  // Sleep: what the player can see of it (the counter itself is hidden). The
+  // solve turns this into the possible counters (ui-logic sleepCounters).
+  for (const side of ["you", "opp"]) {
+    const asleep = s[side + "Status"] === "sleep";
+    $(side + "SleepRow").hidden = !asleep;
+    if (asleep) s[side + "SleepInfo"] = { rest: $(side + "SleepFrom").value === "rest", slept: Number($(side + "SleptTurns").value) };
+  }
   // Batch 4: the opponent's per-mon first-turn-out state — flows through the
   // denylist into buildStartState like every other base key; the engine's
   // search decays it for lookahead turns 2+ on its own (logic.js resolveTurn).
@@ -509,7 +516,7 @@ function planHtml(plan, turn) {
   if (!plan) return "";
   let h = `<ul class="plan-outcomes">`;
   for (const o of plan.outcomes) {
-    h += `<li><span class="plan-p">${pct(o.p)}</span> <span class="plan-label">${esc(o.label)}</span>`;
+    h += `<li><span class="plan-p">${pct(o.p)}</span> <span class="plan-label">${esc(displayLabel(o.label))}</span>`;
     const nexts = o.next.filter((n) => n.p > 0);
     h += `<ul class="plan-next">`;
     for (const n of nexts) {
@@ -800,6 +807,7 @@ $("resetBtn").addEventListener("click", () => {
   document.querySelectorAll(".stage-select, .opp-stage-select").forEach((s) => { s.value = "0"; });
   // Primary status -> Healthy, both sides.
   $("youStatus").value = ""; $("oppStatus").value = "";
+  for (const id of ["youSleepFrom", "youSleptTurns", "oppSleepFrom", "oppSleptTurns"]) $(id).selectedIndex = 0;
   // First turn on field -> back to its default TRUE (a reset board is a fresh
   // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.
   $("oppFirstTurn").checked = true;

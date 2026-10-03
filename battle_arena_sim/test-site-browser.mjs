@@ -297,7 +297,7 @@ Timid Nature
 // page's rendered plan must list the same outcomes and next moves.
 console.log("-- The plan: invariants on the tree, and the page renders it --");
 {
-  const { buildPlan } = await import("../site/ui-logic.js");
+  const { buildPlan, displayLabel } = await import("../site/ui-logic.js");
   const e = FRONTIER_POOL["Hoothoot 1"];
   const cfg = getOpponentConfig("Hoothoot 1", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
   const { result } = analyzeMatchup(parseShowdownText(PANEL_SNORLAX), cfg, { tree: true });
@@ -330,8 +330,27 @@ console.log("-- The plan: invariants on the tree, and the page renders it --");
     label: li.querySelector(":scope > .plan-label").textContent,
     next: [...li.querySelectorAll(":scope > ul.plan-next > li > b")].map((x) => x.textContent),
   })));
-  const want = plan.outcomes.map((o) => ({ label: o.label, next: o.next.filter((n) => n.move).map((n) => n.move) }));
+  const want = plan.outcomes.map((o) => ({ label: displayLabel(o.label), next: o.next.filter((n) => n.move).map((n) => n.move) }));
   ok(JSON.stringify(rendered) === JSON.stringify(want), `the page renders the plan: ${rendered.length} outcomes, first "${rendered[0]?.label}" -> ${rendered[0]?.next}`);
+}
+
+// ── Sleep: the page has no counter to give, so it asks how the sleep came
+// and how long it has lasted. Rest with no turns slept is exactly the engine's
+// counter 3 (Rest's own value); the plan must say the mon is asleep.
+console.log("-- Sleep from Rest: the engine's Rest counter, and the plan shows it asleep --");
+{
+  const e = FRONTIER_POOL["Umbreon 4"];
+  const cfg = getOpponentConfig("Umbreon 4", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
+  const you = buildMon(parseShowdownText(PANEL_SNORLAX)), opp = buildFrontierOpponent(cfg);
+  const result = search({ you, opp }, buildStartState({ you, opp, overrides: { youStatus: "sleep", youSleepTurns: 3 } }), 3);
+  const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
+  await pick(PANEL_SNORLAX, "Umbreon 4");
+  await setControls({ youStatus: "sleep", youSleepFrom: "rest", youSleptTurns: "0" });
+  const shown = (await page.textContent("#bestMoveDisplay")).trim();
+  const firstOutcome = (await page.textContent("#planDisplay .plan-label")).trim();
+  ok(shown === want, `page "${shown}" == engine at counter 3 "${want}"`);
+  ok(/You are fast asleep/.test(firstOutcome), `plan's first outcome: "${firstOutcome}"`);
+  await setControls({ youStatus: "" });
 }
 
 console.log("-- Spikes says why it is inert --");

@@ -56,6 +56,7 @@ const UI_ONLY_KEYS = new Set([
   "youEndureActive", "oppEndureActive",           // Endure "active this turn" flag — reset each turn
   "youProtected", "oppProtected",                 // Protect "active this turn" flag — reset each turn
   "youDestinyBondActive", "oppDestinyBondActive", // Destiny Bond "armed this turn" flag — reset each turn
+  "youSleepInfo", "oppSleepInfo",                 // what the player saw of a sleep -> sleepCounters, not an engine key
 ]);
 
 export function buildOverrides(matchState) {
@@ -84,25 +85,83 @@ export function solve(youConfig, oppConfig, matchState) {
   const opp = buildFrontierOpponent(oppConfig);
   const ctx = { you, opp };
   const overrides = buildOverrides(matchState);
-  const state = buildStartState({
-    yourHpPct: matchState.yourHpPct,
-    oppHpPct: matchState.oppHpPct,
-    yourUsablePartyMons: matchState.yourUsablePartyMons,
-    oppUsablePartyMons: matchState.oppUsablePartyMons,
-    you, opp, overrides,
-  });
   const turnsRemaining = Math.max(0, 4 - matchState.turn);
-  const result = search(ctx, state, turnsRemaining);
+  const solveWith = (extra) => {
+    const state = buildStartState({
+      yourHpPct: matchState.yourHpPct,
+      oppHpPct: matchState.oppHpPct,
+      yourUsablePartyMons: matchState.yourUsablePartyMons,
+      oppUsablePartyMons: matchState.oppUsablePartyMons,
+      you, opp, overrides: { ...overrides, ...extra },
+    });
+    // Opponent's per-turn move-selection distribution — the coaching payload
+    // (HANDOFF §14). This is NOT re-derived or approximated: `chooseOpponentMoves`
+    // is the exact same already-exported function search() itself calls
+    // internally with this exact ctx/state for the CURRENT turn — so this
+    // is a real, direct read of the engine's own AI model, not a new computation.
+    return {
+      state, result: search(ctx, state, turnsRemaining),
+      oppMoveDist: turnsRemaining > 0 ? chooseOpponentMoves(opp, you, state) : [],
+    };
+  };
 
-  // Opponent's per-turn move-selection distribution — the coaching payload
-  // (HANDOFF §14). This is NOT re-derived or approximated: `chooseOpponentMoves`
-  // is the exact same already-exported function search() itself calls
-  // internally with this exact ctx/state for the CURRENT turn (confirmed by
-  // reading search()'s own source before adding this, not assumed) — so this
-  // is a real, direct read of the engine's own AI model, not a new computation.
-  const oppMoveDist = turnsRemaining > 0 ? chooseOpponentMoves(opp, you, state) : [];
+  // A sleep set on the page has no counter (the game hides it), and the engine
+  // reads a missing counter as "wakes at its next action" -- so a Sleep status
+  // used to change almost nothing. Each sleeping side gets every counter still
+  // possible, equally likely (sleepCounters), and the solve is the
+  // probability-weighted mix of one search per combination: the same chance
+  // node the engine itself puts at a sleep move's 2-5 roll, placed before
+  // this turn's choice. As there, later decisions in each search know the
+  // counter (the engine's existing simplification after any sleep roll).
+  const variants = [{ w: 1, extra: {} }];
+  for (const [side, mon] of [["you", you], ["opp", opp]]) {
+    const counters = matchState[side + "Status"] === "sleep" && matchState[side + "SleepTurns"] == null
+      ? sleepCounters(matchState[side + "SleepInfo"], mon) : null;
+    if (!counters) continue;
+    const next = [];
+    for (const v of variants) for (const c of counters) next.push({ w: v.w / counters.length, extra: { ...v.extra, [side + "SleepTurns"]: c } });
+    variants.splice(0, variants.length, ...next);
+  }
+  const runs = variants.map((v) => ({ w: v.w, ...solveWith(v.extra) }));
+  const { state } = runs[0];
+  return { you, opp, state, result: mixResults(runs), turnsRemaining, oppMoveDist: mixDist(runs) };
+}
 
-  return { you, opp, state, result, turnsRemaining, oppMoveDist };
+// The sleep counters a sleeping mon can still have, from what the player saw:
+// a sleep move rolls the counter 2-5 (uniform), Rest sets it to 3; each action
+// attempt takes 1 off (2 with Early Bird), and the mon stays asleep through an
+// attempt only while the result is above 0 (logic.js enumerateActionOutcomes,
+// src/battle_util.c CANCELER_ASLEEP). After `slept` blocked attempts the counter
+// is roll - slept*step, and it is at least 1 (else it would have woken). If no
+// roll fits (more turns slept than possible), it wakes at its next attempt.
+export function sleepCounters(info = {}, mon) {
+  const step = mon.ability === "Early Bird" ? 2 : 1;
+  const rolls = info.rest ? [3] : [2, 3, 4, 5];
+  const left = rolls.map((r) => r - (info.slept ?? 0) * step).filter((c) => c >= 1);
+  return left.length ? left : [1];
+}
+
+// Mix weighted search results into one: each move's P(win) is the weighted
+// mean, and its branches are every run's branches with probabilities scaled by
+// that run's weight (so the plan groups them by label like any other branch).
+function mixResults(runs) {
+  if (runs.length === 1) return runs[0].result;
+  const first = runs[0].result;
+  if (first.isTerminal) return first;
+  const allOptions = first.allOptions.map(({ move }) => {
+    const parts = runs.map((r) => ({ w: r.w, o: r.result.allOptions.find((x) => x.move === move) }));
+    return {
+      move,
+      winProb: parts.reduce((a, p) => a + p.w * p.o.winProb, 0),
+      branches: parts.flatMap((p) => p.o.branches.map((b) => ({ ...b, prob: b.prob * p.w }))),
+    };
+  }).sort((a, b) => b.winProb - a.winProb);
+  return { ...first, move: allOptions[0].move, winProb: allOptions[0].winProb, allOptions };
+}
+function mixDist(runs) {
+  const byMove = new Map();
+  for (const r of runs) for (const { move, prob } of r.oppMoveDist) byMove.set(move, (byMove.get(move) ?? 0) + r.w * prob);
+  return [...byMove.entries()].map(([move, prob]) => ({ move, prob })).sort((a, b) => b.prob - a.prob);
 }
 
 // ── The plan: the whole recommended line, from the search tree solve() returns.
@@ -151,6 +210,27 @@ function planOf(nodes, depth) {
   });
   return { move, winProb: live.reduce((a, x) => a + x.w * x.node.winProb, 0) / wTotal, outcomes };
 }
+// A branch label as the page shows it. The engine writes every actor in the
+// third person ("You uses Return", "You is fast asleep") and its tests and the
+// scorekeeper match that text, so the grammar is fixed here, for display only.
+// The KO short-circuit label always reads "(opp never acts — KO)", even when
+// the opponent moved first and it is you who never acts; it is reworded from
+// the first actor.
+const YOU_GRAMMAR = [[/^You uses /, "You use "], [/^You is /, "You are "], [/^You hits itself /, "You hit yourself "], [/^You flinches/, "You flinch"]];
+export function displayLabel(label) {
+  const firstIsYou = /^(bounced: )?You /.test(label);
+  return label
+    .replace(" (opp never acts — KO)", firstIsYou ? " (Opp never acts — KO)" : " (you never act — KO)")
+    .split("; ")
+    .map((seg) => {
+      const bounced = seg.startsWith("bounced: ") ? "bounced: " : "";
+      let body = seg.slice(bounced.length);
+      for (const [re, to] of YOU_GRAMMAR) body = body.replace(re, to);
+      return bounced + body;
+    })
+    .join("; ");
+}
+
 // The plan from the current turn: one level per remaining turn after this one.
 export function buildPlan(result, turnsRemaining) {
   return planOf([{ node: result, w: 1 }], Math.max(1, turnsRemaining - 1));
