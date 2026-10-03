@@ -196,38 +196,45 @@ console.log("-- the Attract gate covers both sides --");
   ok(!open[0] && !open[1], `Snorlax vs Tauros: both enabled (${open.map((d) => !d)})`);
 }
 
-console.log("-- Record a turn: your flinch and the opponent's confusion self-hit --");
+console.log("-- Earlier turns: your flinch and the opponent's confusion self-hit are scored --");
 {
   const { scoreReportedTurn, OUTCOME } = await import("./scorekeeper.js");
   await pick(PANEL_SNORLAX, "Kangaskhan 1");
-  await setControls({ mindYou: "0", skillYou: "0", mindOpp: "0", skillOpp: "0" });
   const oppMove = FRONTIER_POOL["Kangaskhan 1"].moves[0];
-  await setControls({ skYouMove: "Body Slam", skYouOutcome: OUTCOME.FLINCH, skOppMove: oppMove, skOppOutcome: OUTCOME.CONFUSION_SELF });
-  const enabled = await page.evaluate(() => ["skYouOutcome", "skOppOutcome"].map((id) =>
-    [...document.getElementById(id).options].filter((o) => !o.disabled).map((o) => o.value)));
-  ok(enabled[0].includes("FLINCH") && enabled[1].includes("CONFUSION_SELF") && enabled[1].includes("ATTRACT") && enabled[1].includes("FLINCH"),
-    `the outcomes are selectable (you: ${enabled[0]}; opp: ${enabled[1]})`);
-  await page.click("#skRecord");
-  const boxes = await page.evaluate(() => ["mindYou", "skillYou", "mindOpp", "skillOpp"].map((id) => Number(document.getElementById(id).value)));
-  const skErr = (await page.textContent("#skError")).trim();
+  await setControls({ turn2: true, msf1YouMove: "Body Slam", msf1YouOutcome: OUTCOME.FLINCH, msf1OppMove: oppMove, msf1OppOutcome: OUTCOME.CONFUSION_SELF });
+  const totals = (await page.textContent("#msfTotals")).trim();
   const e = FRONTIER_POOL["Kangaskhan 1"];
   const r = scoreReportedTurn(buildMon(parseShowdownText(PANEL_SNORLAX)),
     buildFrontierOpponent(getOpponentConfig("Kangaskhan 1", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) })),
     { you: { move: "Body Slam", outcome: OUTCOME.FLINCH }, opp: { move: oppMove, outcome: OUTCOME.CONFUSION_SELF } });
-  const want = [r.dMindYou, r.dSkillYou, r.dMindOpp, r.dSkillOpp];
-  ok(!skErr && JSON.stringify(boxes) === JSON.stringify(want), `boxes ${JSON.stringify(boxes)} == scorer ${JSON.stringify(want)} (${skErr || "no error"})`);
+  const want = `Banked so far: Mind ${r.dMindYou} – ${r.dMindOpp}, Skill ${r.dSkillYou} – ${r.dSkillOpp} (you – opponent)`;
+  ok(totals === want, `"${totals}" == scorer "${want}"`);
+  // A Ghost move into a Normal type is not impossible: it was used and did
+  // nothing, which the engine scores Skill -2.
+  await setControls({ msf1YouMove: "Shadow Ball", msf1YouOutcome: OUTCOME.HIT });
+  const noEffect = (await page.textContent("#msfTotals")).trim();
+  ok(/Skill -2 – 0/.test(noEffect), `Shadow Ball into Kangaskhan scores Skill -2: "${noEffect}"`);
+  // An impossible report blocks the recommendation and says which turn: Aerial
+  // Ace never misses, even against raised evasion (the scorer's re-drive).
+  await pick(METAGROSS, "Kangaskhan 1");
+  await setControls({ turn2: true, msf1YouMove: "Aerial Ace", msf1YouOutcome: OUTCOME.MISSED, msf1OppMove: oppMove, msf1OppOutcome: OUTCOME.HIT });
+  const bad = [(await page.textContent("#msfTotals")).trim(), (await page.textContent("#bestMoveDisplay")).trim()];
+  ok(bad[0].startsWith(`Turn 1: your Aerial Ace can't end "Missed"`) && bad[1] === "—", `Aerial Ace can't miss: "${bad[0]}", best move "${bad[1]}"`);
+  await setControls({ turn1: true, msf1YouMove: "", msf1YouOutcome: OUTCOME.HIT, msf1OppMove: "", msf1OppOutcome: OUTCOME.HIT });
 }
 
-// ── Moves so far: a turn-2 / turn-3 re-solve equals the engine's own subtree ──
+// ── Earlier turns: a turn-2 / turn-3 re-solve equals the engine's own subtree ──
 // The turn-1 search already holds every later situation as a subtree, with
-// the AI's move history (F2c) recorded by the search itself. Entering that
-// situation into the page -- HP, stages, Mind/Skill, "first turn" off, and the
-// moves so far -- must give exactly the subtree. Starmie (Recover) vs Tyrogue 1
-// (AI_CV_Protect reads the target's RESTORE_HP): after turn 1 "You Recover; Opp
-// Double Team" the subtree is Ice Beam 0.930 (the page without the moves so far
-// said Surf 0.929); after turn 2 "You Ice Beam (MISSES); Opp Double Team" it is
-// Surf 0.735 (0.683 without the AI's history of the turn-1 Recover).
-console.log("-- Moves so far: turn-2 and turn-3 re-solves match the engine's subtree --");
+// the AI's move history (F2c) recorded by the search itself and the Mind/Skill
+// each turn banked. Entering that situation into the page -- HP, stages,
+// "first turn" off, and what each side did on the earlier turns (from which the
+// page works out the Mind/Skill itself) -- must give exactly the subtree.
+// Starmie (Recover) vs Tyrogue 1 (AI_CV_Protect reads the target's
+// RESTORE_HP): after turn 1 "You Recover; Opp Double Team" the subtree is Ice
+// Beam 0.930 (the page without your Recover in the AI's history said Surf
+// 0.929); after turn 2 "You Ice Beam (MISSES); Opp Double Team" it is Surf
+// 0.735 (0.683 without the AI's history of the turn-1 Recover).
+console.log("-- Earlier turns: turn-2 and turn-3 re-solves match the engine's subtree --");
 {
   const STARMIE = `Starmie @ Leftovers
 Ability: Natural Cure
@@ -243,33 +250,41 @@ Timid Nature
   const b1 = result.allOptions.find((o) => o.move === "Recover").branches.find((b) => b.label === "You uses Recover; Opp uses Double Team");
   const b2 = b1.subtree.allOptions.find((o) => o.move === "Ice Beam").branches.find((b) => b.label === "You uses Ice Beam (MISSES); Opp uses Double Team");
   const fmt = (n) => `${n.move}  —  P(win) = ${n.winProb.toFixed(3)}`;
+  const banked = (st) => `Banked so far: Mind ${st.mindYou} – ${st.mindOpp}, Skill ${st.skillYou} – ${st.skillOpp} (you – opponent)`;
   const stageControls = (prefix, st) => page.evaluate(({ prefix, st }) => {
     document.querySelectorAll(prefix).forEach((el) => { el.value = String(st[el.dataset.stat] ?? 0); });
   }, { prefix, st });
-  const enter = async (b, turn, moves) => {
+  const enter = async (b, turn, rows) => {
     await pick(STARMIE, "Tyrogue 1");
     await stageControls(".stage-select", b.state.youStages);
     await stageControls(".opp-stage-select", b.state.oppStages);
     await setControls({
       [`turn${turn}`]: true, oppFirstTurn: false,
       youCurrentHp: String(b.state.yourHpPct), oppCurrentHp: String(b.state.oppHpPct),
-      mindYou: String(b.state.mindYou), mindOpp: String(b.state.mindOpp), skillYou: String(b.state.skillYou), skillOpp: String(b.state.skillOpp),
-      ...moves,
+      ...rows,
     });
-    return (await page.textContent("#bestMoveDisplay")).trim();
+    return [(await page.textContent("#bestMoveDisplay")).trim(), (await page.textContent("#msfTotals")).trim()];
   };
+  // Turn 1: Starmie Recovers at full HP (fails, still Skill +1); Tyrogue Double Teams.
+  const T1 = { msf1YouMove: "Recover", msf1YouOutcome: "HIT", msf1YouHeal: "no", msf1OppMove: "Double Team", msf1OppOutcome: "HIT" };
   pageErrors.length = 0;
-  const shown2 = await enter(b1, 2, { youMoveT1: "Recover", oppMoveLast: "Double Team" });
+  const [shown2, tot2] = await enter(b1, 2, T1);
+  ok(tot2 === banked(b1.state), `turn 2 banked: "${tot2}" == engine "${banked(b1.state)}"`);
   ok(shown2 === fmt(b1.subtree), `turn 2: page "${shown2}" == subtree "${fmt(b1.subtree)}"`);
-  const old2 = await enter(b1, 2, { youMoveT1: "", oppMoveLast: "" });
-  ok(old2 !== fmt(b1.subtree), `...and without the moves so far it would differ ("${old2}")`);
-  const shown3 = await enter(b2, 3, { youMoveT1: "Recover", youMoveT2: "Ice Beam", oppMoveLast: "Double Team" });
+  const [blank2, why2] = await enter(b1, 2, { msf1YouMove: "", msf1OppMove: "" });
+  ok(blank2 === "—" && why2 === "Pick both moves for turn 1 to get a recommendation.", `...and with turn 1 blank there is no recommendation ("${blank2}", "${why2}")`);
+  const [shown3, tot3] = await enter(b2, 3, { ...T1, msf2YouMove: "Ice Beam", msf2YouOutcome: "MISSED", msf2OppMove: "Double Team", msf2OppOutcome: "HIT" });
+  ok(tot3 === banked(b2.state), `turn 3 banked: "${tot3}" == engine "${banked(b2.state)}"`);
   ok(shown3 === fmt(b2.subtree), `turn 3: page "${shown3}" == subtree "${fmt(b2.subtree)}"`);
-  const vis = await page.evaluate(() => [document.getElementById("movesSoFar").hidden, document.getElementById("youMoveT2Wrap").hidden]);
-  ok(!vis[0] && !vis[1], `on turn 3 both your earlier moves are asked for (hidden: ${vis})`);
+  const vis = await page.evaluate(() => [document.getElementById("movesSoFar").hidden, document.getElementById("msfRow2").hidden]);
+  ok(!vis[0] && !vis[1], `on turn 3 both earlier turns are asked for (hidden: ${vis})`);
   ok(pageErrors.length === 0, `no error on the page (${pageErrors.join(" | ") || "none"})`);
-  // back to a fresh turn 1 for anything after this
-  await setControls({ turn1: true, oppFirstTurn: true, youCurrentHp: "100", oppCurrentHp: "100", mindYou: "0", mindOpp: "0", skillYou: "0", skillOpp: "0", youMoveT1: "", youMoveT2: "", oppMoveLast: "" });
+  // Reset clears the earlier turns and goes back to turn 1.
+  await page.click("#resetBtn");
+  const after = await page.evaluate(() => [document.getElementById("movesSoFar").hidden,
+    [...document.querySelectorAll("#msfRows select")].every((s) => s.selectedIndex === 0)]);
+  ok(after[0] && after[1], `Reset: earlier turns hidden and cleared (${after})`);
+  await setControls({ oppFirstTurn: true });
   await stageControls(".stage-select", {}); await stageControls(".opp-stage-select", {});
 }
 

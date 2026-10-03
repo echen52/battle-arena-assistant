@@ -222,12 +222,23 @@ function scoreSide(actorSide, actorMon, foeMon, sideReport) {
 
   const startOpts = { you, opp }; // scores 0; HP defaults 100/100 (Mind/Skill are HP-independent)
   if (isHealDrive) startOpts[isYou ? "yourHpPct" : "oppHpPct"] = sideReport.healed ? HEAL_HP_HEALED : HEAL_HP_FAILED;
-  const s = buildStartState(startOpts);
-  applySideConditions(s, actorSide, sideReport);
-
-  const branches = resolveTurn({ you, opp }, s, yourMove, oppMove);
   const who = actorTag(actorSide);
-  const matched = branches.filter((b) => segmentMatchesOutcome(actorSegment(b.label, who), who, sideReport.move, sideReport.outcome));
+  // evasionUp: the foe at +6 evasion. The drive starts from a fresh board, so
+  // a miss that only an earlier evasion boost (Double Team, Minimize) or
+  // accuracy drop made possible -- a 100%-accurate move missing on turn 2 --
+  // has no branch there. A MISSED report that matches nothing is re-driven
+  // with the foe's evasion raised; a move that cannot miss at all (Swift,
+  // Aerial Ace) still matches nothing and is still refused.
+  const drive = (evasionUp) => {
+    const s = buildStartState(startOpts);
+    if (evasionUp) s[isYou ? "oppStages" : "youStages"] = { ...s[isYou ? "oppStages" : "youStages"], evasion: 6 };
+    applySideConditions(s, actorSide, sideReport);
+    const branches = resolveTurn({ you, opp }, s, yourMove, oppMove);
+    const matched = branches.filter((b) => segmentMatchesOutcome(actorSegment(b.label, who), who, sideReport.move, sideReport.outcome));
+    return { branches, matched };
+  };
+  let { branches, matched } = drive(false);
+  if (matched.length === 0 && sideReport.outcome === OUTCOME.MISSED) ({ branches, matched } = drive(true));
   const mindKey = isYou ? "mindYou" : "mindOpp";
   const skillKey = isYou ? "skillYou" : "skillOpp";
 

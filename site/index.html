@@ -24,16 +24,18 @@
   </div>
 </header>
 
-<!-- Moves so far (turns 2 and 3): what each side used on the earlier turns.
-     The engine needs them: the opponent's AI only knows the moves it has seen
-     you use (Phase D F2c), and Disable / Encore / Mimic and several AI checks
-     read each side's LAST move. "(none / couldn't move)" is what the game
-     records for a turn the mon was prevented from acting. -->
+<!-- Earlier turns (turns 2 and 3): what each side did on each earlier turn,
+     and how it went. Two things are read from it. (1) The Mind/Skill banked
+     so far, scored per turn by the engine's own scorer (ui-logic.js
+     scoreTurn) and fed to the solve -- the judge after turn 3 reads them.
+     (2) Each side's last move and the AI's history of your moves (Phase D
+     F2c): a turn the mon was prevented from acting (Immobilized / Confused /
+     Attracted / Flinched) records no move, as the game does. The rows are
+     built by app.js (buildEarlierTurnRows). -->
 <div class="moves-so-far" id="movesSoFar" hidden>
-  <span class="field-group-label" title="What each side used on the earlier turns of this matchup. The opponent's AI only knows the moves it has seen you use. (Mirror Move's 'last move that hit you' is not entered here and is taken as none.)">Moves so far</span>
-  <label>Your turn 1 <select id="youMoveT1" class="calc-trigger"></select></label>
-  <label id="youMoveT2Wrap">Your turn 2 <select id="youMoveT2" class="calc-trigger"></select></label>
-  <label>Opponent's last turn <select id="oppMoveLast" class="calc-trigger"></select></label>
+  <span class="field-group-label" title="What each side used on the earlier turns of this matchup, and what happened. The Mind and Skill banked so far are worked out from this, and the opponent's AI only knows the moves it has seen you use. Immobilized covers paralysis, freeze and sleep: pick the move that was selected. (Mirror Move's 'last move that hit you' is not entered here and is taken as none.)">Earlier turns</span>
+  <div class="msf-rows" id="msfRows"></div>
+  <div class="msf-totals" id="msfTotals"></div>
 </div>
 
 <main class="layout">
@@ -263,67 +265,6 @@
            turn, with the best next move -- by HP range when it depends on it. -->
       <h3 title="What can happen after the recommended move, and the best move next in each case (from the same solve). Percentages are the chance of that outcome; P is the chance of winning from there.">Plan</h3>
       <div id="planDisplay" class="plan"></div>
-
-      <h3>Mind / Skill / Body</h3>
-      <table class="msb-table">
-        <thead><tr><th></th><th>Mind</th><th>Skill</th><th>Body</th></tr></thead>
-        <tbody>
-          <tr>
-            <th>You (so far)</th>
-            <td><input type="number" id="mindYou" class="calc-trigger msb-input" value="0" /></td>
-            <td><input type="number" id="skillYou" class="calc-trigger msb-input" value="0" /></td>
-            <td id="bodyYouDisplay">100%</td>
-          </tr>
-          <tr>
-            <th>Opp (so far)</th>
-            <td><input type="number" id="mindOpp" class="calc-trigger msb-input" value="0" /></td>
-            <td><input type="number" id="skillOpp" class="calc-trigger msb-input" value="0" /></td>
-            <td id="bodyOppDisplay">100%</td>
-          </tr>
-          <tr class="projected-row">
-            <th>Projected after this turn</th>
-            <td id="mindProjected">—</td>
-            <td id="skillProjected">—</td>
-            <td id="bodyProjected">—</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- Scorekeeper (DRIVE model): report one observed turn; the widget drives
-           the real engine for that turn and ADDS the banked Mind/Skill deltas to
-           the editable "so far" boxes above. It never re-solves, never touches
-           HP, and never overwrites — the boxes stay hand-editable at all times. -->
-      <div id="scorekeeper" class="sk-panel">
-        <h3>Record a turn <span class="sk-hint">— adds Mind/Skill to the totals above; does not re-solve or touch HP</span></h3>
-        <div class="sk-grid">
-          <span class="sk-col-head"></span>
-          <span class="sk-col-head">Move</span>
-          <span class="sk-col-head">Outcome</span>
-          <span id="skPhaseHead" class="sk-col-head" hidden>Phase</span>
-          <span id="skHealHead" class="sk-col-head" hidden>Did it heal?</span>
-
-          <span class="sk-side">You</span>
-          <select id="skYouMove" class="sk-move"></select>
-          <select id="skYouOutcome" class="sk-outcome"></select>
-          <select id="skYouPhase" class="sk-phase" hidden></select>
-          <select id="skYouHeal" class="sk-heal" hidden>
-            <option value="yes">Healed</option>
-            <option value="no">Failed</option>
-          </select>
-
-          <span class="sk-side">Opp</span>
-          <select id="skOppMove" class="sk-move"></select>
-          <select id="skOppOutcome" class="sk-outcome"></select>
-          <select id="skOppPhase" class="sk-phase" hidden></select>
-          <span class="sk-heal-cell" aria-hidden="true"></span>
-        </div>
-        <div class="sk-actions">
-          <button id="skRecord" type="button" class="btn-primary">Record turn</button>
-          <button id="skUndo" type="button" class="btn" disabled>Undo last</button>
-          <span id="skLog" class="sk-log"></span>
-        </div>
-        <div id="skError" class="error-display"></div>
-      </div>
 
       <div id="errorDisplay" class="error-display"></div>
     </div>

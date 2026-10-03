@@ -7,7 +7,7 @@
      --accent (wood-gold)   = titles, borders, active/focus/checked/toggle
                                chrome — same job cyan used to do everywhere.
      --green  (arena sage)  = ONLY the "recommendation" semantic (best-move
-                               box, the projected-after-this-turn row) — kept
+                               box, the banked-so-far line) — kept
                                separate from --accent so "this is the AI's
                                pick" reads as its own signal, not just more
                                chrome. Deliberately muted/desaturated (not
@@ -207,31 +207,37 @@ input[type="checkbox"]:checked + label.btn {
 .btn-toggle-field { background: var(--surface-2); border: 1px solid var(--accent); color: var(--accent); }
 
 .turn-indicator { display: flex; align-items: center; gap: 4px; }
-/* Moves so far (turns 2-3): one compact row under the header. */
-.moves-so-far { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 16px; }
+/* Earlier turns (turns 2-3): one row per earlier turn under the header, then
+   the Mind/Skill banked so far (or what is missing). */
+.moves-so-far { padding: 6px 16px; }
 .moves-so-far[hidden] { display: none; }
-.moves-so-far label { display: inline-flex; align-items: center; gap: 6px; }
-.moves-so-far label[hidden] { display: none; }
+.msf-rows { display: flex; flex-direction: column; gap: 6px; }
+.msf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
+.msf-row[hidden], .msf-row select[hidden] { display: none; }
+.msf-turn { font-size: 12px; color: var(--accent); font-weight: bold; min-width: 48px; }
+.msf-side { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.msf-who { font-size: 12px; color: var(--text-muted); }
+.msf-totals { margin-top: 6px; font-size: 12px; color: var(--green); }
+.msf-totals.msf-problem { color: var(--error); }
 /* Keep the top-bar action buttons (Toggle Field + Reset) adjacent at the right,
    instead of space-between spreading them apart across the header. */
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .turn-label { color: var(--text-muted); font-size: 12px; margin-right: 4px; }
 
-.ev-table, .msb-table, .options-table {
+.ev-table, .options-table {
   width: 100%;
   border-collapse: collapse;
   margin: 8px 0;
   font-size: 12px;
 }
 .ev-table th, .ev-table td,
-.msb-table th, .msb-table td,
 .options-table th, .options-table td {
   padding: 3px 4px;
   text-align: center;
   border: 1px solid var(--divider);
 }
-.ev-table th, .msb-table th, .options-table th { color: var(--text-muted); font-weight: normal; }
-.ev-table input, .msb-table input { width: 50px; }
+.ev-table th, .options-table th { color: var(--text-muted); font-weight: normal; }
+.ev-table input { width: 50px; }
 
 .moves-grid {
   display: grid;
@@ -378,7 +384,6 @@ input[type="checkbox"]:checked + label.btn {
   border-radius: 4px;
   text-align: center;
 }
-.projected-row th, .projected-row td { color: var(--green); }
 
 .opp-set-moves {
   font-size: 12px;
@@ -444,85 +449,6 @@ input[type="checkbox"]:checked + label.btn {
 .hidden { display: none; }
 .radio-inline { font-size: 12px; color: var(--text-muted); margin-right: 10px; }
 .radio-inline input { margin-right: 4px; }
-
-/* ── Scorekeeper (Record a turn) ─────────────────────────────────────────── */
-.sk-panel {
-  margin-top: 14px;
-  padding: 10px 12px;
-  background: var(--panel-bg);
-  border: 1px solid var(--timber-border);
-  border-radius: 4px;
-}
-.sk-hint { font-size: 11px; color: var(--text-muted); font-weight: normal; }
-.sk-grid {
-  display: grid;
-  /* label | Move | Outcome | Phase. Columns size to CONTENT (not fr) and the
-     grid is left-aligned (justify-content:start) so the whole thing fits WITHIN
-     the fixed 340px center column with margin on the right, instead of
-     overflowing past the panel border. Move fits the widest move name; Outcome
-     is capped just above its widest *selectable* label ("Immobilized") so the
-     long greyed "… — score by hand" options (popup-only) don't blow the box out
-     — every selectable outcome is now terse ("Hit"/"Blocked"/"Confused"/…), so
-     the cap that used to need 210px for "Blocked (Protect/Detect)" is far
-     smaller. Phase collapses to its header until a two-turn move. */
-  grid-template-columns: auto minmax(116px, max-content) minmax(140px, 148px) auto auto;
-  gap: 6px 8px;
-  align-items: center;
-  justify-content: start;
-  margin-bottom: 10px;
-}
-.sk-col-head { font-size: 11px; color: var(--text-muted); }
-.sk-side { font-size: 12px; color: var(--accent); font-weight: bold; }
-.sk-move, .sk-outcome, .sk-phase, .sk-heal {
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--panel-bg);
-  border-radius: 3px;
-  padding: 4px 6px;
-  font-size: 12px;
-  width: 100%;
-}
-/* Keep the hidden phase select AS A GRID ITEM (override the UA [hidden] ->
-   display:none) so it never drops out of the grid's auto-flow and shift the
-   Opp row into the You row's cells. Collapse it to a zero-width, invisible box
-   instead: the row stays 4 cells wide and aligned; the Phase column shrinks to
-   just its header until a two-turn move selection reveals the control. */
-.sk-phase[hidden] {
-  display: inline-block;
-  visibility: hidden;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-}
-/* The You-side "Did it heal?" control (5th column, You side only) collapses the
-   same way the phase control does — zero-width invisible grid item when hidden,
-   so the Opp row's empty filler cell stays aligned and the column shrinks to
-   just its header until a drivable heal is selected. */
-.sk-heal[hidden] {
-  display: inline-block;
-  visibility: hidden;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-}
-/* The Phase HEADER collapses in lockstep with the control (app.js toggles the
-   same [hidden] attribute on both). Keep it a grid item — override the UA
-   [hidden] -> display:none — so removing it never pulls the You/Opp rows up out
-   of their cells; just make it zero-width and invisible, exactly like the
-   select above, so the header row reads "Move / Outcome" until a two-turn move
-   reveals both the Phase header and its dropdown together. */
-.sk-col-head[hidden] {
-  display: inline-block;
-  visibility: hidden;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-}
-.sk-outcome option:disabled { color: var(--text-muted); font-style: italic; }
-.sk-actions { display: flex; align-items: center; gap: 10px; }
-.sk-log { font-size: 11px; color: var(--text-muted); }
 
 /* The plan: nested outcome -> next-move lists. */
 .plan { font-size: 0.92em; }

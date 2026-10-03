@@ -156,16 +156,38 @@ export function buildPlan(result, turnsRemaining) {
   return planOf([{ node: result, w: 1 }], Math.max(1, turnsRemaining - 1));
 }
 
-// Scorekeeper wrapper — the thin config->mon adapter over the shared drive-and-
+// Earlier-turn scorer — the thin config->mon adapter over the shared drive-and-
 // read scorer (scorekeeper.js). Builds the two mons EXACTLY as solve() does
-// (the opponent by buildFrontierOpponent, F11) so the scored turn uses
-// the same combatants the solver would, then delegates to the one shared
-// scoring path. Returns the four signed deltas (+ diagnostic matched counts) to
-// ADD to the running "so far" boxes.
+// (the opponent by buildFrontierOpponent, F11) so the scored turn uses the
+// same combatants the solver would. Returns the four signed Mind/Skill deltas.
+//
+// Swallow and Wish landing are the two reports the drive model refuses
+// (scorekeeper validateReport: success is stockpile-gated / delayed, not
+// readable from the report). They are scored here by the rule that refusal
+// message states, since the page no longer has hand-editable totals: Mind is
+// the move's own rating (0 for both), Skill +1 for Swallow whether it heals or
+// fails, and for Wish +1 if it worked, -2 if it failed (healed === false). The
+// other side is still driven through the engine; the hand-scored side gets a
+// Splash stand-in (each side is driven against its own filler, so the stand-in
+// never touches the other side's read) and its delta is replaced.
+const HAND_SCORED = { EFFECT_SWALLOW: () => 1, EFFECT_WISH: (r) => (r.healed === false ? -2 : 1) };
+export function isHandScoredMove(move) {
+  return MOVES[move]?.effect in HAND_SCORED;
+}
 export function scoreTurn(youConfig, oppConfig, report) {
   const you = buildMon(youConfig);
   const opp = buildFrontierOpponent(oppConfig);
-  return scoreReportedTurn(you, opp, report);
+  const hand = {}, driven = { ...report };
+  for (const side of ["you", "opp"]) {
+    const r = report[side], rule = HAND_SCORED[MOVES[r.move]?.effect];
+    if (r.outcome !== "HIT" || !rule) continue;
+    hand[side] = { mind: MOVES[r.move].mindRating ?? 0, skill: rule(r) };
+    driven[side] = { move: "Splash", outcome: "HIT" };
+  }
+  const d = scoreReportedTurn(you, opp, driven);
+  if (hand.you) { d.dMindYou = hand.you.mind; d.dSkillYou = hand.you.skill; }
+  if (hand.opp) { d.dMindOpp = hand.opp.mind; d.dSkillOpp = hand.opp.skill; }
+  return d;
 }
 
 // Re-export the scorekeeper's report vocabulary so app.js (which imports only

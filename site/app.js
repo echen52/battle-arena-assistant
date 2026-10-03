@@ -6,7 +6,7 @@ import {
   freshMatchState, solve, resolveOpponentBySetName, buildPlan,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
-  scoreTurn, OUTCOME, PHASE, UNSUPPORTED_OPP, isTwoTurnMove, isDrivableHealMove,
+  scoreTurn, OUTCOME, PHASE, isTwoTurnMove, isDrivableHealMove, isHandScoredMove,
 } from "./ui-logic.js";
 import { HIDDEN_POWER_TYPES } from "../battle_arena_sim/logic.js";
 
@@ -331,18 +331,20 @@ function buildMatchState() {
   // an arbitrary default — see HANDOFF.md §14.
   const s = freshMatchState();
   s.turn = Number(document.querySelector("input[name='turn']:checked").value);
-  // Moves so far (turns 2-3). gLastMoves: each side's move on the previous
+  // Earlier turns (turns 2-3). gLastMoves: each side's move on the previous
   // turn (null if it could not move). The AI's history (F2c,
   // RecordLastUsedMoveByTarget) is recorded at each of ITS decisions from the
   // player's last move: by turn 3 it holds the turn-1 move, and the search
   // records the turn-2 move itself at this decision (aiDecisionState), so it is
   // not passed twice. Assumes the opponent chose its move on turn 2; a charging
-  // or Encored opponent runs no AI and records nothing.
+  // or Encored opponent runs no AI and records nothing. The Mind/Skill banked
+  // on these turns are added in recalculate() (they need the built configs).
   if (s.turn >= 2) {
-    const t1 = $("youMoveT1").value || null, t2 = $("youMoveT2").value || null;
-    s.youLastMove = s.turn === 2 ? t1 : t2;
+    const rows = readEarlierTurns(s.turn);
+    const t1 = recordedMove(rows[0].you), last = rows[rows.length - 1];
+    s.youLastMove = recordedMove(last.you);
     s.youMoveHistory = s.turn === 3 && t1 ? [t1] : [];
-    s.oppLastMove = $("oppMoveLast").value || null;
+    s.oppLastMove = recordedMove(last.opp);
   }
   s.yourHpPct = Number($("youCurrentHp").value) || 0;
   s.oppHpPct = Number($("oppCurrentHp").value) || 0;
@@ -442,23 +444,21 @@ function recalculate() {
     youConfig = buildYouConfig();
     oppConfig = buildOppConfig();
     updateAttractedGate(youConfig.species, oppConfig.species);
-    updateScorekeeperMoves(youConfig, oppConfig);
-    updateMovesSoFar(youConfig, oppConfig, Number(document.querySelector("input[name='turn']:checked").value));
+    const turn = Number(document.querySelector("input[name='turn']:checked").value);
+    updateEarlierTurns(youConfig, oppConfig, turn);
     matchState = buildMatchState();
     if (!youConfig.species || !oppConfig.species) return;
     if (youConfig.moves.length === 0) { errorEl.textContent = "Pick at least one move for your Pokemon."; return; }
 
-    const mindYouSoFar = Number($("mindYou").value) || 0;
-    const skillYouSoFar = Number($("skillYou").value) || 0;
-    const mindOppSoFar = Number($("mindOpp").value) || 0;
-    const skillOppSoFar = Number($("skillOpp").value) || 0;
-    matchState.mindYou = mindYouSoFar;
-    matchState.skillYou = skillYouSoFar;
-    matchState.mindOpp = mindOppSoFar;
-    matchState.skillOpp = skillOppSoFar;
+    // Mind/Skill banked so far: every earlier turn, scored by the engine. A
+    // turn 2/3 solve with an earlier turn missing or unscorable would judge
+    // from the wrong totals, so it is not shown at all.
+    const banked = scoreEarlierTurns(youConfig, oppConfig, turn);
+    if (!banked) { clearResult(); return; }
+    Object.assign(matchState, banked);
 
     const { result, oppMoveDist, turnsRemaining } = solve(youConfig, oppConfig, matchState);
-    renderResult(result, matchState);
+    renderResult(result);
     renderPlan(result, turnsRemaining, matchState.turn);
     renderOppMoveDist(oppMoveDist, oppConfig.moves, turnsRemaining);
   } catch (err) {
@@ -533,24 +533,19 @@ function renderPlan(result, turnsRemaining, turn) {
   el.innerHTML = `<p class="plan-head">Turn ${turn}: <b>${esc(plan.move)}</b>, then:</p>` + planHtml(plan, turn);
 }
 
-function renderResult(result, matchState) {
-  // Body score, not raw HP: floor(current / round-start * 100), mirroring
-  // evaluateTerminal (logic.js:4130) byte-for-byte so a cell reading 75 lines
-  // up exactly with what the engine scores. matchState carries yourHpPctAtStart
-  // only when the round-start field was filled (freshMatchState omits it), so
-  // fall back to current HP — the engine's own default (a mon that entered at
-  // its current HP is at full Body), matching buildStartState's default.
-  const youStart = matchState.yourHpPctAtStart ?? matchState.yourHpPct;
-  const oppStart = matchState.oppHpPctAtStart ?? matchState.oppHpPct;
-  $("bodyYouDisplay").textContent = Math.floor(matchState.yourHpPct / youStart * 100) + "%";
-  $("bodyOppDisplay").textContent = Math.floor(matchState.oppHpPct / oppStart * 100) + "%";
+// Blank the result column (best move, options, plan, opponent move odds) when
+// there is no trustworthy solve to show.
+function clearResult() {
+  $("bestMoveDisplay").textContent = "—";
+  document.querySelector("#optionsTable tbody").innerHTML = "";
+  $("planDisplay").innerHTML = "";
+  $("oppMoveDistRows").innerHTML = "";
+}
 
+function renderResult(result) {
   if (result.isTerminal) {
     $("bestMoveDisplay").textContent = "Match over — judge decides (P(win)=" + result.winProb.toFixed(3) + ")";
     document.querySelector("#optionsTable tbody").innerHTML = "";
-    $("mindProjected").textContent = "—";
-    $("skillProjected").textContent = "—";
-    $("bodyProjected").textContent = "—";
     return;
   }
 
@@ -564,31 +559,6 @@ function renderResult(result, matchState) {
     tbody.appendChild(tr);
   }
 
-  // Projected Mind/Skill/Body after the recommended move resolves: weighted
-  // average across the recommended move's own branches (real engine
-  // probabilities, not a guess) — same style of aggregation as
-  // team-workflow.js's evaluateRound, just inlined here for display.
-  const recommended = result.allOptions.find((o) => o.move === result.move);
-  let mindYouSum = 0, skillYouSum = 0, mindOppSum = 0, skillOppSum = 0, hpYouSum = 0, hpOppSum = 0, totalP = 0;
-  for (const b of recommended.branches) {
-    mindYouSum += b.prob * b.state.mindYou;
-    skillYouSum += b.prob * b.state.skillYou;
-    mindOppSum += b.prob * b.state.mindOpp;
-    skillOppSum += b.prob * b.state.skillOpp;
-    // Weight the Body SCORE per branch, not raw HP — same floor(current /
-    // round-start * 100) as the "so far" cells and evaluateTerminal. Each
-    // forward-walk state carries its own baseline (cloneState threads
-    // yourHpPctAtStart forward from buildStartState), so the projection is a
-    // probability-weighted average of scores, not of raw HP percentages.
-    hpYouSum += b.prob * Math.floor(b.state.yourHpPct / b.state.yourHpPctAtStart * 100);
-    hpOppSum += b.prob * Math.floor(b.state.oppHpPct / b.state.oppHpPctAtStart * 100);
-    totalP += b.prob;
-  }
-  if (totalP > 0) {
-    $("mindProjected").textContent = (mindYouSum / totalP).toFixed(2) + " – " + (mindOppSum / totalP).toFixed(2);
-    $("skillProjected").textContent = (skillYouSum / totalP).toFixed(2) + " – " + (skillOppSum / totalP).toFixed(2);
-    $("bodyProjected").textContent = (hpYouSum / totalP).toFixed(1) + "% – " + (hpOppSum / totalP).toFixed(1) + "%";
-  }
 }
 
 // ── Custom-set save/load/delete + chip list ──────────────────────────────
@@ -688,177 +658,131 @@ document.addEventListener("input", (e) => { if (e.target.classList.contains("cal
 // markup comment for why it isn't a calc-trigger).
 $("oppFirstTurn").addEventListener("change", recalculate);
 
-// ── Scorekeeper (Record a turn) ─────────────────────────────────────────────
-// Report one observed turn; drive the engine (via scoreTurn -> the shared
-// scorekeeper path) and ADD the banked Mind/Skill deltas to the four editable
-// "so far" boxes. The report controls are deliberately NOT calc-triggers and
-// addToBox sets .value WITHOUT dispatching an event, so recording never
-// re-solves and never overwrites a hand-edit — the widget's job ends at the boxes.
-const SK_OUTCOMES = [
-  { value: OUTCOME.HIT, label: "Hit" },
+// ── Earlier turns (turns 2-3) ────────────────────────────────────────────────
+// One row per earlier turn: each side's move, what happened, and -- only when
+// it applies -- a two-turn move's phase and a heal's result. Every control is a
+// calc-trigger, so any change re-solves. The rows drive two things:
+// buildMatchState's last moves / AI history (recordedMove) and the Mind/Skill
+// banked so far (scoreEarlierTurns, through the engine's own scorer).
+const OUTCOMES = [
+  { value: OUTCOME.HIT, label: "Hit / worked" },
   { value: OUTCOME.MISSED, label: "Missed" },
-  { value: OUTCOME.PROTECT, label: "Blocked" }, // terse like the rest; Protect/Detect are the only block sources (display only; route unchanged)
-  // Labels short so the Outcome box stays compact; each still routes to its own
-  // drive state (IMMOBILIZED->status, CONFUSION_SELF->Confused,
-  // ATTRACT->Attracted, FLINCH->the foe's Fake Out) — distinct paths, not
-  // merged, on either side. (para/freeze/sleep all collapse under IMMOBILIZED,
-  // banking Mind=selected/Skill=0 via paralysis.)
+  { value: OUTCOME.PROTECT, label: "Blocked" },
+  // para/freeze/sleep all collapse under IMMOBILIZED: Mind banks for the move
+  // that was selected, Skill 0 (the scorer drives it through paralysis).
   { value: OUTCOME.IMMOBILIZED, label: "Immobilized" },
-  { value: OUTCOME.CONFUSION_SELF, label: "Confused" }, // self-hit is the only confusion outcome — parenthetical dropped (display only; route unchanged)
-  { value: OUTCOME.ATTRACT, label: "Attracted" },
-  { value: OUTCOME.FLINCH, label: "Flinched" }, // modelled since B4 (it used to be hand-score only)
+  { value: OUTCOME.CONFUSION_SELF, label: "Hurt itself (confused)" },
+  { value: OUTCOME.ATTRACT, label: "Immobilized by love" },
+  { value: OUTCOME.FLINCH, label: "Flinched" },
 ];
-let skOutcomesInited = false;
-const skUndoStack = [];
+// A turn the mon was prevented from acting records no move (gLastMoves 0).
+const PREVENTED = new Set([OUTCOME.IMMOBILIZED, OUTCOME.CONFUSION_SELF, OUTCOME.ATTRACT, OUTCOME.FLINCH]);
+const SIDES = [["You", "You"], ["Opp", "Opponent"]];
 
-// Populate an outcome dropdown, greying the reports the drive model can't score
-// for this side (never silently substituting a same-shape neighbor) -- any
-// in UNSUPPORTED_OPP (none since confusion/attract went two-sided and flinch was modelled).
-function populateOutcomeSelect(sel, side) {
-  sel.innerHTML = "";
-  for (const o of SK_OUTCOMES) {
-    const disabled = o.unsupported || (side === "opp" && UNSUPPORTED_OPP.has(o.value));
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = disabled ? `${o.label} — score by hand` : o.label;
-    opt.disabled = disabled;
-    sel.appendChild(opt);
+function buildEarlierTurnRows() {
+  const wrap = $("msfRows");
+  for (const t of [1, 2]) {
+    const row = document.createElement("div");
+    row.className = "msf-row"; row.id = `msfRow${t}`;
+    row.innerHTML = `<span class="msf-turn">Turn ${t}</span>` + SIDES.map(([k, name]) => `
+      <span class="msf-side"><span class="msf-who">${name}</span>
+        <select id="msf${t}${k}Move" class="calc-trigger"></select>
+        <select id="msf${t}${k}Outcome" class="calc-trigger">${OUTCOMES.map((o) =>
+          `<option value="${o.value}">${o.label}</option>`).join("")}</select>
+        <select id="msf${t}${k}Phase" class="calc-trigger" hidden>
+          <option value="${PHASE.CHARGE}">Charging (dug/flew/dove)</option>
+          <option value="${PHASE.ATTACK}">Attack (came back and hit)</option>
+        </select>
+        <select id="msf${t}${k}Heal" class="calc-trigger" hidden>
+          <option value="yes"></option><option value="no"></option>
+        </select>
+      </span>`).join("");
+    wrap.appendChild(row);
   }
 }
+buildEarlierTurnRows();
 
-function updatePhaseVisibility(prefix) {
-  const phaseSel = $(prefix + "Phase");
-  if (isTwoTurnMove($(prefix + "Move").value)) {
-    if (!phaseSel.dataset.filled) {
-      const c = document.createElement("option"); c.value = PHASE.CHARGE; c.textContent = "Charging (submerged/flew/dug)";
-      const a = document.createElement("option"); a.value = PHASE.ATTACK; a.textContent = "Attack (surfaced/hit)";
-      phaseSel.append(c, a);
-      phaseSel.dataset.filled = "1";
+// Refill the move lists (keeping a choice that is still one of the side's
+// moves) and show only the rows and extra controls that apply. Runs at the top
+// of every recalculate(), before anything reads the rows.
+function updateEarlierTurns(youConfig, oppConfig, turn) {
+  const moves = { You: (youConfig.moves || []).filter(Boolean), Opp: (oppConfig.moves || []).filter(Boolean) };
+  for (const t of [1, 2]) {
+    for (const [k] of SIDES) {
+      const sel = $(`msf${t}${k}Move`), keep = sel.value;
+      sel.innerHTML = "";
+      sel.appendChild(new Option("— pick —", ""));
+      for (const m of moves[k]) sel.appendChild(new Option(m, m));
+      sel.value = moves[k].includes(keep) ? keep : "";
+      const move = sel.value, outcome = $(`msf${t}${k}Outcome`);
+      const phase = $(`msf${t}${k}Phase`), heal = $(`msf${t}${k}Heal`);
+      phase.hidden = !isTwoTurnMove(move);
+      outcome.hidden = !phase.hidden && phase.value === PHASE.CHARGE; // a charge turn always "succeeds"
+      // Drivable heals: the scorer needs whether it healed. Wish: whether it
+      // worked (Swallow scores the same either way, so it asks nothing).
+      const kind = isDrivableHealMove(move) ? "heal" : isHandScoredMove(move) && move === "Wish" ? "wish" : null;
+      heal.hidden = !kind || outcome.hidden || outcome.value !== OUTCOME.HIT;
+      if (kind) {
+        const [yes, no] = heal.options;
+        yes.textContent = kind === "heal" ? "Healed" : "Wish worked";
+        no.textContent = kind === "heal" ? "Was at full HP" : "Wish failed";
+      }
     }
-    phaseSel.hidden = false;
-  } else {
-    phaseSel.hidden = true;
   }
-  // The Phase column HEADER tracks the controls: shown only while at least one
-  // side's phase dropdown is revealed (a two-turn move is selected), hidden
-  // otherwise so it never floats over the collapsed, empty column. Same
-  // hidden-attribute mechanism as the select (see .sk-col-head[hidden] in
-  // styles.css) so the header and control stay in sync and the header stays a
-  // grid item — never dropping out of flow and shifting the rows.
-  const head = $("skPhaseHead");
-  if (head) head.hidden = $("skYouPhase").hidden && $("skOppPhase").hidden;
-}
-
-// Show the "Did it heal?" control only for the six drivable HP-dependent heals,
-// and only on the You side (the widget scores an opponent's heal by hand — see
-// scorekeeper's validateReport). Same zero-width collapse mechanism as Phase:
-// the header tracks the control so the 5th column vanishes until a heal move is
-// picked. Reading it happens in readSideReport, gated on visibility.
-function updateHealVisibility(prefix) {
-  const sel = $(prefix + "Heal");
-  if (!sel) return; // only the You row has a heal control
-  sel.hidden = !isDrivableHealMove($(prefix + "Move").value);
-  const head = $("skHealHead");
-  if (head) head.hidden = sel.hidden;
-}
-
-// Moves so far (turns 2-3). Rebuilt with every recalculation, so the chosen
-// value is KEPT when it is still one of the side's moves. "" is
-// "(none / couldn't move)": no last move, as the game records a prevented turn.
-function fillMoveSoFar(select, moves) {
-  const keep = select.value;
-  select.innerHTML = "";
-  select.appendChild(new Option("(none / couldn't move)", ""));
-  for (const m of moves) select.appendChild(new Option(m, m));
-  select.value = moves.includes(keep) ? keep : "";
-}
-function updateMovesSoFar(youConfig, oppConfig, turn) {
-  const youMoves = (youConfig.moves || []).filter(Boolean), oppMoves = (oppConfig.moves || []).filter(Boolean);
-  fillMoveSoFar($("youMoveT1"), youMoves);
-  fillMoveSoFar($("youMoveT2"), youMoves);
-  fillMoveSoFar($("oppMoveLast"), oppMoves);
   $("movesSoFar").hidden = turn < 2;
-  $("youMoveT2Wrap").hidden = turn < 3;
+  $("msfRow2").hidden = turn < 3;
 }
 
-function updateScorekeeperMoves(youConfig, oppConfig) {
-  fillSelect($("skYouMove"), (youConfig.moves || []).filter(Boolean));
-  fillSelect($("skOppMove"), (oppConfig.moves || []).filter(Boolean));
-  if (!skOutcomesInited) {
-    populateOutcomeSelect($("skYouOutcome"), "you");
-    populateOutcomeSelect($("skOppOutcome"), "opp");
-    skOutcomesInited = true;
-  }
-  updatePhaseVisibility("skYou");
-  updatePhaseVisibility("skOpp");
-  updateHealVisibility("skYou");
-}
-
-function readSideReport(prefix) {
-  const move = $(prefix + "Move").value;
-  let outcome = $(prefix + "Outcome").value;
-  const phaseSel = $(prefix + "Phase");
-  let phase = null;
-  if (!phaseSel.hidden) {
-    phase = phaseSel.value;
-    if (phase === PHASE.CHARGE) outcome = OUTCOME.HIT; // a charge turn always "succeeds"
-  }
+function readSideReport(t, k) {
+  const move = $(`msf${t}${k}Move`).value;
+  const phaseSel = $(`msf${t}${k}Phase`), healSel = $(`msf${t}${k}Heal`);
+  const phase = phaseSel.hidden ? null : phaseSel.value;
+  const outcome = phase === PHASE.CHARGE ? OUTCOME.HIT : $(`msf${t}${k}Outcome`).value;
   const report = { move, outcome, phase };
-  // "Did it heal?" — supplied only when the control is visible (You side, a
-  // drivable heal). The scorekeeper reads it only on a HIT; on any other outcome
-  // it's ignored, so passing it unconditionally when shown is safe.
-  const healSel = $(prefix + "Heal");
-  if (healSel && !healSel.hidden) report.healed = healSel.value === "yes";
+  if (!healSel.hidden) report.healed = healSel.value === "yes";
   return report;
 }
-
-// Additive, non-dispatching: reads the CURRENT (possibly hand-edited) box value
-// and adds the delta on top. No event fires, so no re-solve is triggered.
-function skAddToBox(id, delta) {
-  const box = $(id);
-  box.value = (Number(box.value) || 0) + delta;
+// The earlier turns' reports, turn 1 first: [{ you, opp }, ...].
+function readEarlierTurns(turn) {
+  const rows = [];
+  for (let t = 1; t < turn; t++) rows.push({ you: readSideReport(t, "You"), opp: readSideReport(t, "Opp") });
+  return rows;
+}
+function recordedMove(r) {
+  return r.move && !PREVENTED.has(r.outcome) ? r.move : null;
 }
 
-function skUpdateLog() {
-  const n = skUndoStack.length;
-  $("skLog").textContent = n ? `${n} turn${n > 1 ? "s" : ""} recorded` : "";
-}
-
-$("skYouMove").addEventListener("change", () => { updatePhaseVisibility("skYou"); updateHealVisibility("skYou"); });
-$("skOppMove").addEventListener("change", () => updatePhaseVisibility("skOpp"));
-
-$("skRecord").addEventListener("click", () => {
-  const errEl = $("skError");
-  errEl.textContent = "";
-  try {
-    const youConfig = buildYouConfig();
-    const oppConfig = buildOppConfig();
-    if (!youConfig.species || !oppConfig.species) { errEl.textContent = "Pick both Pokemon first."; return; }
-    const report = { you: readSideReport("skYou"), opp: readSideReport("skOpp") };
-    if (!report.you.move || !report.opp.move) { errEl.textContent = "Pick a move for each side."; return; }
-    const d = scoreTurn(youConfig, oppConfig, report);
-    skAddToBox("mindYou", d.dMindYou); skAddToBox("skillYou", d.dSkillYou);
-    skAddToBox("mindOpp", d.dMindOpp); skAddToBox("skillOpp", d.dSkillOpp);
-    skUndoStack.push(d);
-    $("skUndo").disabled = false;
-    skUpdateLog();
-  } catch (e) {
-    errEl.textContent = e.message.split("\n")[0];
+// Sum the Mind/Skill each earlier turn banked. Returns null (and says why in
+// the bar) when a move is not picked yet or a reported result is impossible.
+function scoreEarlierTurns(youConfig, oppConfig, turn) {
+  const totalsEl = $("msfTotals");
+  const sum = { mindYou: 0, skillYou: 0, mindOpp: 0, skillOpp: 0 };
+  totalsEl.classList.remove("msf-problem");
+  if (turn < 2) { totalsEl.textContent = ""; return sum; }
+  const problem = (msg) => { totalsEl.textContent = msg; totalsEl.classList.add("msf-problem"); return null; };
+  const rows = readEarlierTurns(turn);
+  for (let i = 0; i < rows.length; i++) {
+    const { you, opp } = rows[i];
+    if (!you.move || !opp.move) return problem(`Pick both moves for turn ${i + 1} to get a recommendation.`);
+    let d;
+    try {
+      d = scoreTurn(youConfig, oppConfig, { you, opp });
+    } catch (e) {
+      const m = e.message.match(/no branch matched the (you|opp) report \((.+) \/ (\w+)\)/);
+      if (!m) return problem(`Turn ${i + 1}: ${e.message.split("\n")[0]}`);
+      const who = m[1] === "you" ? "your" : "the opponent's";
+      const label = OUTCOMES.find((o) => o.value === m[3])?.label ?? m[3];
+      return problem(`Turn ${i + 1}: ${who} ${m[2]} can't end "${label}" in this matchup. Check that turn's result.`);
+    }
+    sum.mindYou += d.dMindYou; sum.skillYou += d.dSkillYou;
+    sum.mindOpp += d.dMindOpp; sum.skillOpp += d.dSkillOpp;
   }
-});
-
-$("skUndo").addEventListener("click", () => {
-  const d = skUndoStack.pop();
-  if (!d) return;
-  skAddToBox("mindYou", -d.dMindYou); skAddToBox("skillYou", -d.dSkillYou);
-  skAddToBox("mindOpp", -d.dMindOpp); skAddToBox("skillOpp", -d.dSkillOpp);
-  if (skUndoStack.length === 0) $("skUndo").disabled = true;
-  skUpdateLog();
-});
+  totalsEl.textContent = `Banked so far: Mind ${sum.mindYou} – ${sum.mindOpp}, Skill ${sum.skillYou} – ${sum.skillOpp} (you – opponent)`;
+  return sum;
+}
 
 // ── Reset button: clear every observed battle-state input back to a fresh slate
-// (HP, stat stages, status, volatiles, field, Record-a-turn, Mind/Skill totals,
-// turn) WITHOUT touching mon identity or persistence (species/ability/item/
+// (HP, stat stages, status, volatiles, field, earlier turns, turn) WITHOUT touching mon identity or persistence (species/ability/item/
 // nature/EVs/IVs/moves, saved sets, chips, dropdown, paste box all stay put).
 // Parity with the Facilities Assistant's reset. UI-only: this resets the inputs
 // the engine reads, not how it solves. Every field is set DIRECTLY (no change/
@@ -879,8 +803,8 @@ $("resetBtn").addEventListener("click", () => {
   // First turn on field -> back to its default TRUE (a reset board is a fresh
   // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.
   $("oppFirstTurn").checked = true;
-  // Moves so far -> none.
-  $("youMoveT1").value = ""; $("youMoveT2").value = ""; $("oppMoveLast").value = "";
+  // Earlier turns -> moves unpicked, every other control back to its first option.
+  document.querySelectorAll("#msfRows select").forEach((el) => { el.selectedIndex = 0; });
   // Volatiles, both sides -> off.
   $("youConfusion").value = ""; $("oppConfusion").value = "";
   $("youAttracted").checked = false; $("oppAttracted").checked = false;
@@ -888,20 +812,9 @@ $("resetBtn").addEventListener("click", () => {
   $("weatherNone").checked = true;
   $("youReflect").checked = false; $("oppReflect").checked = false;
   $("youLightScreen").checked = false; $("oppLightScreen").checked = false;
-  // Mind/Skill "so far" totals -> 0 (Body is derived, not stored).
-  $("mindYou").value = 0; $("skillYou").value = 0; $("mindOpp").value = 0; $("skillOpp").value = 0;
   // Turn counter -> 1 (checking one radio unchecks the rest).
   $("turn1").checked = true;
-  // Record-a-turn: outcomes/phases back to their first option; move dropdowns are
-  // refilled to their defaults by the recalculate() below. Wipe the undo stack.
-  for (const id of ["skYouOutcome", "skOppOutcome", "skYouPhase", "skOppPhase", "skYouHeal"]) {
-    const el = $(id); if (el.options.length) el.selectedIndex = 0;
-  }
-  skUndoStack.length = 0;
-  $("skUndo").disabled = true;
-  $("skError").textContent = "";
-  skUpdateLog();
-  // One re-solve from the cleared board: refills the scorekeeper move dropdowns
+  // One re-solve from the cleared board: refills the earlier-turn move lists
   // and re-renders Recommendation + opponent move-probabilities off fresh state.
   recalculate();
 });
