@@ -112,6 +112,15 @@
         <option value="3">3 turns slept so far</option>
       </select>
     </div>
+    <!-- Item used up: the held item has been eaten / used (a berry, White
+         Herb). The solve then runs this mon with no item; the set itself is
+         unchanged. Ticked and locked automatically when the status or
+         confusion set here is one the held berry would have cured (app.js
+         updateItemGone). -->
+    <div class="field-row">
+      <label>Item</label>
+      <input type="checkbox" id="youItemGone" class="calc-trigger" /><label for="youItemGone" class="btn btn-field" id="youItemGoneLabel">Used up</label>
+    </div>
 
     <!-- Confusion/Attraction are volatile STATUS2 conditions, independent of
          and stackable with the primary status above (a mon can be
@@ -401,6 +410,15 @@
         <option value="2">2 turns slept so far</option>
         <option value="3">3 turns slept so far</option>
       </select>
+    </div>
+    <!-- Item used up: the held item has been eaten / used (a berry, White
+         Herb). The solve then runs this mon with no item; the set itself is
+         unchanged. Ticked and locked automatically when the status or
+         confusion set here is one the held berry would have cured (app.js
+         updateItemGone). -->
+    <div class="field-row">
+      <label>Item</label>
+      <input type="checkbox" id="oppItemGone" class="calc-trigger" /><label for="oppItemGone" class="btn btn-field" id="oppItemGoneLabel">Used up</label>
     </div>
 
     <!-- Batch 4: the per-mon first-turn state input (state.oppMonFirstTurn).

@@ -3,7 +3,7 @@ import {
   getSpeciesAbilities, OPPONENT_SETS, canAttractPair,
 } from "./pokemon-data.js";
 import {
-  freshMatchState, solve, resolveOpponentBySetName, buildPlan, displayLabel,
+  freshMatchState, solve, resolveOpponentBySetName, buildPlan, displayLabel, itemMustBeGone,
   parseShowdownText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
   scoreTurn, OUTCOME, PHASE, isTwoTurnMove, isDrivableHealMove, isHandScoredMove,
@@ -440,6 +440,22 @@ function updateAttractedGate(youSpecies, oppSpecies) {
   }
 }
 
+// The "Item used up" toggle. No item: nothing to use up (off, locked). A
+// status or confusion the held berry cures: the berry must be gone (on,
+// locked). Otherwise it is the player's call.
+function updateItemGone(side, item) {
+  const box = $(side + "ItemGone"), label = $(side + "ItemGoneLabel");
+  const forced = itemMustBeGone(item, $(side + "Status").value || null, !!$(side + "Confusion").value);
+  if (forced) box.checked = true;
+  if (!item) box.checked = false;
+  box.disabled = forced || !item;
+  label.textContent = item ? `${item} used up` : "No item";
+  label.classList.toggle("btn-disabled", !item);
+  label.title = !item ? "" : forced
+    ? `A ${item} cures this status at once, so it must already have been eaten.`
+    : `Tick if the ${item} has been used up. The solve then treats this Pokemon as holding nothing.`;
+}
+
 function recalculate() {
   // Instrumentation only (Palace convention, window.__recomputeCount): lets
   // the headless verification assert exactly-one-recompute per interaction.
@@ -453,6 +469,8 @@ function recalculate() {
     updateAttractedGate(youConfig.species, oppConfig.species);
     const turn = Number(document.querySelector("input[name='turn']:checked").value);
     updateEarlierTurns(youConfig, oppConfig, turn);
+    updateItemGone("you", youConfig.item);
+    updateItemGone("opp", oppConfig.item);
     matchState = buildMatchState();
     if (!youConfig.species || !oppConfig.species) return;
     if (youConfig.moves.length === 0) { errorEl.textContent = "Pick at least one move for your Pokemon."; return; }
@@ -464,7 +482,10 @@ function recalculate() {
     if (!banked) { clearResult(); return; }
     Object.assign(matchState, banked);
 
-    const { result, oppMoveDist, turnsRemaining } = solve(youConfig, oppConfig, matchState);
+    // A used-up item: this solve runs the mon with none (the set keeps it).
+    // Earlier turns above were scored with it -- it was still held then.
+    const withoutGone = (side, config) => ($(side + "ItemGone").checked ? { ...config, item: null } : config);
+    const { result, oppMoveDist, turnsRemaining } = solve(withoutGone("you", youConfig), withoutGone("opp", oppConfig), matchState);
     renderResult(result);
     renderPlan(result, turnsRemaining, matchState.turn);
     renderOppMoveDist(oppMoveDist, oppConfig.moves, turnsRemaining);
@@ -807,6 +828,7 @@ $("resetBtn").addEventListener("click", () => {
   document.querySelectorAll(".stage-select, .opp-stage-select").forEach((s) => { s.value = "0"; });
   // Primary status -> Healthy, both sides.
   $("youStatus").value = ""; $("oppStatus").value = "";
+  $("youItemGone").checked = false; $("oppItemGone").checked = false;
   for (const id of ["youSleepFrom", "youSleptTurns", "oppSleepFrom", "oppSleptTurns"]) $(id).selectedIndex = 0;
   // First turn on field -> back to its default TRUE (a reset board is a fresh
   // 1v1: the opponent was just sent out), NOT false — Reset restores defaults.

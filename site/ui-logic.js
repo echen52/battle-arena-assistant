@@ -4,7 +4,7 @@
 // engine calls and engine RESULTS into render-friendly objects. No damage,
 // stat, or type math is duplicated here.
 
-import { buildMon, buildStartState, search, chooseOpponentMoves, buildFrontierOpponent } from "../battle_arena_sim/logic.js";
+import { buildMon, buildStartState, search, chooseOpponentMoves, buildFrontierOpponent, BERRY_CURE } from "../battle_arena_sim/logic.js";
 import { getOpponentConfig } from "../battle_arena_sim/opponent-adapter.js";
 import { MOVES } from "../battle_arena_sim/move-data.js";
 import { scoreReportedTurn } from "../battle_arena_sim/scorekeeper.js";
@@ -229,6 +229,15 @@ export function displayLabel(label) {
       return bounced + body;
     })
     .join("; ");
+}
+
+// A held berry that cures the status (or the confusion) a mon has now cannot
+// still be held: it cures at once, at the end of the move that inflicted it
+// (logic.js tryCureWithBerry). So a status set on the page with such a berry
+// means the berry was eaten earlier.
+export function itemMustBeGone(item, status, confused) {
+  const cures = BERRY_CURE[item];
+  return !!cures && ((status && cures.includes(status)) || (confused && cures.includes("confusion")));
 }
 
 // The plan from the current turn: one level per remaining turn after this one.

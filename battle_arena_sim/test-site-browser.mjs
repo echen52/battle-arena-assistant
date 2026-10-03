@@ -353,6 +353,33 @@ console.log("-- Sleep from Rest: the engine's Rest counter, and the plan shows i
   await setControls({ youStatus: "" });
 }
 
+// ── A held berry that cures the status set on the page must already be gone:
+// the toggle locks on, and the solve runs the mon with no item. (Before, a Lum
+// Berry cured the page's sleep at once and the plan showed the mon acting.)
+console.log("-- Lum Berry + Sleep: the berry is taken as eaten, the mon sleeps --");
+{
+  const { solve, freshMatchState } = await import("../site/ui-logic.js");
+  const LUM = PANEL_SNORLAX.replace("@ Leftovers", "@ Lum Berry");
+  await pick(LUM, "Umbreon 4");
+  const before = await page.evaluate(() => [document.getElementById("youItemGone").checked, document.getElementById("youItemGone").disabled, document.getElementById("youItemGoneLabel").textContent]);
+  ok(!before[0] && !before[1] && before[2] === "Lum Berry used up", `healthy: toggle off and free ("${before[2]}")`);
+  await setControls({ youStatus: "sleep", youSleepFrom: "move", youSleptTurns: "0" });
+  const locked = await page.evaluate(() => [document.getElementById("youItemGone").checked, document.getElementById("youItemGone").disabled]);
+  ok(locked[0] && locked[1], `asleep: toggle on and locked (${locked})`);
+  const e = FRONTIER_POOL["Umbreon 4"];
+  const cfg = getOpponentConfig("Umbreon 4", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
+  const { result } = solve({ ...parseShowdownText(LUM), item: null }, cfg, { ...freshMatchState(), youStatus: "sleep", youSleepInfo: { rest: false, slept: 0 } });
+  const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
+  const shown = (await page.textContent("#bestMoveDisplay")).trim();
+  const firstOutcome = (await page.textContent("#planDisplay .plan-label")).trim();
+  ok(shown === want, `page "${shown}" == no-item solve "${want}"`);
+  ok(/You are fast asleep/.test(firstOutcome), `plan's first outcome: "${firstOutcome}"`);
+  await setControls({ youStatus: "" });
+  const after = await page.evaluate(() => [document.getElementById("youItemGone").checked, document.getElementById("youItemGone").disabled]);
+  ok(after[0] && !after[1], `woken up: the berry stays eaten, toggle unlocked (${after})`);
+  await page.click("#resetBtn");
+}
+
 console.log("-- Spikes says why it is inert --");
 {
   const label = (await page.textContent('label[for="youSpikes"]')).trim();

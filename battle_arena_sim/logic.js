@@ -11438,6 +11438,7 @@ export {
   aiTurnPlans, // F14
   EFFECTIVENESS_CLEARED_EFFECTS, // F21
   TRICK_UNSWAPPABLE, // F25
+  BERRY_CURE, // the site: a status the held berry cures means the berry is gone
   // Phase D F2b: pinned to the script's list by its test.
   THIEF_ENCOURAGED_HOLD_EFFECTS,
   // A2: the AI damage-roll enumeration, surfaced so tests and solver tools can
