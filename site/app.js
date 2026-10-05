@@ -4,7 +4,7 @@ import {
 } from "./pokemon-data.js";
 import {
   freshMatchState, solve, resolveOpponentBySetName, buildPlan, displayLabel, itemMustBeGone,
-  parseShowdownText,
+  parseShowdownText, endStates, describeEnd, winPct, bestMoveText,
   loadCustomSets, saveCustomSet, deleteCustomSet,
   scoreTurn, OUTCOME, PHASE, isTwoTurnMove, isDrivableHealMove, isHandScoredMove,
 } from "./ui-logic.js";
@@ -485,9 +485,9 @@ function recalculate() {
     // A used-up item: this solve runs the mon with none (the set keeps it).
     // Earlier turns above were scored with it -- it was still held then.
     const withoutGone = (side, config) => ($(side + "ItemGone").checked ? { ...config, item: null } : config);
-    const { result, oppMoveDist, turnsRemaining } = solve(withoutGone("you", youConfig), withoutGone("opp", oppConfig), matchState);
-    renderResult(result);
-    renderPlan(result, turnsRemaining, matchState.turn);
+    const { result, oppMoveDist, turnsRemaining, state, you } = solve(withoutGone("you", youConfig), withoutGone("opp", oppConfig), matchState);
+    renderResult(result, state, you);
+    renderPlan(result, turnsRemaining, matchState.turn, state, you);
     renderOppMoveDist(oppMoveDist, oppConfig.moves, turnsRemaining);
   } catch (err) {
     errorEl.textContent = "Error: " + err.message;
@@ -542,8 +542,12 @@ function planHtml(plan, turn) {
     h += `<ul class="plan-next">`;
     for (const n of nexts) {
       const when = nexts.length > 1 ? ` <span class="plan-when">(${pct(n.p)}: your HP ${hpRange(n.youHp)}, opp HP ${hpRange(n.oppHp)})</span>` : "";
-      if (!n.move) { h += `<li>matchup over — P(win) ${n.winProb.toFixed(3)}${when}</li>`; continue; }
-      h += `<li>turn ${turn + 1}: <b>${esc(n.move)}</b> — P(win) ${n.winProb.toFixed(3)}${when}`;
+      if (!n.move) {
+        const ifWin = n.ifWin ? ` <span class="plan-end">· if you win: ${esc(describeEnd(n.ifWin))}</span>` : "";
+        h += `<li>matchup over — P(win) ${winPct(n.winProb)}${ifWin}${when}</li>`; continue;
+      }
+      const ifWinNext = n.ifWin ? ` <span class="plan-end">· if you win: ${esc(describeEnd(n.ifWin))}</span>` : "";
+      h += `<li>turn ${turn + 1}: <b>${esc(n.move)}</b> — P(win) ${winPct(n.winProb)}${ifWinNext}${when}`;
       if (n.plan) h += `<details><summary>after it</summary>${planHtml(n.plan, turn + 1)}</details>`;
       h += `</li>`;
     }
@@ -551,13 +555,13 @@ function planHtml(plan, turn) {
   }
   return h + `</ul>`;
 }
-function renderPlan(result, turnsRemaining, turn) {
+function renderPlan(result, turnsRemaining, turn, start = null, you = null) {
   const el = $("planDisplay");
   if (result.isTerminal || turnsRemaining <= 1) {
     el.innerHTML = `<p class="plan-none">${result.isTerminal ? "Matchup over." : "Last turn — nothing after it."}</p>`;
     return;
   }
-  const plan = buildPlan(result, turnsRemaining);
+  const plan = buildPlan(result, turnsRemaining, start, you);
   el.innerHTML = `<p class="plan-head">Turn ${turn}: <b>${esc(plan.move)}</b>, then:</p>` + planHtml(plan, turn);
 }
 
@@ -567,26 +571,43 @@ function clearResult() {
   $("bestMoveDisplay").textContent = "—";
   document.querySelector("#optionsTable tbody").innerHTML = "";
   $("planDisplay").innerHTML = "";
+  $("tieNote").textContent = "";
   $("oppMoveDistRows").innerHTML = "";
 }
 
-function renderResult(result) {
+// The best move as the engine picks it (P(win) first, unchanged), then every
+// move with how it leaves you if you win (ui-logic endStates). Moves within 1
+// point of the best are marked tied; if one of them keeps 5+ more HP than the
+// pick, the note under the best move names it (★ in the table).
+function renderResult(result, start = null, you = null) {
+  const tbody = document.querySelector("#optionsTable tbody");
+  $("tieNote").textContent = "";
   if (result.isTerminal) {
-    $("bestMoveDisplay").textContent = "Match over — judge decides (P(win)=" + result.winProb.toFixed(3) + ")";
-    document.querySelector("#optionsTable tbody").innerHTML = "";
+    $("bestMoveDisplay").textContent = "Match over — judge decides (P(win) = " + winPct(result.winProb) + ")";
+    $("bestMoveDisplay").dataset.winprob = String(result.winProb);
+    tbody.innerHTML = "";
     return;
   }
-
-  $("bestMoveDisplay").textContent = result.move + "  —  P(win) = " + result.winProb.toFixed(3);
-
-  const tbody = document.querySelector("#optionsTable tbody");
+  $("bestMoveDisplay").textContent = bestMoveText(result.move, result.winProb);
+  $("bestMoveDisplay").dataset.winprob = String(result.winProb);
+  const ends = start && you ? endStates(result, start, you) : null;
+  const byMove = new Map((ends?.rows ?? []).map((r) => [r.move, r]));
+  if (ends?.healthier) {
+    const h = byMove.get(ends.healthier.move);
+    $("tieNote").textContent = `≈ Tied with ${h.move} (within 1 point) — ${h.move} keeps ~${Math.round(ends.healthier.gain)}% more HP if you win (${describeEnd(h.end)}).`;
+  } else if (ends && ends.tiedCount > 1) {
+    $("tieNote").textContent = `≈ ${ends.tiedCount - 1} other move${ends.tiedCount > 2 ? "s" : ""} within 1 point — see the table for how each leaves you.`;
+  }
   tbody.innerHTML = "";
   for (const opt of result.allOptions) {
+    const r = byMove.get(opt.move);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${opt.move}</td><td>${opt.winProb.toFixed(3)}</td>`;
+    if (r?.tied && ends.tiedCount > 1) tr.classList.add("tied");
+    const star = ends?.healthier?.move === opt.move ? ' <span class="healthier" title="Same win chance (within 1 point), more HP left">★</span>' : "";
+    const tie = r?.tied && ends.tiedCount > 1 ? ' <span class="tie-mark" title="Within 1 point of the best">≈</span>' : "";
+    tr.innerHTML = `<td>${esc(opt.move)}${star}</td><td>${winPct(opt.winProb)}${tie}</td><td>${r ? esc(describeEnd(r.end)) : "—"}</td>`;
     tbody.appendChild(tr);
   }
-
 }
 
 // ── Custom-set save/load/delete + chip list ──────────────────────────────

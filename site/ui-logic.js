@@ -172,7 +172,7 @@ function mixDist(runs) {
 // are conditional on the parent group; `winProb` is the mean P(win) from that
 // point. Pure: it reads the retained tree and computes nothing new.
 // `nodes` is [{ node, w }]: one node at the root, several (same move) below.
-function planOf(nodes, depth) {
+function planOf(nodes, depth, end = null) {
   const live = nodes.filter(({ node }) => node && !node.isTerminal && node.allOptions);
   if (live.length === 0) return null;
   const move = live[0].node.move;
@@ -194,17 +194,25 @@ function planOf(nodes, depth) {
     for (const { b, p } of g.branches) {
       const sub = b.subtree;
       const key = !sub || sub.isTerminal ? "" : sub.move;
-      const e = byMove.get(key) ?? { move: key || null, p: 0, winSum: 0, youHp: [Infinity, -Infinity], oppHp: [Infinity, -Infinity], nodes: [] };
+      const e = byMove.get(key) ?? { move: key || null, p: 0, winSum: 0, youHp: [Infinity, -Infinity], oppHp: [Infinity, -Infinity], nodes: [], wins: { w: 0, hp: 0, tags: new Map() } };
       e.p += p;
       e.winSum += p * (sub ? sub.winProb : 0);
       e.youHp = [Math.min(e.youHp[0], b.state.yourHpPct), Math.max(e.youHp[1], b.state.yourHpPct)];
       e.oppHp = [Math.min(e.oppHp[0], b.state.oppHpPct), Math.max(e.oppHp[1], b.state.oppHpPct)];
       e.nodes.push({ node: sub, w: p });
+      // matchup over: how you end if you win (endTag), for the leaf's line
+      if (end && (!sub || sub.isTerminal) && sub?.winProb === 1) {
+        const st = sub.state ?? b.state, tag = endTag(st, end.start, end.you);
+        e.wins.w += p; e.wins.hp += p * st.yourHpPct; e.wins.tags.set(tag, (e.wins.tags.get(tag) ?? 0) + p);
+      }
       byMove.set(key, e);
     }
     const next = [...byMove.values()].sort((x, y) => y.p - x.p).map((e) => ({
       move: e.move, p: e.p / g.p, winProb: e.winSum / e.p, youHp: e.youHp, oppHp: e.oppHp,
-      plan: depth > 1 && e.move ? planOf(e.nodes, depth - 1) : null,
+      plan: depth > 1 && e.move ? planOf(e.nodes, depth - 1, end) : null,
+      // how you end if you win: the finished matchup itself, or (on the plan's
+      // last level) the rest of the matchup below that move
+      ifWin: !end ? null : !e.move ? endOf(e.wins) : depth > 1 ? null : endBelow(e.nodes, end),
     }));
     return { label: g.label, p: g.p, next };
   });
@@ -240,9 +248,92 @@ export function itemMustBeGone(item, status, confused) {
   return !!cures && ((status && cures.includes(status)) || (confused && cures.includes("confusion")));
 }
 
+// ── How each move leaves you if you win. In the Arena the winner stays in, so
+// two moves with the same P(win) can still differ a lot: Rest on turn 3 can
+// end at full HP (asleep), Return again at 40%. Read from the same retained
+// tree as the plan, under the same win-maximising play -- nothing re-searched.
+// A P(win) is shown as a percentage; moves within TIE_MARGIN (1 point) of the
+// best count as tied, and among them the one that keeps the most HP is named.
+export const TIE_MARGIN = 0.01;
+export function winPct(p) {
+  if (p >= 1) return "100%";
+  if (p <= 0) return "0%";
+  const s = (p * 100).toFixed(1);
+  return s === "100.0" ? ">99.9%" : s === "0.0" ? "<0.1%" : s + "%";
+}
+export const bestMoveText = (move, winProb) => `${move}  —  P(win) = ${winPct(winProb)}`;
+
+// What the player carries into the next matchup besides HP: status (a sleep
+// counter c means c - 1 more turns asleep, sleepCounters above), confusion,
+// and a berry eaten during this matchup.
+const STATUS_WORD = { paralysis: "paralyzed", burn: "burned", freeze: "frozen" };
+function endTag(st, start, you) {
+  const parts = [];
+  if (st.youStatus === "sleep") {
+    const n = (st.youSleepTurns ?? 1) - 1;
+    parts.push(n > 0 ? `asleep ${n} more turn${n > 1 ? "s" : ""}` : "asleep, wakes next turn");
+  } else if (st.youStatus === "poison") parts.push(st.youToxicCounter ? "badly poisoned" : "poisoned");
+  else if (st.youStatus) parts.push(STATUS_WORD[st.youStatus] ?? st.youStatus);
+  if (st.youConfused) parts.push("confused");
+  if (you.item && st.youBerryConsumed && !start.youBerryConsumed) parts.push(`${you.item} used`);
+  return parts.join(", ");
+}
+// Win-weighted end states below an option: { w: P(win), hp: mean HP% if you
+// win, tags: Map(tag -> P) }. A leaf counts as a win only at P(win) 1 (a judge
+// tie or a double KO is a draw, and both leave).
+function addWins(acc, option, w, start, you) {
+  for (const b of option.branches) {
+    const p = w * b.prob, sub = b.subtree;
+    if (!(p > 0)) continue;
+    if (!sub || sub.isTerminal) {
+      if (sub?.winProb !== 1) continue;
+      const st = sub.state ?? b.state, tag = endTag(st, start, you);
+      acc.w += p; acc.hp += p * st.yourHpPct;
+      acc.tags.set(tag, (acc.tags.get(tag) ?? 0) + p);
+      continue;
+    }
+    addWins(acc, sub.allOptions.find((o) => o.move === sub.move), p, start, you);
+  }
+}
+function endOf(acc) {
+  if (!(acc.w > 0)) return null;
+  const tags = [...acc.tags.entries()].map(([tag, p]) => ({ tag, share: p / acc.w })).sort((a, b) => b.share - a.share);
+  return { winP: acc.w, hp: acc.hp / acc.w, tags };
+}
+// "~95% HP, asleep 2 more turns, Lum Berry used"; a minority tag (under 90% of
+// the wins) carries its share. Tags under 10% are left out.
+export function describeEnd(e) {
+  if (!e) return "—";
+  const tags = e.tags.filter((t) => t.tag && t.share >= 0.1)
+    .map((t) => (t.share >= 0.9 ? t.tag : `${t.tag} (${Math.round(t.share * 100)}%)`));
+  return [`~${Math.round(e.hp)}% HP`, ...tags].join(", ");
+}
+// Per option of the current turn: its end state if you win, whether it is tied
+// with the best, and the healthiest tied move when it beats the pick by 5+ HP.
+export function endStates(result, start, you) {
+  if (result.isTerminal) return null;
+  const best = result.allOptions[0].winProb;
+  const rows = result.allOptions.map((o) => {
+    const acc = { w: 0, hp: 0, tags: new Map() };
+    addWins(acc, o, 1, start, you);
+    return { move: o.move, winProb: o.winProb, tied: o.winProb >= best - TIE_MARGIN, end: endOf(acc) };
+  });
+  const tied = rows.filter((r) => r.tied && r.end);
+  const pick = rows[0];
+  const healthiest = tied.reduce((a, r) => (r.end.hp > a.end.hp ? r : a), tied[0] ?? pick);
+  const gain = healthiest?.end && pick.end ? healthiest.end.hp - pick.end.hp : 0;
+  return { rows, tiedCount: rows.filter((r) => r.tied).length, healthier: healthiest !== pick && gain >= 5 ? { move: healthiest.move, gain } : null };
+}
+
+function endBelow(nodes, end) {
+  const acc = { w: 0, hp: 0, tags: new Map() };
+  for (const { node, w } of nodes) if (node && !node.isTerminal) addWins(acc, node.allOptions.find((o) => o.move === node.move), w, end.start, end.you);
+  return endOf(acc);
+}
 // The plan from the current turn: one level per remaining turn after this one.
-export function buildPlan(result, turnsRemaining) {
-  return planOf([{ node: result, w: 1 }], Math.max(1, turnsRemaining - 1));
+// With `start` and `you`, a finished matchup also says how you end if you win.
+export function buildPlan(result, turnsRemaining, start = null, you = null) {
+  return planOf([{ node: result, w: 1 }], Math.max(1, turnsRemaining - 1), start && you ? { start, you } : null);
 }
 
 // Earlier-turn scorer — the thin config->mon adapter over the shared drive-and-
@@ -333,7 +424,13 @@ export function parseShowdownText(text) {
   if (lines.length === 0) throw new Error("Empty set text.");
 
   const headerMatch = lines[0].match(/^(.+?)(?:\s+@\s+(.+))?$/);
-  const species = headerMatch[1].trim();
+  // Showdown writes "Snorlax (F) @ ...", or "Nickname (Snorlax) (F) @ ...":
+  // drop the gender marker (the page does not use it), keep the species.
+  let name = headerMatch[1].trim();
+  const g = name.match(/\s*\((M|F)\)$/);
+  if (g) name = name.slice(0, g.index).trim();
+  const nick = name.match(/^.+?\s*\(([^()]+)\)$/);
+  const species = nick ? nick[1].trim() : name;
   const item = headerMatch[2] ? headerMatch[2].trim() : null;
 
   const config = {

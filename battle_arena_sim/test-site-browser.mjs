@@ -21,7 +21,7 @@ import { chromium } from "playwright";
 import { analyzeMatchup } from "./logic.js";
 import { getOpponentConfig } from "./opponent-adapter.js";
 import { FRONTIER_POOL } from "./frontier-pool.js";
-import { parseShowdownText } from "../site/ui-logic.js";
+import { parseShowdownText, bestMoveText, endStates, describeEnd, solve as siteSolve, freshMatchState as siteFresh } from "../site/ui-logic.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 let failures = 0;
@@ -130,9 +130,11 @@ for (const c of cases) {
     ...(tier == null ? {} : { ivTier: tier }),
   });
   const { result } = analyzeMatchup(youCfg, oppCfg, { tree: false });
-  const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
+  const want = bestMoveText(result.move, result.winProb);
   ok(!err && pageErrors.length === 0, `no error on the page (${err || pageErrors.join(" | ") || "none"})`);
   ok(shown === want, `page "${shown}" == engine "${want}"`);
+  const exact = await page.getAttribute("#bestMoveDisplay", "data-winprob");
+  ok(Math.abs(Number(exact) - result.winProb) < 1e-9, `full-precision P(win) ${exact} == engine ${result.winProb}`);
 }
 
 // ── Volatile statuses: both sides, and confusion's duration ─────────────────
@@ -150,7 +152,7 @@ const engineWith = (youText, set, overrides) => {
     ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers),
   }));
   const r = search({ you, opp }, buildStartState({ you, opp, overrides }), 3, false, new Map());
-  return `${r.move}  —  P(win) = ${r.winProb.toFixed(3)}`;
+  return bestMoveText(r.move, r.winProb);
 };
 const setControls = (v) => page.evaluate((v) => {
   for (const [id, val] of Object.entries(v)) {
@@ -249,7 +251,7 @@ Timid Nature
   const { result } = analyzeMatchup(parseShowdownText(STARMIE), cfg, { tree: true });
   const b1 = result.allOptions.find((o) => o.move === "Recover").branches.find((b) => b.label === "You uses Recover; Opp uses Double Team");
   const b2 = b1.subtree.allOptions.find((o) => o.move === "Ice Beam").branches.find((b) => b.label === "You uses Ice Beam (MISSES); Opp uses Double Team");
-  const fmt = (n) => `${n.move}  —  P(win) = ${n.winProb.toFixed(3)}`;
+  const fmt = (n) => bestMoveText(n.move, n.winProb);
   const banked = (st) => `Banked so far: Mind ${st.mindYou} – ${st.mindOpp}, Skill ${st.skillYou} – ${st.skillOpp} (you – opponent)`;
   const stageControls = (prefix, st) => page.evaluate(({ prefix, st }) => {
     document.querySelectorAll(prefix).forEach((el) => { el.value = String(st[el.dataset.stat] ?? 0); });
@@ -343,7 +345,7 @@ console.log("-- Sleep from Rest: the engine's Rest counter, and the plan shows i
   const cfg = getOpponentConfig("Umbreon 4", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
   const you = buildMon(parseShowdownText(PANEL_SNORLAX)), opp = buildFrontierOpponent(cfg);
   const result = search({ you, opp }, buildStartState({ you, opp, overrides: { youStatus: "sleep", youSleepTurns: 3 } }), 3);
-  const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
+  const want = bestMoveText(result.move, result.winProb);
   await pick(PANEL_SNORLAX, "Umbreon 4");
   await setControls({ youStatus: "sleep", youSleepFrom: "rest", youSleptTurns: "0" });
   const shown = (await page.textContent("#bestMoveDisplay")).trim();
@@ -369,7 +371,7 @@ console.log("-- Lum Berry + Sleep: the berry is taken as eaten, the mon sleeps -
   const e = FRONTIER_POOL["Umbreon 4"];
   const cfg = getOpponentConfig("Umbreon 4", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
   const { result } = solve({ ...parseShowdownText(LUM), item: null }, cfg, { ...freshMatchState(), youStatus: "sleep", youSleepInfo: { rest: false, slept: 0 } });
-  const want = `${result.move}  —  P(win) = ${result.winProb.toFixed(3)}`;
+  const want = bestMoveText(result.move, result.winProb);
   const shown = (await page.textContent("#bestMoveDisplay")).trim();
   const firstOutcome = (await page.textContent("#planDisplay .plan-label")).trim();
   ok(shown === want, `page "${shown}" == no-item solve "${want}"`);
@@ -377,6 +379,38 @@ console.log("-- Lum Berry + Sleep: the berry is taken as eaten, the mon sleeps -
   await setControls({ youStatus: "" });
   const after = await page.evaluate(() => [document.getElementById("youItemGone").checked, document.getElementById("youItemGone").disabled]);
   ok(after[0] && !after[1], `woken up: the berry stays eaten, toggle unlocked (${after})`);
+  await page.click("#resetBtn");
+}
+
+// ── If you win, you end at: each move's end state, the tie marks and the
+// healthier-move note, against the same computation in Node (site solve +
+// endStates). Snorlax at 40% vs Golduck 4 at 30% on turn 1: Return, Earthquake
+// and Rest are tied and Rest keeps far more HP.
+console.log("-- End state column, tie marks, healthier-move note --");
+{
+  const SNOR = `Snorlax (F) @ Lum Berry
+Ability: Thick Fat
+Level: 50
+EVs: 236 HP / 4 Atk / 244 Def / 20 SpD / 4 Spe
+Impish Nature
+- Yawn
+- Return
+- Earthquake
+- Rest`;
+  await pick(SNOR, "Golduck 4");
+  await setControls({ youCurrentHp: "40", oppCurrentHp: "30" });
+  const e = FRONTIER_POOL["Golduck 4"];
+  const cfg = getOpponentConfig("Golduck 4", { ...(e.abilities.length > 1 ? { ability: e.abilities[0] } : {}), ivTier: Math.max(...e.ivTiers) });
+  const out = siteSolve(parseShowdownText(SNOR), cfg, { ...siteFresh(), yourHpPct: 40, oppHpPct: 30 });
+  const ends = endStates(out.result, out.state, out.you);
+  const rows = await page.evaluate(() => [...document.querySelectorAll("#optionsTable tbody tr")].map((tr) => ({
+    cells: [...tr.children].map((td) => td.textContent.trim()), tied: tr.classList.contains("tied") })));
+  const wantRows = ends.rows.map((r) => ({ end: describeEnd(r.end), tied: r.tied && ends.tiedCount > 1 }));
+  ok(rows.length === wantRows.length && rows.every((r, i) => r.cells.length === 3 && r.cells[2] === wantRows[i].end && r.tied === wantRows[i].tied),
+    `end column + tie marks match Node: ${rows.map((r) => r.cells[0] + " " + r.cells[2]).join(" | ")}`);
+  const note = (await page.textContent("#tieNote")).trim();
+  ok(ends.healthier ? note.startsWith(`≈ Tied with ${ends.healthier.move}`) : true, `note: "${note}"`);
+  ok(ends.healthier != null, `a healthier tied move exists here (${ends.healthier?.move}, +${Math.round(ends.healthier?.gain ?? 0)} HP)`);
   await page.click("#resetBtn");
 }
 
